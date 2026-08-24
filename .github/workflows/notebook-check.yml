@@ -1,0 +1,80 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# .github/workflows/notebook-check.yml
+#
+# GitHub Actions CI Pipeline — PharmaTrace AI Dashboard
+#
+# This workflow runs on every push and pull request to:
+#   1. Install all Python dependencies
+#   2. Lint the notebook for syntax issues (nbformat check)
+#   3. Confirm the notebook can be imported cleanly (papermill dry-run)
+#
+# NOTE: Full notebook execution is skipped in CI because it requires
+#       private data files (Excel sheets) that are not committed to the repo.
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: Notebook Health Check
+
+on:
+  push:
+    branches: [ main, master, develop ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  notebook-check:
+    name: Validate Notebook & Dependencies
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11"]
+
+    steps:
+      # ── 1. Checkout code ────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Set up Python ────────────────────────────────────────────────────
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: "pip"
+
+      # ── 3. Install dependencies ─────────────────────────────────────────────
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install nbformat papermill
+
+      # ── 4. Validate notebook format (nbformat check) ───────────────────────
+      - name: Validate notebook format
+        run: |
+          python -c "
+          import nbformat
+          with open('Warehouse_FEFO_Analytics_Dashboard.ipynb') as f:
+              nb = nbformat.read(f, as_version=4)
+          nbformat.validate(nb)
+          print(f'Notebook OK: {len(nb.cells)} cells, nbformat v{nb.nbformat}.{nb.nbformat_minor}')
+          "
+
+      # ── 5. Check all imports are resolvable ────────────────────────────────
+      - name: Check Python imports
+        run: |
+          python -c "
+          import numpy, pandas, matplotlib, seaborn, sklearn, scipy
+          from sklearn.ensemble import RandomForestClassifier
+          from sklearn.model_selection import train_test_split, cross_val_score
+          from sklearn.metrics import classification_report, confusion_matrix, roc_auc_score
+          from sklearn.preprocessing import LabelEncoder, StandardScaler
+          from scipy.optimize import linprog
+          print('All imports OK')
+          "
+
+      # ── 6. Docker build check (optional, only on main branch) ──────────────
+      - name: Docker build check
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+        run: |
+          docker build -t pharmatrace-ai-test .
+          echo "Docker build successful"

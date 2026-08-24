@@ -1,0 +1,19 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# .binder/requirements.txt
+#
+# Used by mybinder.org to build a live, interactive version of this notebook
+# in the cloud. Click the "Launch on Binder" badge in the README to use it.
+#
+# Binder runs the notebook in a free, temporary JupyterHub environment.
+# No local installation required.
+# ─────────────────────────────────────────────────────────────────────────────
+
+numpy==1.26.4
+pandas==2.2.2
+openpyxl==3.1.2
+matplotlib==3.8.4
+seaborn==0.13.2
+scikit-learn==1.4.2
+scipy==1.13.0
+ipykernel==6.29.4
+voila==0.5.7

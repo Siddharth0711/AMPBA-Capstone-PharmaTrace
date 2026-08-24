@@ -1,0 +1,78 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# .gitignore — PharmaTrace AI Dashboard
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Data files (never commit raw pharma data to public repos) ─────────────────
+data/
+*.xlsx
+*.xls
+*.csv
+
+# ── Jupyter Notebook artifacts ────────────────────────────────────────────────
+.ipynb_checkpoints/
+*/.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# ── Python cache & compiled files ─────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+*.so
+
+# ── Virtual environments ──────────────────────────────────────────────────────
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+.conda/
+
+# ── Distribution / Packaging ──────────────────────────────────────────────────
+build/
+dist/
+*.egg-info/
+*.egg
+
+# ── macOS system files ─────────────────────────────────────────────────────────
+.DS_Store
+.AppleDouble
+.LSOverride
+*.swp
+*.swo
+
+# ── Windows system files ──────────────────────────────────────────────────────
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# ── Editor / IDE ──────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# ── Docker ────────────────────────────────────────────────────────────────────
+docker-compose.override.yml
+
+# ── Logs ──────────────────────────────────────────────────────────────────────
+*.log
+logs/
+
+# ── Coverage / Testing ────────────────────────────────────────────────────────
+.coverage
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+
+# ── Secrets / Credentials ─────────────────────────────────────────────────────
+*.env
+.env.*
+secrets.yml
+credentials.json
+
+# ── Output images (optional: remove these lines if you WANT to commit charts) ──
+# outputs/*.png

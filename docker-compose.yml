@@ -1,0 +1,50 @@
+version: "3.9"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# docker-compose.yml — PharmaTrace AI Dashboard
+#
+# Usage:
+#   docker-compose up --build      → Build image and start (first time)
+#   docker-compose up              → Start (subsequent runs)
+#   docker-compose down            → Stop and remove containers
+#   docker-compose logs -f         → Tail live logs
+#
+# Then open: http://localhost:8888
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+
+  pharmatrace-notebook:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: pharmatrace_dashboard
+    image: pharmatrace-ai:latest
+
+    ports:
+      - "8888:8888"           # Jupyter Notebook UI
+
+    volumes:
+      # ── Mount your local data folders into the container ──────────────────
+      # Edit these left-hand paths to point to your actual data directories
+      - ./data/master_dataset:/home/jovyan/pharmatrace/data/master_dataset:ro
+      - ./data/additional:/home/jovyan/pharmatrace/data/additional:ro
+
+      # ── Output charts are written back to your local outputs/ folder ──────
+      - ./outputs:/home/jovyan/pharmatrace/outputs
+
+      # ── Live-reload the notebook during development ───────────────────────
+      - ./Warehouse_FEFO_Analytics_Dashboard.ipynb:/home/jovyan/pharmatrace/Warehouse_FEFO_Analytics_Dashboard.ipynb
+
+    environment:
+      - JUPYTER_ENABLE_LAB=no       # Set to 'yes' to use JupyterLab instead
+      - GRANT_SUDO=no
+
+    restart: unless-stopped
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8888/api"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
