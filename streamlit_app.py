@@ -1,0 +1,1294 @@
+"""
+PharmaTrace AI — Warehouse & FEFO Inventory Optimization Dashboard
+Streamlit App  |  ISB AMPBA Capstone  |  Sponsor: Innodatatics Inc.
+
+Run locally:
+    streamlit run streamlit_app.py
+
+Deploy free:
+    https://share.streamlit.io
+"""
+
+import os
+import warnings
+import io
+import numpy as np
+import pandas as pd
+from datetime import datetime
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
+import matplotlib.gridspec as gridspec
+from matplotlib.colors import LinearSegmentedColormap
+import seaborn as sns
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import classification_report, confusion_matrix, accuracy_score
+from sklearn.preprocessing import LabelEncoder, StandardScaler
+from scipy.optimize import linprog
+import streamlit as st
+
+warnings.filterwarnings("ignore")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PAGE CONFIG
+# ─────────────────────────────────────────────────────────────────────────────
+st.set_page_config(
+    page_title="PharmaTrace AI — Warehouse & FEFO Dashboard",
+    page_icon="🏥",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GLOBAL STYLE
+# ─────────────────────────────────────────────────────────────────────────────
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
+.stApp { background: #0b0e1a; color: #e2e8f0; }
+[data-testid="stSidebar"] {
+    background: linear-gradient(180deg, #0f1628 0%, #0d1220 100%);
+    border-right: 1px solid #1e2a45;
+}
+[data-testid="stSidebar"] * { color: #cbd5e1 !important; }
+.kpi-card {
+    background: linear-gradient(135deg, #131929 0%, #1a2540 100%);
+    border: 1px solid #1e3a5f;
+    border-radius: 12px;
+    padding: 18px 22px;
+    text-align: center;
+    margin-bottom: 10px;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.4);
+    transition: transform 0.2s;
+}
+.kpi-card:hover { transform: translateY(-2px); }
+.kpi-label { font-size: 11px; font-weight: 500; color: #64748b; letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 6px; }
+.kpi-value { font-size: 26px; font-weight: 700; }
+.kpi-sub   { font-size: 11px; color: #64748b; margin-top: 4px; }
+.section-header {
+    background: linear-gradient(90deg, #00d4ff22 0%, transparent 100%);
+    border-left: 3px solid #00d4ff;
+    padding: 10px 16px;
+    border-radius: 0 8px 8px 0;
+    margin: 24px 0 12px 0;
+    font-size: 18px;
+    font-weight: 600;
+    color: #e2e8f0;
+}
+.section-desc { font-size: 12px; color: #64748b; font-style: italic; margin-bottom: 16px; padding-left: 4px; }
+#MainMenu {visibility: hidden;} footer {visibility: hidden;}
+</style>
+""", unsafe_allow_html=True)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CHART STYLE
+# ─────────────────────────────────────────────────────────────────────────────
+plt.rcParams.update({
+    "figure.facecolor": "#0f1117", "axes.facecolor": "#1a1d27",
+    "axes.edgecolor": "#444", "axes.labelcolor": "#ccc",
+    "text.color": "#eee", "xtick.color": "#aaa", "ytick.color": "#aaa",
+    "grid.color": "#2a2d3a", "grid.linestyle": "--",
+    "font.family": "DejaVu Sans", "font.size": 11,
+    "axes.titlesize": 12, "axes.titleweight": "bold",
+})
+PALETTE = ["#00d4ff","#7c3aed","#f59e0b","#10b981","#ef4444",
+           "#3b82f6","#ec4899","#14b8a6","#f97316","#84cc16"]
+TODAY = pd.Timestamp("2026-08-23")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# HELPERS
+# ─────────────────────────────────────────────────────────────────────────────
+def show_fig(fig):
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=130, bbox_inches="tight", facecolor=fig.get_facecolor())
+    st.image(buf.getvalue(), use_container_width=True)
+    plt.close(fig)
+
+def kpi_card(label, value, color="#00d4ff", sub=""):
+    return f"""<div class="kpi-card">
+        <div class="kpi-label">{label}</div>
+        <div class="kpi-value" style="color:{color};">{value}</div>
+        <div class="kpi-sub">{sub}</div></div>"""
+
+def expiry_risk_fn(d):
+    if pd.isna(d):  return "Unknown"
+    if d < 0:       return "EXPIRED"
+    if d <= 30:     return "CRITICAL (<30d)"
+    if d <= 90:     return "HIGH (30-90d)"
+    if d <= 180:    return "MEDIUM (90-180d)"
+    return "LOW (>180d)"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GLOSSARY — plain-English explanations for every metric & chart
+# ─────────────────────────────────────────────────────────────────────────────
+GLOSSARY = {
+    # ── KPI Cards ──────────────────────────────────────────────────────────
+    "Total Inventory Value": (
+        "**Total Inventory Value** is the total USD value of all pharmaceutical stock "
+        "currently held across every warehouse.\n\n"
+        "📌 *Calculated as:* `quantity_on_hand × unit_price` summed for every batch.\n\n"
+        "💡 A high value means more capital is tied up in stock — monitor this alongside "
+        "expiry risk to avoid write-offs."
+    ),
+    "At-Risk Value": (
+        "**At-Risk Value** is the total USD value of stock that is EXPIRED, within 30 days "
+        "of expiry (CRITICAL), or within 30–90 days (HIGH).\n\n"
+        "📌 *Formula:* Sum of `inventory_value_usd` for risk tiers EXPIRED + CRITICAL + HIGH.\n\n"
+        "🔴 If this is a large % of total value, urgent action is needed: dispatch, liquidate, "
+        "or transfer stock before it expires unsold."
+    ),
+    "FEFO Compliance": (
+        "**FEFO = First Expiry, First Out** — a regulatory requirement that when dispatching "
+        "products, the batch with the soonest expiry date must always be picked first.\n\n"
+        "📌 *Formula:* `(Compliant Picks / Total Picks) × 100`\n\n"
+        "✅ Target ≥ 97% (industry standard). Falling below this risks FDA/regulatory "
+        "action and patient safety issues."
+    ),
+    "Avg Fill Rate": (
+        "**Average Fill Rate (Service Level)** measures how much of customer demand was "
+        "actually fulfilled on time.\n\n"
+        "📌 *Formula:* `(Units Dispatched / Units Demanded) × 100`, averaged over 24 months.\n\n"
+        "✅ Target ≥ 97%. Below 95% indicates stockouts — patients/hospitals may not receive "
+        "medicines they ordered."
+    ),
+    "IoT Excursion Rate": (
+        "**Thermal Excursion Rate** = % of IoT sensor readings where temperature was outside "
+        "the safe storage range (2–8°C for cold-chain products per USP <659> standard).\n\n"
+        "📌 *Formula:* `(Excursion Readings / Total Readings) × 100`\n\n"
+        "🌡️ Even brief temperature excursions can degrade drug potency. Above 5% signals "
+        "a cold-chain failure requiring immediate investigation."
+    ),
+    "Active Products": (
+        "**Active Products** = count of unique pharmaceutical SKUs (Stock Keeping Units) "
+        "with status = 'active' currently held in the warehouse network.\n\n"
+        "💡 A large SKU count increases complexity in FEFO management and expiry monitoring."
+    ),
+    "Warehouses": (
+        "**Warehouses** = number of distinct distribution centres (DCs) in the network.\n\n"
+        "Each warehouse has its own capacity, temperature control capability, and inventory. "
+        "The dashboard tracks all of them simultaneously."
+    ),
+    "Total Stock Units": (
+        "**Total Stock Units** = sum of `quantity_on_hand` across all batches and warehouses.\n\n"
+        "This is the raw physical unit count (capsules, vials, boxes etc.) before pricing."
+    ),
+    "Cold-Chain Value": (
+        "**Cold-Chain Value %** = % of total inventory value that requires temperature-controlled "
+        "storage (2–8°C or below).\n\n"
+        "🧊 Cold-chain products (injectables, vaccines, biologics) are more expensive to store "
+        "and transport, and carry higher excursion risk."
+    ),
+    # ── Charts ─────────────────────────────────────────────────────────────
+    "Inventory Overview": (
+        "**Inventory Overview** shows 8 panels covering the key dimensions of your stock:\n\n"
+        "- **Value by WH** — which warehouses hold the most USD value\n"
+        "- **Expiry Risk** — how much stock is near or past expiry\n"
+        "- **Units by Pharma Class** — drug category breakdown\n"
+        "- **DEA Controlled** — controlled substance proportion (Schedule II–V)\n"
+        "- **DTE Histogram** — distribution of days-to-expiry across all batches\n"
+        "- **Value by Dosage Form** — tablets vs injectables vs solutions etc.\n"
+        "- **Cold-Chain by WH** — which warehouses carry the most temperature-sensitive stock\n"
+        "- **QC Status** — proportion released, quarantined, or under review"
+    ),
+    "ABC-FSN": (
+        "**ABC-FSN Analysis** combines two segmentation methods:\n\n"
+        "🔠 **ABC (Value-based Pareto)**\n"
+        "- **A items** = top 20% of SKUs contributing 80% of inventory value → highest priority\n"
+        "- **B items** = next 15% value (15% of SKUs)\n"
+        "- **C items** = remaining 5% value — low priority, candidate for disposal\n\n"
+        "⚡ **FSN (Velocity-based)**\n"
+        "- **Fast movers** = high monthly dispatch rate → keep well-stocked\n"
+        "- **Slow movers** = low but steady demand → monitor for over-stocking\n"
+        "- **Non-moving** = no recent dispatch → expiry risk, consider liquidation\n\n"
+        "💡 **A-Fast** items need constant replenishment. **C-Non-Moving** items need "
+        "urgent attention before they expire."
+    ),
+    "FEFO Analysis": (
+        "**FEFO Compliance Analysis** shows three charts:\n\n"
+        "1. **By Warehouse** — bar chart of compliance % per DC. Red < 90%, Yellow 90–97%, Green ≥ 97%.\n"
+        "2. **Monthly Trend** — time-series showing if compliance is improving or declining.\n"
+        "3. **Non-Compliant Picks** — count of actual wrong-batch picks by warehouse.\n\n"
+        "📋 *Non-compliant pick* = an operator dispatched a batch that was NOT the earliest-expiring "
+        "available batch, violating FEFO rules. Each such event is a potential regulatory violation."
+    ),
+    "Expiry Risk Heatmap": (
+        "**Expiry Risk Heatmap** shows three views:\n\n"
+        "1. **Heatmap** — grid of warehouses × risk tiers. Brighter/redder cells = more units in that risk bucket.\n"
+        "2. **At-Risk Value Bar** — USD exposure from EXPIRED + CRITICAL + HIGH stock per warehouse.\n"
+        "3. **DTE Scatter** — each dot is a batch; position = days remaining, height = USD value. "
+        "Dots on the left are urgent.\n\n"
+        "🎯 **Action zones:**\n"
+        "- Red (EXPIRED): Immediate regulatory disposal required\n"
+        "- Orange (CRITICAL <30d): Emergency dispatch or liquidation within days\n"
+        "- Yellow (HIGH 30-90d): Plan redistribution now"
+    ),
+    "Demand Trend": (
+        "**24-Month Demand & Seasonality Analysis** has 4 panels:\n\n"
+        "1. **Demand vs Dispatch** — blue line = what customers ordered, green = what was shipped. "
+        "Red gap = unmet demand (stockout).\n"
+        "2. **Fill Rate** — monthly service level. Green bars ≥ 97% (target met), red < 95% (stockout month).\n"
+        "3. **Seasonality** — average demand by calendar month per therapeutic category. "
+        "Peaks guide pre-season stock-building.\n"
+        "4. **Revenue Trend** — total USD value of dispatches per month. Shows business trajectory."
+    ),
+    "ML Classifier": (
+        "**Random Forest Expiry Risk Classifier** trains a machine-learning model on your current "
+        "inventory to *predict* which batches are at risk of expiring unsold.\n\n"
+        "📊 **Three panels:**\n"
+        "1. **Feature Importance** — which variables the model relies on most. "
+        "Longer bar = stronger predictor.\n"
+        "2. **Confusion Matrix** — how accurately the model classifies each risk tier. "
+        "Diagonal = correct predictions.\n"
+        "3. **Predicted Distribution** — model's risk assessment across all current batches.\n\n"
+        "🤖 *Features used:* Days-to-Expiry, Quantity, Unit Price, Monthly Velocity, "
+        "Coverage Days, % Life Remaining, Value-per-Day."
+    ),
+    "LP Optimizer": (
+        "**Linear Programming Cost Optimizer** solves a mathematical optimisation problem "
+        "for each at-risk batch to find the cheapest way to handle it.\n\n"
+        "🔢 **4 decision variables per batch:**\n"
+        "- **Dispatch** — sell immediately through normal channels (best recovery)\n"
+        "- **Transfer** — move to a warehouse nearer high-demand customers\n"
+        "- **Liquidate** — sell through secondary/near-expiry channel at discount\n"
+        "- **Dispose** — certified regulatory destruction (cost, no recovery)\n\n"
+        "⚖️ The LP minimises total cost subject to:\n"
+        "- Can only dispatch what demand velocity supports in remaining DTE\n"
+        "- Liquidation channel can absorb max 35% of units\n"
+        "- Mandatory 5% disposal if already expired\n\n"
+        "💰 **Net Saving** = revenue recovered minus holding & destruction costs."
+    ),
+    "IoT Monitor": (
+        "**Cold-Chain IoT Telemetry Monitor** analyses sensor data from refrigerated warehouses:\n\n"
+        "1. **Temperature Profile** — real-time temperature readings per cold WH. "
+        "Dashed lines = USP <659> safe zone (2–8°C). Any spike above 8°C is an excursion.\n"
+        "2. **Excursion Rate** — % of sensor readings outside safe zone per warehouse.\n"
+        "3. **Humidity Distribution** — Relative Humidity (RH) should stay near 55%. "
+        "Too high → mould risk; too low → product desiccation.\n"
+        "4. **Alert Levels** — IoT alert classification: GREEN = normal, YELLOW = caution, "
+        "RED = critical excursion requiring QA review.\n\n"
+        "📋 **USP <659>** = US Pharmacopeia storage standard that pharma companies must comply with."
+    ),
+    "Freight Rebalancing": (
+        "**Inter-Warehouse Freight Rebalancing** helps decide where to transfer near-expiry stock:\n\n"
+        "1. **Freight Cost Matrix** — heatmap of transfer cost (USD per unit) between every pair "
+        "of warehouses. Lower = cheaper route to move stock.\n"
+        "2. **Logistics Tier** — Economy (cheapest, slowest), Standard, or Express (fastest, most expensive).\n\n"
+        "🚛 **How to use it:**\n"
+        "- Find a warehouse with HIGH expiry-risk stock (from the Heatmap page)\n"
+        "- Find a warehouse with HIGH demand (from Demand page)\n"
+        "- Use this matrix to find the cheapest cold-chain route between them"
+    ),
+    # ── Risk tiers ──────────────────────────────────────────────────────────
+    "Risk Tiers": (
+        "**Expiry Risk Tiers** classify every batch by how many days remain until expiry:\n\n"
+        "| Tier | Days to Expiry | Action Required |\n"
+        "|------|---------------|------------------|\n"
+        "| 🔴 EXPIRED | < 0 days | Mandatory regulatory disposal |\n"
+        "| 🟠 CRITICAL | 0–30 days | Emergency dispatch/liquidation |\n"
+        "| 🟡 HIGH | 31–90 days | Prioritise in FEFO picks |\n"
+        "| 🟨 MEDIUM | 91–180 days | Monitor & plan redistribution |\n"
+        "| 🟢 LOW | > 180 days | Normal stock management |"
+    ),
+    "QC Status": (
+        "**QC Status** = Quality Control release status of each batch:\n\n"
+        "- ✅ **RELEASED** — batch has passed all QC tests and is cleared for dispatch\n"
+        "- ⏳ **QUARANTINE** — batch is on hold pending QC results or investigation\n"
+        "- ❌ **REJECTED** — batch failed QC and cannot be sold (must be disposed)\n\n"
+        "Only RELEASED batches count toward available inventory for dispatch."
+    ),
+    "FEFO Compliance Detail": (
+        "**FEFO = First Expiry, First Out**\n\n"
+        "When picking stock to fulfil an order, operators *must* always select the batch "
+        "with the earliest (soonest) expiry date first.\n\n"
+        "✅ **is_fefo_compliant = True** → correct batch was picked\n"
+        "❌ **is_fefo_compliant = False** → a longer-dated batch was picked instead, "
+        "leaving the shorter-dated batch to potentially expire unsold\n\n"
+        "This is mandated by FDA 21 CFR Part 211 and USP <1079>."
+    ),
+    "Pareto Curve": (
+        "**Pareto Curve (80/20 Rule)**\n\n"
+        "The curve shows cumulative % of total inventory value (Y-axis) as you add more "
+        "SKUs ranked by value (X-axis, most valuable first).\n\n"
+        "📌 A typical pharma inventory follows the 80/20 rule:\n"
+        "- ~20% of SKUs = 80% of value (A items)\n"
+        "- Next ~30% = 15% of value (B items)\n"
+        "- Remaining ~50% = only 5% of value (C items)\n\n"
+        "💡 Focus expiry monitoring efforts on A items — that's where the most financial "
+        "risk is concentrated."
+    ),
+    "Capacity Utilisation": (
+        "**Capacity Utilisation** = `(Units on Hand / Max Capacity Units) × 100`\n\n"
+        "🟢 < 75% = healthy headroom\n"
+        "🟡 75–90% = caution — limited space for incoming shipments\n"
+        "🔴 > 90% = over-capacity risk — may need inter-warehouse transfers or expedited dispatch\n\n"
+        "Over-capacity can force storage of cold-chain items in non-compliant conditions."
+    ),
+    "DTE Histogram": (
+        "**Days-to-Expiry (DTE) Histogram**\n\n"
+        "Each bar represents a count of batches expiring within that DTE range.\n\n"
+        "- Bars to the **left of 0** = already expired (must dispose)\n"
+        "- Bars between **0–30** = CRITICAL — act now\n"
+        "- Bars between **30–90** = HIGH risk — plan dispatch\n"
+        "- Bars to the **right of 90** = manageable shelf life remaining\n\n"
+        "📊 A healthy inventory has most bars concentrated on the right (>180 days)."
+    ),
+    "Feature Importance": (
+        "**Feature Importance** shows which input variables the Random Forest model relies on "
+        "most when predicting expiry risk tier.\n\n"
+        "📊 Longer bar = stronger predictor of risk.\n\n"
+        "Common key features:\n"
+        "- **days_to_expiry** — most direct predictor\n"
+        "- **risk_score** — % of shelf life elapsed\n"
+        "- **cover_days** — how many days of demand velocity are left vs. DTE\n"
+        "- **value_per_day** — daily financial exposure\n\n"
+        "💡 If `cover_days` ranks high, it means products are expiring faster than they're "
+        "being sold — a demand-supply mismatch."
+    ),
+    "Confusion Matrix": (
+        "**Confusion Matrix** shows how accurately the ML model classifies risk tiers.\n\n"
+        "📊 **Reading it:**\n"
+        "- Rows = actual (true) risk tier\n"
+        "- Columns = model's predicted risk tier\n"
+        "- **Diagonal cells** (top-left to bottom-right) = correct predictions ✅\n"
+        "- **Off-diagonal cells** = misclassifications ❌\n\n"
+        "A good model has large diagonal numbers and small off-diagonal numbers. "
+        "Misclassifying CRITICAL as LOW would be dangerous — check those cells specifically."
+    ),
+    # ── Fallback / supplementary keys ──────────────────────────────────────
+    "FEFO Header":          "See 'FEFO Compliance' — FEFO = First Expiry First Out, the regulatory rule that soonest-expiring stock must always be dispatched first.",
+    "Demand Charts":        "These 4 charts together tell the story of 24-month demand: **how much was ordered** (Demanded), **how much was fulfilled** (Dispatched), **service level trend** (Fill Rate %), **seasonal patterns** by therapy area, and **revenue trajectory** over time.",
+    "IoT Charts":           "These 4 panels together assess cold-chain health: **temperature stability** over time, **excursion frequency** by warehouse, **humidity compliance**, and **overall alert level distribution**. Together they determine regulatory USP <659> compliance.",
+    "Heatmap Charts":       "The 3 panels work together: the **heatmap** shows WHERE units are at risk (by warehouse), the **bar chart** shows the USD exposure per warehouse, and the **scatter** shows individual batch-level DTE vs financial stake.",
+    "LP Table":             "The LP Results Table shows the optimal allocation for each at-risk batch:\n- **Dispatch** = units to sell immediately\n- **Transfer** = units to move to another warehouse\n- **Liquidate** = units to sell via secondary channel\n- **Dispose** = units requiring certified destruction\n- **Net_Saving_USD** = total USD recovered vs. doing nothing",
+    "FEFO Charts":          "The 3 FEFO charts together show **where** compliance issues occur (by warehouse), **when** they occur (monthly trend), and **how many** non-compliant picks happened. Use all three together to target improvement actions at specific warehouses and time periods.",
+    "ABC-FSN Charts":       "The 3 panels show: (1) **Pareto curve** — the cumulative value concentration, (2) **ABC group comparison** — SKU count vs value contribution, and (3) **FSN matrix** — cross-referencing value tier (A/B/C) with velocity tier (Fast/Slow/Non-moving).",
+    "FEFO Metric":          "**Overall Network FEFO Rate** aggregates compliance across all warehouses and all time periods into a single headline number. Use this as your top-line regulatory KPI. If below 97%, drill into the charts above to find which warehouse and month is dragging it down.",
+    "ML Header":            "This page trains a **Random Forest** machine learning model directly on your inventory data and uses it to classify each batch into a predicted risk tier. No manual rules — the model learns patterns automatically from the data.",
+    "ML Charts":            "The 3 ML charts show: (1) **Feature Importance** bar chart — which variables most influence risk predictions, (2) **Confusion Matrix** heatmap — how accurate the predictions are per risk tier, and (3) **Predicted Distribution** — the model's current risk tier breakdown of all batches.",
+    "Demand Header":        "This page analyses **24 months of demand history** to reveal: how well supply matched demand, which months see seasonal spikes, and how revenue has trended. Use it for procurement planning and pre-season stock-building.",
+    "Heatmap Header":       "This page maps **expiry risk spatially** — showing which warehouses hold the most at-risk stock and by how much. Combine with the Freight Rebalancing page to plan transfers of near-expiry stock to high-demand warehouses.",
+    "LP Header":            "This page runs a **Linear Programming (LP) optimisation** — a mathematical technique that finds the mathematically optimal allocation of near-expiry stock across four disposal channels to maximise net recovery while respecting all regulatory constraints.",
+    "Freight Header":       "This page maps the **cost of moving stock between warehouses** using a freight cost matrix. Use it alongside the Expiry Risk Heatmap to identify the cheapest route to transfer near-expiry stock to high-demand locations before it expires.",
+    "Freight Charts":       "The **heatmap** shows pairwise transfer costs between every warehouse combination. Darker colour = cheaper route. The **pie chart** shows the breakdown of routes by logistics tier (Economy / Standard / Express), reflecting the speed-cost tradeoff.",
+    "IoT Header":           "This page monitors **cold-chain temperature and humidity** from IoT sensors embedded in refrigerated warehouses. Compliance with USP <659> (2–8°C storage) is a regulatory requirement — even brief excursions can compromise drug potency and trigger QA investigations.",
+    "Summary Table":        "This table summarises inventory across expiry risk tiers:\n- **Products** = unique SKUs in that risk tier\n- **Total_Units** = total physical units\n- **Total_Value_USD** = total USD value at stake\n\nFocus attention on EXPIRED and CRITICAL rows — these represent immediate financial and regulatory exposure.",
+    "Performance Metrics":  "**Model Accuracy** = how often the RF model correctly predicted the right risk tier on unseen test data.\n\n**Training Samples** = records used to fit the model.\n**Test Samples** = held-out records used to evaluate it (model never saw these during training).\n\nAbove 85% accuracy = good for this type of classification task.",
+    "Classification Report":"The classification report shows precision, recall and F1-score per risk tier:\n- **Precision** = of all batches predicted as CRITICAL, what % actually were CRITICAL\n- **Recall** = of all actually-CRITICAL batches, what % did the model catch\n- **F1** = harmonic mean of precision & recall (overall quality)\n\nFor risk management, high **recall on CRITICAL** is most important — missing a CRITICAL batch is worse than a false alarm.",
+    "Optimization Metrics": "- **Batches Optimised** = number of at-risk records the LP solver successfully found an optimal allocation for\n- **Total Net Savings** = total USD value recovered vs. passively letting stock expire\n- **Avg Saving / Batch** = average recovery per batch — higher means the LP is finding high-value opportunities",
+    "Optimization Charts":  "The **allocation pie** shows the aggregate split of all at-risk units across the 4 channels (Dispatch / Transfer / Liquidate / Dispose). The **scatter plot** shows individual batch savings vs. their DTE — batches further left (less time) tend to have lower savings because options are more limited.",
+    "Freight Table":        "This table lists all warehouse-to-warehouse routes sorted by **ambient transfer cost** (cheapest first).\n\nTo find the best transfer route:\n1. Identify a source warehouse with excess near-expiry stock (from Expiry Risk page)\n2. Identify a destination warehouse with high demand (from Demand page)\n3. Look up the cost in this table and cross-check with the heatmap",
+}
+
+
+def info_box(key, label="ℹ️ What does this mean?"):
+    """Render a Streamlit popover with the glossary explanation for the given key."""
+    explanation = GLOSSARY.get(key, f"*No explanation available for '{key}'.*")
+    with st.popover(label, use_container_width=False):
+        st.markdown(explanation)
+
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SIDEBAR
+# ─────────────────────────────────────────────────────────────────────────────
+with st.sidebar:
+    st.markdown("""<div style='text-align:center; padding: 12px 0 20px;'>
+        <div style='font-size:28px;'>🏥</div>
+        <div style='font-size:16px; font-weight:700; color:#00d4ff;'>PharmaTrace AI</div>
+        <div style='font-size:10px; color:#475569; margin-top:4px;'>Warehouse & FEFO Optimization</div>
+        <div style='font-size:9px; color:#334155; margin-top:2px;'>ISB AMPBA Capstone | Innodatatics</div>
+    </div>""", unsafe_allow_html=True)
+    st.markdown("---")
+    PAGES = [
+        "🏠 Home & KPI Summary",
+        "📦 Inventory Overview",
+        "🔶 ABC-FSN Segmentation",
+        "✅ FEFO Compliance",
+        "🌡️ Expiry Risk Heatmap",
+        "📈 Demand & Seasonality",
+        "🤖 ML Expiry Classifier",
+        "⚖️ LP Cost Optimizer",
+        "❄️ IoT Cold-Chain Monitor",
+        "🚛 Freight Rebalancing",
+    ]
+    selected_page = st.radio("Navigate", PAGES, label_visibility="collapsed")
+    st.markdown("---")
+    # ── Template Download ──────────────────────────────────────────────────
+    st.markdown("<div style='font-size:12px; font-weight:600; color:#94a3b8; margin-bottom:6px;'>📥 Step 1 — Download Template</div>", unsafe_allow_html=True)
+    TEMPLATE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "PharmaTrace_Data_Template.xlsx")
+    if os.path.exists(TEMPLATE_PATH):
+        with open(TEMPLATE_PATH, "rb") as f:
+            st.download_button(
+                label="⬇️ Download Data Template",
+                data=f,
+                file_name="PharmaTrace_Data_Template.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+            )
+    st.markdown("<div style='font-size:10px; color:#475569; margin:4px 0 12px; line-height:1.5;'>Fill in all 9 sheets with your data, then upload below.</div>", unsafe_allow_html=True)
+
+    # ── Single File Upload ─────────────────────────────────────────────────
+    st.markdown("<div style='font-size:12px; font-weight:600; color:#94a3b8; margin-bottom:6px;'>📂 Step 2 — Upload Your Data</div>", unsafe_allow_html=True)
+    uploaded_file = st.file_uploader(
+        "Upload filled template (.xlsx)",
+        type=["xlsx"],
+        key="unified_upload",
+        help="Upload the PharmaTrace_Data_Template.xlsx after filling in your data across all sheets."
+    )
+    st.markdown("---")
+    # Auto-detect local data (developer mode)
+    LOCAL_MASTER = r"/Users/babitakironvedantam/Desktop/CAPSTONE FINAL/PharmaTrace AI - DATA/master_dataset/PharmaTrace_Master_Dataset.xlsx"
+    LOCAL_ADD    = r"/Users/babitakironvedantam/Desktop/CAPSTONE FINAL/AI Modules/additional data"
+    use_local = os.path.exists(LOCAL_MASTER)
+    if use_local:
+        st.success("✅ Local data auto-detected", icon="💾")
+    elif uploaded_file:
+        st.success("✅ File uploaded successfully", icon="📊")
+    else:
+        st.info("Download the template, fill it in, then upload", icon="📤")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DATA LOADING  — single unified Excel file with 9 sheets
+# ─────────────────────────────────────────────────────────────────────────────
+# Sheet name mapping: template sheet name → what the code expects
+SHEET_MAP = {
+    "products":               "products",
+    "warehouses":             "warehouses",
+    "inventory":              "inventory",
+    "finished_product_batches": "finished_product_batches",
+    "monthly_demand":         "monthly_demand",
+    "fefo_pick_ledger":       "fefo_pick_ledger",
+    "unit_economics":         "unit_economics",
+    "freight_matrix":         "freight_matrix",
+    "iot_telemetry":          "iot_telemetry",
+}
+
+@st.cache_data(show_spinner="Reading your data file…")
+def load_all_data(src):
+    """Load all data from one unified Excel workbook (template or original master)."""
+    xl = pd.ExcelFile(src)
+    available = xl.sheet_names
+
+    def read(sheet): return pd.read_excel(src, sheet_name=sheet) if sheet in available else pd.DataFrame()
+
+    # ── Core sheets ───────────────────────────────────────────────────────
+    products   = read("products")
+    warehouses = read("warehouses")
+    inventory  = read("inventory")
+    batches    = read("finished_product_batches")
+
+    # Build inventory — merge batches, products, warehouses
+    if not batches.empty and "fp_batch_id" in inventory.columns:
+        merge_cols = [c for c in ["fp_batch_id","manufacture_date","qc_status","recall_flag"] if c in batches.columns]
+        inventory = inventory.merge(batches[merge_cols], on="fp_batch_id", how="left")
+
+    prod_cols = [c for c in ["product_id","generic_name","brand_name","dosage_form","route",
+                              "pharm_class","dea_schedule","unit_price","shelf_life_months","status"] if c in products.columns]
+    if prod_cols:
+        inventory = inventory.merge(products[prod_cols], on="product_id", how="left")
+
+    wh_cols = [c for c in ["warehouse_id","warehouse_name","state","temp_controlled","capacity_units"] if c in warehouses.columns]
+    if wh_cols:
+        inventory = inventory.merge(warehouses[wh_cols], on="warehouse_id", how="left")
+
+    inventory["expiry_date"]        = pd.to_datetime(inventory.get("expiry_date"),      errors="coerce")
+    inventory["manufacture_date"]   = pd.to_datetime(inventory.get("manufacture_date"), errors="coerce")
+    inventory["days_to_expiry"]     = (inventory["expiry_date"] - TODAY).dt.days
+    inventory["shelf_life_days"]    = (inventory["expiry_date"] - inventory["manufacture_date"]).dt.days
+    inventory["pct_life_remaining"] = (inventory["days_to_expiry"] / inventory["shelf_life_days"].replace(0, np.nan) * 100).clip(0, 100)
+    inventory["inventory_value_usd"]= inventory["quantity_on_hand"] * inventory["unit_price"]
+    inventory["is_cold_chain"]      = inventory["dosage_form"].str.upper().str.contains("INJECTION|SOLUTION|VACCINE", na=False)
+    inventory["is_controlled"]      = inventory["dea_schedule"].notna()
+    inventory["expiry_risk"]        = inventory["days_to_expiry"].apply(expiry_risk_fn)
+
+    # ── Supplementary sheets ──────────────────────────────────────────────
+    df_demand  = read("monthly_demand")
+    df_txns    = read("fefo_pick_ledger")
+    df_econ    = read("unit_economics")
+    df_freight = read("freight_matrix")
+    df_iot     = read("iot_telemetry")
+
+    # Rename columns to match what the rest of the app expects
+    if not df_txns.empty:
+        df_txns.rename(columns={"is_fefo_compliant": "is_fefo_compliant"}, inplace=True)  # already correct
+        if "timestamp" in df_txns.columns:
+            df_txns["timestamp"] = pd.to_datetime(df_txns["timestamp"], errors="coerce")
+        if "transaction_type" not in df_txns.columns and "fefo_pick_ledger" in available:
+            df_txns["transaction_type"] = "OUTBOUND_DISPATCH_PICK"  # all rows in ledger are picks
+
+    if not df_iot.empty:
+        # Rename humidity column if needed
+        df_iot.rename(columns={"humidity_rh_pct": "relative_humidity_pct"}, inplace=True, errors="ignore")
+        df_iot.rename(columns={"telemetry_log_id": "telemetry_id"}, inplace=True, errors="ignore")
+        if "timestamp" in df_iot.columns:
+            df_iot["timestamp"] = pd.to_datetime(df_iot["timestamp"], errors="coerce")
+
+    if not df_econ.empty:
+        # Rename unit_price_usd to unit_price if needed
+        df_econ.rename(columns={"unit_price_usd": "unit_price"}, inplace=True, errors="ignore")
+
+    # Check if supplementary data is usable
+    supp_loaded = not df_demand.empty and not df_txns.empty
+
+    return products, warehouses, inventory, df_demand, df_txns, df_econ, df_freight, df_iot, supp_loaded
+
+
+def load_local_legacy():
+    """Fallback: load from original separate files (local dev mode)."""
+    import pandas as pd
+    products   = pd.read_excel(LOCAL_MASTER, sheet_name="products")
+    warehouses = pd.read_excel(LOCAL_MASTER, sheet_name="warehouses")
+    inventory  = pd.read_excel(LOCAL_MASTER, sheet_name="inventory")
+    batches    = pd.read_excel(LOCAL_MASTER, sheet_name="finished_product_batches")
+    inventory  = inventory.merge(batches[[c for c in ["fp_batch_id","manufacture_date","qc_status","recall_flag"] if c in batches.columns]], on="fp_batch_id", how="left")
+    inventory  = inventory.merge(products[[c for c in ["product_id","generic_name","brand_name","dosage_form","route","pharm_class","dea_schedule","unit_price","shelf_life_months","status"] if c in products.columns]], on="product_id", how="left")
+    inventory  = inventory.merge(warehouses[[c for c in ["warehouse_id","warehouse_name","state","temp_controlled","capacity_units"] if c in warehouses.columns]], on="warehouse_id", how="left")
+    inventory["expiry_date"]        = pd.to_datetime(inventory.get("expiry_date"),      errors="coerce")
+    inventory["manufacture_date"]   = pd.to_datetime(inventory.get("manufacture_date"), errors="coerce")
+    inventory["days_to_expiry"]     = (inventory["expiry_date"] - TODAY).dt.days
+    inventory["shelf_life_days"]    = (inventory["expiry_date"] - inventory["manufacture_date"]).dt.days
+    inventory["pct_life_remaining"] = (inventory["days_to_expiry"] / inventory["shelf_life_days"].replace(0, np.nan) * 100).clip(0, 100)
+    inventory["inventory_value_usd"]= inventory["quantity_on_hand"] * inventory["unit_price"]
+    inventory["is_cold_chain"]      = inventory["dosage_form"].str.upper().str.contains("INJECTION|SOLUTION|VACCINE", na=False)
+    inventory["is_controlled"]      = inventory["dea_schedule"].notna()
+    inventory["expiry_risk"]        = inventory["days_to_expiry"].apply(expiry_risk_fn)
+
+    ADD = LOCAL_ADD
+    df_demand  = pd.read_excel(os.path.join(ADD, "01_Pharma_Compliant_Monthly_Demand_24M.xlsx"))
+    df_txns    = pd.read_excel(os.path.join(ADD, "02_Pharma_Compliant_FEFO_Pick_Ledger.xlsx"))
+    df_econ    = pd.read_excel(os.path.join(ADD, "03_Pharma_Compliant_Unit_Economics_and_Costs.xlsx"))
+    df_freight = pd.read_excel(os.path.join(ADD, "04_Pharma_Compliant_Inter_Warehouse_Freight_Matrix.xlsx"))
+    df_iot     = pd.read_excel(os.path.join(ADD, "05_Pharma_Compliant_IoT_ColdChain_Telemetry_Logs.xlsx"))
+    df_txns["timestamp"] = pd.to_datetime(df_txns["timestamp"], errors="coerce")
+    df_iot["timestamp"]  = pd.to_datetime(df_iot["timestamp"],  errors="coerce")
+    # Rename iot humidity column to match template
+    df_iot.rename(columns={"humidity_rh_pct": "relative_humidity_pct"}, inplace=True, errors="ignore")
+    df_iot.rename(columns={"telemetry_log_id": "telemetry_id"}, inplace=True, errors="ignore")
+    return products, warehouses, inventory, df_demand, df_txns, df_econ, df_freight, df_iot, True
+
+
+def get_data():
+    """Return all datasets or None."""
+    if uploaded_file:
+        return load_all_data(uploaded_file)
+    elif use_local:
+        return load_local_legacy()
+    return None
+
+# ─────────────────────────────────────────────────────────────────────────────
+# HERO HEADER
+# ─────────────────────────────────────────────────────────────────────────────
+st.markdown(f"""<div style='text-align:center; padding: 28px 0 8px;'>
+    <h1 style='font-size:2.2rem; font-weight:800; color:#00d4ff; margin:0;'>🏥 PharmaTrace AI</h1>
+    <p style='font-size:1rem; color:#94a3b8; margin:6px 0 4px;'>Warehouse &amp; FEFO Inventory Optimization Dashboard</p>
+    <p style='font-size:0.75rem; color:#475569;'>Module 3 | ISB AMPBA Capstone | Sponsor: Innodatatics Inc. | As of {TODAY.date()}</p>
+</div><hr style='border-color:#1e2a45; margin: 8px 0 24px;'/>""", unsafe_allow_html=True)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LOAD DATA
+# ─────────────────────────────────────────────────────────────────────────────
+data = get_data()
+if data is None:
+    st.markdown("""
+    <div style='text-align:center; padding:40px 20px;'>
+        <div style='font-size:48px; margin-bottom:16px;'>📥</div>
+        <h3 style='color:#00d4ff; margin-bottom:8px;'>No Data Loaded Yet</h3>
+        <p style='color:#94a3b8; font-size:14px; max-width:480px; margin:0 auto 20px;'>
+            Get started by downloading the template, filling in your pharma data, and uploading it.
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    col_a, col_b, col_c = st.columns(3)
+    col_a.markdown("""<div style='background:#131929; border:1px solid #1e3a5f; border-radius:12px; padding:20px; text-align:center;'>
+        <div style='font-size:28px; margin-bottom:8px;'>1️⃣</div>
+        <div style='font-weight:600; color:#00d4ff; margin-bottom:6px;'>Download Template</div>
+        <div style='font-size:12px; color:#64748b;'>Click "⬇️ Download Data Template" in the sidebar</div>
+    </div>""", unsafe_allow_html=True)
+    col_b.markdown("""<div style='background:#131929; border:1px solid #1e3a5f; border-radius:12px; padding:20px; text-align:center;'>
+        <div style='font-size:28px; margin-bottom:8px;'>2️⃣</div>
+        <div style='font-weight:600; color:#f59e0b; margin-bottom:6px;'>Fill In Your Data</div>
+        <div style='font-size:12px; color:#64748b;'>Populate the 9 sheets in the template with your pharma warehouse data</div>
+    </div>""", unsafe_allow_html=True)
+    col_c.markdown("""<div style='background:#131929; border:1px solid #1e3a5f; border-radius:12px; padding:20px; text-align:center;'>
+        <div style='font-size:28px; margin-bottom:8px;'>3️⃣</div>
+        <div style='font-weight:600; color:#10b981; margin-bottom:6px;'>Upload & Analyse</div>
+        <div style='font-size:12px; color:#64748b;'>Upload the filled file using "📂 Step 2" in the sidebar</div>
+    </div>""", unsafe_allow_html=True)
+
+    st.markdown("<br/>", unsafe_allow_html=True)
+    st.markdown("**Template Sheet Guide:**")
+    st.table({
+        "Sheet": ["products","warehouses","inventory","finished_product_batches",
+                   "monthly_demand","fefo_pick_ledger","unit_economics","freight_matrix","iot_telemetry"],
+        "Contains": ["Product catalogue (SKUs, prices, shelf life)",
+                     "Warehouse locations & capacities",
+                     "Current batch stock levels & expiry dates",
+                     "Batch manufacturing dates & QC status",
+                     "24-month demand & dispatch history",
+                     "Pick transaction ledger (FEFO compliance)",
+                     "Holding, destruction & liquidation costs",
+                     "Inter-warehouse freight cost matrix",
+                     "IoT cold-chain temperature/humidity logs"],
+    })
+    st.stop()
+
+products, warehouses, inventory, df_demand, df_txns, df_econ, df_freight, df_iot, supp_ok = data
+
+RISK_COLORS = {"EXPIRED":"#7f1d1d","CRITICAL (<30d)":"#ef4444","HIGH (30-90d)":"#f97316",
+               "MEDIUM (90-180d)":"#f59e0b","LOW (>180d)":"#10b981","Unknown":"#6b7280"}
+RISK_ORDER   = ["EXPIRED","CRITICAL (<30d)","HIGH (30-90d)","MEDIUM (90-180d)","LOW (>180d)"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PAGE: HOME & KPI SUMMARY
+# ─────────────────────────────────────────────────────────────────────────────
+if selected_page == "🏠 Home & KPI Summary":
+    st.markdown('<div class="section-header">📊 Executive KPI Summary</div>', unsafe_allow_html=True)
+    info_box("Risk Tiers", "ℹ️ Understanding risk tiers")
+
+    total_inv_value = inventory["inventory_value_usd"].sum()
+    at_risk_value   = inventory[inventory["expiry_risk"].isin(["EXPIRED","CRITICAL (<30d)","HIGH (30-90d)"])]["inventory_value_usd"].sum()
+    pct_at_risk     = at_risk_value / total_inv_value * 100 if total_inv_value else 0
+    cold_chain_pct  = inventory[inventory["is_cold_chain"]]["inventory_value_usd"].sum() / total_inv_value * 100 if total_inv_value else 0
+    n_warehouses    = inventory["warehouse_id"].nunique()
+    n_products      = inventory["product_id"].nunique()
+    total_units     = inventory["quantity_on_hand"].sum()
+
+    picks = df_txns[df_txns["transaction_type"]=="OUTBOUND_DISPATCH_PICK"].copy() if (supp_ok and "transaction_type" in df_txns.columns) else (df_txns.copy() if supp_ok else None)
+    fefo_rate       = picks["is_fefo_compliant"].mean() * 100 if (picks is not None and "is_fefo_compliant" in picks.columns) else 0
+    excursion_rate  = df_iot["is_thermal_excursion"].mean() * 100 if (supp_ok and "is_thermal_excursion" in df_iot.columns) else 0
+    avg_fill_rate   = 0
+    if supp_ok:
+        monthly_agg = df_demand.groupby("year_month").agg(demanded=("quantity_demanded_units","sum"), dispatched=("quantity_dispatched_units","sum")).reset_index()
+        monthly_agg["fill_rate"] = monthly_agg["dispatched"] / monthly_agg["demanded"] * 100
+        avg_fill_rate = monthly_agg["fill_rate"].mean()
+
+    cols = st.columns(5)
+    kpis = [
+        ("Total Inventory Value",  f"${total_inv_value/1e6:.1f}M",            "#00d4ff", "USD millions across all warehouses"),
+        ("At-Risk Value",          f"${at_risk_value/1e3:.0f}K",              "#ef4444", f"{pct_at_risk:.1f}% of total stock value"),
+        ("FEFO Compliance",        f"{fefo_rate:.1f}%" if supp_ok else "N/A", "#10b981" if fefo_rate>=97 else "#f59e0b", "Target ≥ 97%"),
+        ("Avg Fill Rate",          f"{avg_fill_rate:.1f}%" if supp_ok else "N/A", "#10b981" if avg_fill_rate>=97 else "#f59e0b", "24-month service level"),
+        ("IoT Excursion Rate",     f"{excursion_rate:.1f}%" if supp_ok else "N/A", "#10b981" if excursion_rate<5 else "#ef4444", "Cold-chain thermal events"),
+    ]
+    for col, (label, value, color, sub) in zip(cols, kpis):
+        col.markdown(kpi_card(label, value, color, sub), unsafe_allow_html=True)
+    # KPI row 1 info popovers
+    info_cols = st.columns(5)
+    for icol, key in zip(info_cols, ["Total Inventory Value","At-Risk Value","FEFO Compliance","Avg Fill Rate","IoT Excursion Rate"]):
+        with icol:
+            info_box(key)
+
+    st.markdown("<br/>", unsafe_allow_html=True)
+    cols2 = st.columns(4)
+    kpis2 = [
+        ("Active Products",   f"{n_products:,}",         "#7c3aed", "Unique SKUs across network"),
+        ("Warehouses",        f"{n_warehouses}",          "#f59e0b", "Distribution centres"),
+        ("Total Stock Units", f"{total_units/1e3:.1f}K",  "#14b8a6", "Units on hand"),
+        ("Cold-Chain Value",  f"{cold_chain_pct:.1f}%",  "#3b82f6", "Of total inventory value"),
+    ]
+    for col, (label, value, color, sub) in zip(cols2, kpis2):
+        col.markdown(kpi_card(label, value, color, sub), unsafe_allow_html=True)
+    # KPI row 2 info popovers
+    info_cols2 = st.columns(4)
+    for icol, key in zip(info_cols2, ["Active Products","Warehouses","Total Stock Units","Cold-Chain Value"]):
+        with icol:
+            info_box(key)
+
+    st.markdown('<div class="section-header">🏆 Executive Scorecard</div>', unsafe_allow_html=True)
+    info_box("Inventory Overview", "ℹ️ What do these 6 charts show?")
+    fig = plt.figure(figsize=(20, 10))
+    fig.patch.set_facecolor("#0f1117")
+    fig.text(0.5, 0.97, "PharmaTrace AI — Executive Warehouse KPI Dashboard", ha="center", fontsize=17, fontweight="bold", color="#00d4ff")
+    fig.text(0.5, 0.925, f"Module 3: Warehouse & FEFO Inventory Optimization  |  As of: {TODAY.date()}", ha="center", fontsize=11, color="#aaa")
+    gs = gridspec.GridSpec(2, 3, figure=fig, hspace=0.55, wspace=0.4, left=0.07, right=0.95, top=0.88, bottom=0.08)
+
+    ax1 = fig.add_subplot(gs[0, 0])
+    wh_val = inventory.groupby("warehouse_id")["inventory_value_usd"].sum().sort_values()
+    bars = ax1.barh(wh_val.index, wh_val.values/1e3, color=PALETTE[:len(wh_val)], alpha=0.9)
+    ax1.set_title("Inventory Value by Warehouse (USD K)")
+    ax1.set_xlabel("USD K")
+    for bar in bars:
+        ax1.text(bar.get_width()+0.5, bar.get_y()+bar.get_height()/2, f"${bar.get_width():.0f}K", va="center", fontsize=8)
+
+    ax2 = fig.add_subplot(gs[0, 1])
+    rc = inventory["expiry_risk"].value_counts().reindex([r for r in RISK_ORDER if r in inventory["expiry_risk"].unique()])
+    ax2.pie(rc.values, labels=rc.index, autopct="%1.1f%%", colors=[RISK_COLORS.get(r,"#888") for r in rc.index], wedgeprops={"edgecolor":"#0f1117","linewidth":2})
+    ax2.set_title("Expiry Risk Distribution")
+
+    ax3 = fig.add_subplot(gs[0, 2])
+    if "dosage_form" in inventory.columns:
+        df_form = inventory.groupby("dosage_form")["inventory_value_usd"].sum().nlargest(8).sort_values()
+        ax3.barh(df_form.index, df_form.values/1e3, color="#7c3aed", alpha=0.85)
+        ax3.set_title("Stock Value by Dosage Form (USD K)")
+
+    ax4 = fig.add_subplot(gs[1, 0])
+    if "capacity_units" in warehouses.columns:
+        wh_units = inventory.groupby("warehouse_id")["quantity_on_hand"].sum()
+        wh_cap   = warehouses.set_index("warehouse_id")["capacity_units"]
+        util     = (wh_units / wh_cap).dropna() * 100
+        colors_u = ["#ef4444" if u>90 else "#f59e0b" if u>75 else "#10b981" for u in util.values]
+        ax4.bar(util.index, util.values, color=colors_u, alpha=0.9)
+        ax4.axhline(90, color="#ef4444", linestyle="--", lw=1.5, label="90% Warning")
+        ax4.set_title("Warehouse Capacity Utilisation (%)")
+        ax4.set_ylabel("Utilisation %")
+        ax4.legend(fontsize=8, framealpha=0)
+        ax4.tick_params(axis="x", rotation=30)
+
+    ax5 = fig.add_subplot(gs[1, 1])
+    if "qc_status" in inventory.columns:
+        qc = inventory["qc_status"].value_counts()
+        ax5.pie(qc.values, labels=qc.index, autopct="%1.1f%%", colors=["#10b981","#f59e0b","#ef4444","#6b7280"][:len(qc)], wedgeprops={"edgecolor":"#0f1117","linewidth":2})
+        ax5.set_title("QC Status Distribution")
+
+    ax6 = fig.add_subplot(gs[1, 2])
+    cold_val = inventory[inventory["is_cold_chain"]]["inventory_value_usd"].sum()
+    ax6.pie([cold_val, total_inv_value-cold_val], labels=["Cold-Chain","Ambient"], colors=["#3b82f6","#f59e0b"], autopct="%1.1f%%", wedgeprops={"edgecolor":"#0f1117","linewidth":2})
+    ax6.set_title("Cold-Chain vs Ambient Stock Value")
+
+    show_fig(fig)
+
+    st.markdown('<div class="section-header">📋 Inventory Summary by Warehouse</div>', unsafe_allow_html=True)
+    info_box("Capacity Utilisation", "ℹ️ What do these columns mean?")
+    summary = inventory.groupby("warehouse_id").agg(
+        Products=("product_id","nunique"), Total_Units=("quantity_on_hand","sum"),
+        Inventory_Value_USD=("inventory_value_usd","sum"),
+        At_Risk_Units=("expiry_risk", lambda x: x.isin(["EXPIRED","CRITICAL (<30d)","HIGH (30-90d)"]).sum()),
+    ).round(0)
+    summary["Inventory_Value_USD"] = summary["Inventory_Value_USD"].map("${:,.0f}".format)
+    st.dataframe(summary, use_container_width=True)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PAGE: INVENTORY OVERVIEW
+# ─────────────────────────────────────────────────────────────────────────────
+elif selected_page == "📦 Inventory Overview":
+    st.markdown('<div class="section-header">📦 Inventory Overview Dashboard</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-desc">High-level snapshot across all warehouses — stock value, expiry risk, capacity utilisation, and product classification.</div>', unsafe_allow_html=True)
+    c1, c2, c3 = st.columns(3)
+    with c1: info_box("Inventory Overview", "ℹ️ What do these 8 panels show?")
+    with c2: info_box("Risk Tiers", "ℹ️ Expiry risk tiers explained")
+    with c3: info_box("QC Status", "ℹ️ What is QC Status?")
+
+    col_f1, col_f2 = st.columns(2)
+    sel_wh   = col_f1.selectbox("Warehouse",       ["All"] + sorted(inventory["warehouse_id"].unique().tolist()))
+    sel_risk = col_f2.selectbox("Expiry Risk Tier", ["All","EXPIRED","CRITICAL (<30d)","HIGH (30-90d)","MEDIUM (90-180d)","LOW (>180d)"])
+
+    inv_f = inventory.copy()
+    if sel_wh   != "All": inv_f = inv_f[inv_f["warehouse_id"] == sel_wh]
+    if sel_risk != "All": inv_f = inv_f[inv_f["expiry_risk"]  == sel_risk]
+    st.markdown(f"**{len(inv_f):,}** records | **${inv_f['inventory_value_usd'].sum():,.0f}** total value")
+
+    fig, axes = plt.subplots(2, 4, figsize=(22, 10))
+    fig.patch.set_facecolor("#0f1117")
+    fig.suptitle("PharmaTrace AI — Inventory Overview Dashboard", fontsize=15, fontweight="bold", color="#00d4ff", y=1.02)
+
+    axes[0,0].barh(inv_f.groupby("warehouse_id")["inventory_value_usd"].sum().sort_values().index,
+                   inv_f.groupby("warehouse_id")["inventory_value_usd"].sum().sort_values().values/1e3, color="#00d4ff", alpha=0.85)
+    axes[0,0].set_title("Inventory Value by WH (USD K)"); axes[0,0].set_xlabel("USD K")
+
+    rc = inv_f["expiry_risk"].value_counts()
+    axes[0,1].pie(rc.values, labels=rc.index, autopct="%1.0f%%", colors=[RISK_COLORS.get(r,"#888") for r in rc.index], wedgeprops={"edgecolor":"#0f1117","linewidth":1.5})
+    axes[0,1].set_title("Expiry Risk Distribution")
+
+    if "pharm_class" in inv_f.columns:
+        pc = inv_f.groupby("pharm_class")["quantity_on_hand"].sum().nlargest(8).sort_values()
+        axes[0,2].barh(pc.index.str[:20], pc.values/1e3, color="#7c3aed", alpha=0.85)
+        axes[0,2].set_title("Units by Pharma Class (K)")
+
+    if "is_controlled" in inv_f.columns:
+        ctrl = inv_f["is_controlled"].value_counts()
+        axes[0,3].pie(ctrl.values, labels=["Controlled" if v else "Non-Controlled" for v in ctrl.index], autopct="%1.1f%%", colors=["#ef4444","#10b981"], wedgeprops={"edgecolor":"#0f1117","linewidth":1.5})
+        axes[0,3].set_title("DEA Controlled vs Non-Controlled")
+
+    dte = inv_f["days_to_expiry"].dropna()
+    axes[1,0].hist(dte.clip(-30,365), bins=40, color="#f59e0b", alpha=0.8, edgecolor="#0f1117")
+    for thresh, col, lbl in [(0,"#7f1d1d","Expired"),(30,"#ef4444","30d"),(90,"#f97316","90d")]:
+        axes[1,0].axvline(thresh, color=col, lw=2, linestyle="--", label=lbl)
+    axes[1,0].set_title("Days-to-Expiry Distribution"); axes[1,0].legend(fontsize=8, framealpha=0)
+
+    if "dosage_form" in inv_f.columns:
+        df_val = inv_f.groupby("dosage_form")["inventory_value_usd"].sum().nlargest(7).sort_values()
+        axes[1,1].barh(df_val.index.str[:18], df_val.values/1e3, color="#10b981", alpha=0.85)
+        axes[1,1].set_title("Value by Dosage Form (USD K)")
+
+    cc = inv_f[inv_f["is_cold_chain"]].groupby("warehouse_id")["quantity_on_hand"].sum().sort_values()
+    axes[1,2].barh(cc.index, cc.values/1e3, color="#3b82f6", alpha=0.85)
+    axes[1,2].set_title("Cold-Chain Units by WH (K)")
+
+    if "qc_status" in inv_f.columns:
+        qc = inv_f["qc_status"].value_counts()
+        axes[1,3].pie(qc.values, labels=qc.index, autopct="%1.1f%%", colors=["#10b981","#f59e0b","#ef4444","#6b7280"][:len(qc)], wedgeprops={"edgecolor":"#0f1117","linewidth":1.5})
+        axes[1,3].set_title("QC Status Distribution")
+
+    plt.tight_layout()
+    show_fig(fig)
+    info_box("DTE Histogram", "ℹ️ How to read the DTE histogram")
+
+    with st.expander("📋 Raw Inventory Table"):
+        cols_show = [c for c in ["product_id","generic_name","warehouse_id","quantity_on_hand","days_to_expiry","expiry_risk","inventory_value_usd","qc_status"] if c in inv_f.columns]
+        st.dataframe(inv_f[cols_show].head(500), use_container_width=True)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PAGE: ABC-FSN SEGMENTATION
+# ─────────────────────────────────────────────────────────────────────────────
+elif selected_page == "🔶 ABC-FSN Segmentation":
+    st.markdown('<div class="section-header">🔶 ABC-FSN Inventory Segmentation</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-desc">ABC = Value-based segmentation (Pareto 80/15/5) | FSN = Velocity-based (Fast/Slow/Non-moving) | Combined matrix guides stock prioritisation.</div>', unsafe_allow_html=True)
+    c1, c2 = st.columns(2)
+    with c1: info_box("ABC-FSN", "ℹ️ What is ABC-FSN analysis?")
+    with c2: info_box("Pareto Curve", "ℹ️ How to read the Pareto curve")
+
+    prod_val = inventory.groupby("product_id").agg(total_value=("inventory_value_usd","sum"), total_units=("quantity_on_hand","sum")).sort_values("total_value", ascending=False).reset_index()
+    prod_val["cum_pct"] = prod_val["total_value"].cumsum() / prod_val["total_value"].sum() * 100
+    prod_val["abc"] = prod_val["cum_pct"].apply(lambda cp: "A" if cp<=80 else ("B" if cp<=95 else "C"))
+
+    if supp_ok and "transaction_type" in df_txns.columns:
+        vel = df_txns[df_txns["transaction_type"]=="OUTBOUND_DISPATCH_PICK"].groupby("product_id")["quantity"].sum().reset_index().rename(columns={"quantity":"total_dispatched"})
+        vel["avg_monthly_dispatch"] = vel["total_dispatched"] / 24
+        q33, q66 = vel["avg_monthly_dispatch"].quantile([0.33, 0.66]).values
+        vel["fsn"] = vel["avg_monthly_dispatch"].apply(lambda v: "Fast" if v>=q66 else ("Slow" if v>=q33 else "Non-Moving"))
+        prod_val = prod_val.merge(vel[["product_id","avg_monthly_dispatch","fsn"]], on="product_id", how="left")
+        prod_val["fsn"] = prod_val["fsn"].fillna("Non-Moving")
+    else:
+        prod_val["fsn"] = "Unknown"
+
+    fig, axes = plt.subplots(1, 3, figsize=(22, 7))
+    fig.patch.set_facecolor("#0f1117")
+    fig.suptitle("ABC-FSN Inventory Segmentation Analysis", fontsize=14, color="#f59e0b", fontweight="bold", y=1.04)
+
+    ax = axes[0]
+    ax.plot(range(len(prod_val)), prod_val["cum_pct"], color="#00d4ff", lw=2.5)
+    ax.axhline(80, color="#ef4444", linestyle="--", lw=1.5, label="A: 80%")
+    ax.axhline(95, color="#f59e0b", linestyle="--", lw=1.5, label="B: 95%")
+    a_idx = prod_val[prod_val["abc"]=="A"].index[-1] if len(prod_val[prod_val["abc"]=="A"]) else 0
+    b_idx = prod_val[prod_val["abc"]=="B"].index[-1] if len(prod_val[prod_val["abc"]=="B"]) else 0
+    ax.axvspan(0, a_idx, alpha=0.12, color="#ef4444"); ax.axvspan(a_idx, b_idx, alpha=0.10, color="#f59e0b"); ax.axvspan(b_idx, len(prod_val)-1, alpha=0.08, color="#10b981")
+    ax.set_title("Pareto Curve — ABC Classification"); ax.set_xlabel("Product Rank"); ax.set_ylabel("Cumulative % of Total Value"); ax.legend(fontsize=8, framealpha=0)
+
+    ax = axes[1]
+    abc_s = prod_val.groupby("abc").agg(SKUs=("product_id","count"), Value=("total_value","sum"))
+    abc_s["Value_pct"] = abc_s["Value"] / abc_s["Value"].sum() * 100
+    ax.bar(abc_s.index, abc_s["SKUs"], color=["#ef4444","#f59e0b","#10b981"][:len(abc_s)], alpha=0.85)
+    ax2b = ax.twinx(); ax2b.plot(abc_s.index, abc_s["Value_pct"], color="#00d4ff", marker="o", lw=2.5); ax2b.set_ylabel("% of Total Value", color="#00d4ff")
+    ax.set_title("ABC Group: SKU Count vs Value"); ax.set_ylabel("Number of SKUs")
+
+    ax = axes[2]
+    if prod_val["fsn"].nunique() > 1:
+        matrix = prod_val.groupby(["abc","fsn"])["total_value"].sum().unstack(fill_value=0) / 1e3
+        sns.heatmap(matrix, annot=True, fmt=".0f", cmap="YlOrRd", ax=ax, cbar_kws={"label":"Value (USD K)"}, linewidths=0.5, linecolor="#0f1117")
+        ax.set_title("ABC-FSN Matrix (USD K)")
+    else:
+        ax.text(0.5, 0.5, "Upload supplementary data\nfor FSN analysis", ha="center", va="center", color="#aaa", transform=ax.transAxes)
+
+    plt.tight_layout()
+    show_fig(fig)
+    info_box("ABC-FSN Charts", "ℹ️ Segmentation insights based on value and velocity.")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PAGE: FEFO COMPLIANCE
+# ─────────────────────────────────────────────────────────────────────────────
+elif selected_page == "✅ FEFO Compliance":
+    st.markdown('<div class="section-header">✅ FEFO Compliance Rate Analysis</div>', unsafe_allow_html=True)
+    info_box("FEFO Header", "ℹ️ Monitoring First Expiry First Out metrics.")
+    st.markdown('<div class="section-desc">FEFO = First Expiry First Out — dispatch batches in order of soonest expiry. Compliance rate = % picks that followed FEFO correctly. Regulatory target: ≥ 97%.</div>', unsafe_allow_html=True)
+    c1, c2 = st.columns(2)
+    with c1: info_box("FEFO Compliance", "ℹ️ What is FEFO compliance?")
+    with c2: info_box("FEFO Compliance Detail", "ℹ️ How is it measured?")
+
+    if not supp_ok:
+        st.warning("Upload the FEFO Pick Ledger (file 02) to view this analysis.", icon="⚠️")
+        st.stop()
+
+    picks = df_txns[df_txns["transaction_type"]=="OUTBOUND_DISPATCH_PICK"].copy() if "transaction_type" in df_txns.columns else df_txns.copy()
+    if "is_fefo_compliant" not in picks.columns:
+        st.error("Column 'is_fefo_compliant' not found in pick ledger."); st.stop()
+
+    picks["month"] = picks["timestamp"].dt.to_period("M").astype(str)
+    fefo_wh = picks.groupby("warehouse_id").agg(total_picks=("transaction_id","count"), fefo_picks=("is_fefo_compliant","sum")).reset_index()
+    fefo_wh["compliance_rate"] = fefo_wh["fefo_picks"] / fefo_wh["total_picks"] * 100
+    fefo_mo = picks.groupby("month").agg(total_picks=("transaction_id","count"), fefo_picks=("is_fefo_compliant","sum")).reset_index().sort_values("month")
+    fefo_mo["compliance_rate"] = fefo_mo["fefo_picks"] / fefo_mo["total_picks"] * 100
+
+    fig, axes = plt.subplots(1, 3, figsize=(22, 7))
+    fig.patch.set_facecolor("#0f1117")
+    fig.suptitle("FEFO Compliance Rate Analysis", fontsize=14, color="#10b981", fontweight="bold", y=1.04)
+
+    ax = axes[0]
+    colors_w = ["#10b981" if r>=97 else "#f59e0b" if r>=90 else "#ef4444" for r in fefo_wh["compliance_rate"]]
+    bars = ax.bar(fefo_wh["warehouse_id"], fefo_wh["compliance_rate"], color=colors_w, alpha=0.9)
+    ax.axhline(97, color="#00d4ff", linestyle="--", lw=2, label="Target 97%"); ax.set_ylim(80, 101)
+    ax.set_title("FEFO Compliance by Warehouse"); ax.set_ylabel("Compliance Rate (%)"); ax.tick_params(axis="x", rotation=30); ax.legend(fontsize=9, framealpha=0)
+    for bar, rate in zip(bars, fefo_wh["compliance_rate"]):
+        ax.text(bar.get_x()+bar.get_width()/2, bar.get_height()+0.3, f"{rate:.1f}%", ha="center", va="bottom", fontsize=9)
+
+    ax = axes[1]
+    x = range(len(fefo_mo))
+    ax.plot(x, fefo_mo["compliance_rate"], color="#10b981", lw=2.5, marker="o", markersize=5)
+    ax.fill_between(x, 97, fefo_mo["compliance_rate"], where=fefo_mo["compliance_rate"]<97, alpha=0.3, color="#ef4444", label="Below Target")
+    ax.axhline(97, color="#00d4ff", linestyle="--", lw=2, label="Target 97%"); ax.set_ylim(80, 101)
+    step = max(1, len(fefo_mo)//8)
+    ax.set_xticks(list(x)[::step]); ax.set_xticklabels(fefo_mo["month"].tolist()[::step], rotation=30, ha="right", fontsize=8)
+    ax.set_title("Monthly FEFO Compliance Trend"); ax.legend(fontsize=9, framealpha=0)
+
+    ax = axes[2]
+    non_comp = picks[picks["is_fefo_compliant"]==False] if False in picks["is_fefo_compliant"].values else picks[picks["is_fefo_compliant"]==0]
+    if len(non_comp) > 0 and "warehouse_id" in non_comp.columns:
+        nc_wh = non_comp.groupby("warehouse_id").size().sort_values(ascending=True)
+        ax.barh(nc_wh.index, nc_wh.values, color="#ef4444", alpha=0.85)
+        ax.set_title("Non-Compliant Picks by Warehouse"); ax.set_xlabel("Non-Compliant Picks Count")
+    else:
+        ax.text(0.5, 0.5, "✅ No non-compliant picks found!", ha="center", va="center", transform=ax.transAxes, fontsize=13, color="#10b981")
+
+    plt.tight_layout()
+    show_fig(fig)
+    info_box("FEFO Charts", "ℹ️ Visualize FEFO compliance trends.")
+    info_box("FEFO Analysis", "ℹ️ How to read these 3 charts")
+    st.metric("Overall Network FEFO Rate", f"{picks['is_fefo_compliant'].mean()*100:.2f}%",
+              delta=f"{picks['is_fefo_compliant'].mean()*100-97:.2f}% vs 97% target",
+              help="FEFO Compliance Rate = Compliant Picks / Total Picks × 100. Target ≥ 97%. Below this risks FDA regulatory action.")
+    info_box("FEFO Metric", "ℹ️ High-level network compliance overview.")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PAGE: EXPIRY RISK HEATMAP
+# ─────────────────────────────────────────────────────────────────────────────
+elif selected_page == "🌡️ Expiry Risk Heatmap":
+    st.markdown('<div class="section-header">🌡️ Expiry Risk Heatmap</div>', unsafe_allow_html=True)
+    info_box("Heatmap Header", "ℹ️ Heatmap analysis for expiry risk.")
+    st.markdown('<div class="section-desc">DTE = Days-to-Expiry | Red cells = urgent action required | Each cell = total units in that risk tier at that warehouse.</div>', unsafe_allow_html=True)
+    c1, c2 = st.columns(2)
+    with c1: info_box("Expiry Risk Heatmap", "ℹ️ How to read this heatmap")
+    with c2: info_box("Risk Tiers", "ℹ️ What do the risk tiers mean?")
+
+    fig, axes = plt.subplots(1, 3, figsize=(22, 7))
+    fig.patch.set_facecolor("#0f1117")
+    fig.suptitle("Expiry Risk Heatmap — Days-to-Expiry (DTE) Analysis", fontsize=14, color="#f59e0b", fontweight="bold", y=1.04)
+
+    ax = axes[0]
+    pivot_risk = inventory.pivot_table(values="quantity_on_hand", index="warehouse_id", columns="expiry_risk", aggfunc="sum", fill_value=0)
+    col_order = [c for c in RISK_ORDER if c in pivot_risk.columns]
+    sns.heatmap(pivot_risk[col_order]/1000, annot=True, fmt=".1f", cmap=LinearSegmentedColormap.from_list("risk",["#10b981","#f59e0b","#ef4444"]), ax=ax, cbar_kws={"label":"Units ('000)"}, linewidths=0.5, linecolor="#0f1117")
+    ax.set_title("Units at Risk by Warehouse ('000)"); ax.tick_params(axis="x", rotation=35)
+
+    ax = axes[1]
+    at_risk = inventory[inventory["expiry_risk"].isin(["EXPIRED","CRITICAL (<30d)","HIGH (30-90d)"])]
+    risk_val = at_risk.groupby("warehouse_id")["inventory_value_usd"].sum().sort_values(ascending=True)
+    ax.barh(risk_val.index, risk_val.values/1e3, color="#ef4444", alpha=0.85)
+    ax.set_title("At-Risk Inventory Value by Warehouse (USD K)"); ax.set_xlabel("USD K")
+    for bar, v in zip(ax.patches, risk_val.values):
+        ax.text(bar.get_width()+0.5, bar.get_y()+bar.get_height()/2, f"${v/1e3:.1f}K", va="center", fontsize=9)
+
+    ax = axes[2]
+    sample = inventory.dropna(subset=["days_to_expiry"]).sample(min(2000, len(inventory)), random_state=42)
+    for risk_cat, grp in sample.groupby("expiry_risk"):
+        ax.scatter(grp["days_to_expiry"], grp["inventory_value_usd"]/1e3, label=risk_cat, alpha=0.55, s=18, color=RISK_COLORS.get(risk_cat,"#888"))
+    for thresh, col, lbl in [(30,"#ef4444","30d"),(90,"#f59e0b","90d"),(180,"#3b82f6","180d")]:
+        ax.axvline(thresh, color=col, linestyle="--", lw=1.5, label=lbl)
+    ax.set_title("DTE vs Inventory Value"); ax.set_xlabel("Days to Expiry"); ax.set_ylabel("Value (USD K)"); ax.legend(fontsize=7, framealpha=0)
+
+    plt.tight_layout()
+    show_fig(fig)
+    info_box("Heatmap Charts", "ℹ️ Visualization of expiry risk data.")
+    info_box("Expiry Risk Heatmap", "ℹ️ What action should I take?")
+
+    risk_summary = inventory.groupby("expiry_risk").agg(Products=("product_id","nunique"), Total_Units=("quantity_on_hand","sum"), Total_Value_USD=("inventory_value_usd","sum")).reindex([r for r in RISK_ORDER if r in inventory["expiry_risk"].unique()]).round(0)
+    st.dataframe(risk_summary, use_container_width=True)
+    info_box("Summary Table", "ℹ️ Grouped summary of inventory at risk.")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PAGE: DEMAND & SEASONALITY
+# ─────────────────────────────────────────────────────────────────────────────
+elif selected_page == "📈 Demand & Seasonality":
+    st.markdown('<div class="section-header">📈 24-Month Demand Trend & Seasonality</div>', unsafe_allow_html=True)
+    info_box("Demand Header", "ℹ️ Analyzing demand trends and seasonality patterns.")
+    if not supp_ok:
+        st.warning("Upload Monthly Demand file (file 01) to view this analysis.", icon="⚠️"); st.stop()
+
+    monthly_agg = df_demand.groupby("year_month").agg(demanded=("quantity_demanded_units","sum"), dispatched=("quantity_dispatched_units","sum")).reset_index().sort_values("year_month")
+    monthly_agg["fill_rate"] = monthly_agg["dispatched"] / monthly_agg["demanded"] * 100
+
+    fig, axes = plt.subplots(2, 2, figsize=(20, 12))
+    fig.patch.set_facecolor("#0f1117")
+    fig.suptitle("24-Month Demand Trend & Seasonality Analysis", fontsize=14, color="#00d4ff", fontweight="bold", y=1.03)
+    step = max(1, len(monthly_agg)//8)
+    x = range(len(monthly_agg))
+
+    ax = axes[0, 0]
+    ax.plot(x, monthly_agg["demanded"]/1e6,   label="Demanded",   color="#00d4ff", lw=2)
+    ax.plot(x, monthly_agg["dispatched"]/1e6, label="Dispatched", color="#10b981", lw=2, linestyle="--")
+    ax.fill_between(x, monthly_agg["demanded"]/1e6, monthly_agg["dispatched"]/1e6, alpha=0.2, color="#ef4444", label="Unfulfilled")
+    ax.set_xticks(list(x)[::step]); ax.set_xticklabels(monthly_agg["year_month"].tolist()[::step], rotation=30, ha="right", fontsize=8)
+    ax.set_title("Aggregate Monthly Demand vs Dispatch (M Units)"); ax.set_ylabel("Units (Millions)"); ax.legend(fontsize=9)
+
+    ax = axes[0, 1]
+    ax.bar(x, monthly_agg["fill_rate"], color=["#ef4444" if f<95 else "#10b981" for f in monthly_agg["fill_rate"]], alpha=0.85)
+    ax.axhline(97, color="#00d4ff", linestyle="--", lw=2, label="Target SL 97%"); ax.set_ylim(88, 101)
+    ax.set_xticks(list(x)[::step]); ax.set_xticklabels(monthly_agg["year_month"].tolist()[::step], rotation=30, ha="right", fontsize=8)
+    ax.set_title("Monthly Service Level / Fill Rate (%)"); ax.legend(fontsize=9)
+
+    ax = axes[1, 0]
+    if "clinical_demand_pattern" in df_demand.columns:
+        md = df_demand.copy(); md["month_num"] = md["year_month"].str[-2:].astype(int)
+        seas = md.groupby(["clinical_demand_pattern","month_num"])["quantity_demanded_units"].mean().reset_index()
+        month_labels = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
+        for i, (pat, grp) in enumerate(seas.groupby("clinical_demand_pattern")):
+            gs2 = grp.sort_values("month_num")
+            ax.plot(gs2["month_num"], gs2["quantity_demanded_units"], label=pat[:30], lw=2, marker="o", markersize=4, color=PALETTE[i%len(PALETTE)])
+        ax.set_xticks(range(1,13)); ax.set_xticklabels(month_labels, fontsize=9)
+        ax.set_title("Clinical Demand Seasonality by Product Category"); ax.legend(fontsize=7, framealpha=0)
+
+    ax = axes[1, 1]
+    if "monthly_dispatched_value_usd" in df_demand.columns:
+        rev = df_demand.groupby("year_month")["monthly_dispatched_value_usd"].sum().reset_index().sort_values("year_month")
+        x2 = range(len(rev))
+        ax.fill_between(x2, rev["monthly_dispatched_value_usd"]/1e6, alpha=0.3, color="#7c3aed")
+        ax.plot(x2, rev["monthly_dispatched_value_usd"]/1e6, color="#7c3aed", lw=2.5)
+        ax.set_xticks(list(x2)[::step]); ax.set_xticklabels(rev["year_month"].tolist()[::step], rotation=30, ha="right", fontsize=8)
+        ax.set_title("Monthly Revenue from Dispatches (USD M)"); ax.set_ylabel("Revenue (USD Millions)")
+
+    plt.tight_layout()
+    show_fig(fig)
+    info_box("Demand Charts", "ℹ️ Visualization of demand and seasonal trends.")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PAGE: ML EXPIRY CLASSIFIER
+# ─────────────────────────────────────────────────────────────────────────────
+elif selected_page == "🤖 ML Expiry Classifier":
+    st.markdown('<div class="section-header">🤖 Expiry Risk ML Classifier (Random Forest)</div>', unsafe_allow_html=True)
+    info_box("ML Header", "ℹ️ Random Forest classification analysis.")
+    st.markdown('<div class="section-desc">Random Forest trained on DTE, quantity, value, velocity & shelf-life features to classify batches into risk tiers. Feature importance shows which variables drive risk predictions.</div>', unsafe_allow_html=True)
+    c1, c2, c3 = st.columns(3)
+    with c1: info_box("ML Classifier", "ℹ️ What is this ML model doing?")
+    with c2: info_box("Feature Importance", "ℹ️ What is feature importance?")
+    with c3: info_box("Confusion Matrix", "ℹ️ How to read the confusion matrix")
+
+    ml_df = inventory.dropna(subset=["days_to_expiry","quantity_on_hand","unit_price"]).copy()
+    if supp_ok and "transaction_type" in df_txns.columns:
+        velocity = df_txns[df_txns["transaction_type"]=="OUTBOUND_DISPATCH_PICK"].groupby("product_id")["quantity"].sum().reset_index().rename(columns={"quantity":"total_dispatched"})
+        velocity["avg_monthly_dispatch"] = velocity["total_dispatched"] / 24
+        ml_df["avg_monthly_dispatch"] = ml_df["product_id"].map(velocity.set_index("product_id")["avg_monthly_dispatch"]).fillna(ml_df["quantity_on_hand"].median()/6)
+    else:
+        ml_df["avg_monthly_dispatch"] = ml_df["quantity_on_hand"] / 6
+
+    ml_df["cover_days"]    = ml_df["quantity_on_hand"] / ml_df["avg_monthly_dispatch"].replace(0,1) * 30
+    ml_df["risk_score"]    = (ml_df["days_to_expiry"] / ml_df["shelf_life_days"].replace(0,1)).clip(0,1)
+    ml_df["value_per_day"] = ml_df["inventory_value_usd"] / ml_df["days_to_expiry"].clip(1,9999)
+
+    features = [f for f in ["days_to_expiry","quantity_on_hand","unit_price","avg_monthly_dispatch","cover_days","risk_score","value_per_day","pct_life_remaining"] if f in ml_df.columns]
+    X = ml_df[features].fillna(0)
+    y = ml_df["expiry_risk"]
+    if y.nunique() < 2:
+        st.error("Insufficient class variety for classification."); st.stop()
+
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=42, stratify=y)
+    rf = RandomForestClassifier(n_estimators=120, max_depth=8, random_state=42, n_jobs=-1)
+    rf.fit(X_train, y_train)
+    y_pred = rf.predict(X_test)
+    ml_df["predicted_risk"] = rf.predict(X)
+
+    fig, axes = plt.subplots(1, 3, figsize=(20, 6))
+    fig.patch.set_facecolor("#0f1117")
+    fig.suptitle("ML Expiry Risk Classifier — Random Forest", fontsize=14, color="#00d4ff", fontweight="bold", y=1.04)
+
+    imp = pd.Series(rf.feature_importances_, index=features).sort_values()
+    axes[0].barh(imp.index, imp.values, color="#7c3aed", alpha=0.85)
+    axes[0].set_title("Feature Importance"); axes[0].set_xlabel("Importance Score")
+
+    classes = sorted(y.unique())
+    cm = confusion_matrix(y_test, y_pred, labels=classes)
+    sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", xticklabels=classes, yticklabels=classes, ax=axes[1], linewidths=0.5, linecolor="#0f1117")
+    axes[1].set_title("Confusion Matrix"); axes[1].set_xlabel("Predicted"); axes[1].set_ylabel("True"); axes[1].tick_params(axis="x", rotation=30)
+
+    pred_counts = ml_df["predicted_risk"].value_counts().reindex([r for r in RISK_ORDER if r in ml_df["predicted_risk"].unique()])
+    axes[2].bar(pred_counts.index, pred_counts.values, color=[RISK_COLORS.get(r,"#888") for r in pred_counts.index], alpha=0.9)
+    axes[2].set_title("ML-Predicted Risk Distribution"); axes[2].set_ylabel("Batches"); axes[2].tick_params(axis="x", rotation=35)
+
+    plt.tight_layout()
+    show_fig(fig)
+    info_box("ML Charts", "ℹ️ Visualization of ML model performance.")
+    info_box("ML Classifier", "ℹ️ How to act on these ML results")
+
+    acc = accuracy_score(y_test, y_pred) * 100
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Model Accuracy",    f"{acc:.1f}%",   help="% of test-set batches correctly classified into the right expiry risk tier. Above 90% = excellent.")
+    col2.metric("Training Samples",  f"{len(X_train):,}", help="Number of inventory records used to train the Random Forest model.")
+    col3.metric("Test Samples",      f"{len(X_test):,}", help="Held-out records used to evaluate model accuracy — these were not seen during training.")
+    info_box("Performance Metrics", "ℹ️ Model evaluation metrics.")
+    with st.expander("📋 Classification Report"):
+        st.text(classification_report(y_test, y_pred, zero_division=0))
+    info_box("Classification Report", "ℹ️ Detailed report of ML accuracy.")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PAGE: LP COST OPTIMIZER
+# ─────────────────────────────────────────────────────────────────────────────
+elif selected_page == "⚖️ LP Cost Optimizer":
+    st.markdown('<div class="section-header">⚖️ LP Inventory Cost Optimizer</div>', unsafe_allow_html=True)
+    info_box("LP Header", "ℹ️ Linear Programming for inventory optimization.")
+    st.markdown('<div class="section-desc">Linear Programming: for each at-risk batch, optimise split across Dispatch / Transfer / Liquidate / Dispose to minimise total cost under regulatory constraints.</div>', unsafe_allow_html=True)
+    info_box("LP Optimizer", "ℹ️ How does LP optimisation work?")
+
+    if not supp_ok:
+        st.warning("Upload Unit Economics file (file 03) to enable LP optimisation.", icon="⚠️"); st.stop()
+
+    ml_df = inventory.dropna(subset=["days_to_expiry","quantity_on_hand","unit_price"]).copy()
+    if supp_ok and "transaction_type" in df_txns.columns:
+        velocity = df_txns[df_txns["transaction_type"]=="OUTBOUND_DISPATCH_PICK"].groupby("product_id")["quantity"].sum().reset_index().rename(columns={"quantity":"total_dispatched"})
+        velocity["avg_monthly_dispatch"] = velocity["total_dispatched"] / 24
+        ml_df["avg_monthly_dispatch"] = ml_df["product_id"].map(velocity.set_index("product_id")["avg_monthly_dispatch"]).fillna(ml_df["quantity_on_hand"].median()/6)
+    else:
+        ml_df["avg_monthly_dispatch"] = ml_df["quantity_on_hand"] / 6
+    ml_df["risk_score"] = (ml_df["days_to_expiry"] / ml_df["shelf_life_days"].replace(0,1)).clip(0,1)
+
+    at_risk_inv = ml_df[ml_df["risk_score"]>0.5].merge(
+        df_econ[["product_id","daily_holding_cost_per_unit_usd","stockout_penalty_cost_per_unit_usd","certified_destruction_cost_per_unit_usd","secondary_liquidation_recovery_pct"]],
+        on="product_id", how="left").dropna(subset=["daily_holding_cost_per_unit_usd"])
+
+    st.info(f"Running LP on **{min(50,len(at_risk_inv))}** at-risk records…", icon="⚙️")
+    lp_results = []
+    for _, row in at_risk_inv.head(50).iterrows():
+        Q, dte = float(row["quantity_on_hand"]), max(float(row["days_to_expiry"]), 1)
+        h, d_c = float(row["daily_holding_cost_per_unit_usd"]), float(row["certified_destruction_cost_per_unit_usd"])
+        p, rec = float(row["unit_price"]), float(row["secondary_liquidation_recovery_pct"])/100.0
+        vel = max(float(row.get("avg_monthly_dispatch",30))/30.0, 0.1)
+        max_dispatch = min(Q*0.9, vel*dte); max_transfer = min(Q*0.5, Q-max_dispatch)
+        max_liquidate = Q*0.35; min_dispose = Q*0.05 if dte<2 else 0
+        c = [-(p-h*dte), -(p*0.6-h*dte*0.5), -(p*rec), d_c+h*dte]
+        A_ub = [[1,1,1,1],[1,0,0,0],[0,1,0,0],[0,0,1,0]]
+        b_ub = [Q, max_dispatch, max_transfer, max_liquidate]
+        bounds = [(0,max_dispatch),(0,max_transfer),(0,max_liquidate),(min_dispose,Q)]
+        res = linprog(c, A_ub=A_ub, b_ub=b_ub, bounds=bounds, method="highs")
+        if res.success:
+            x1,x2,x3,x4 = res.x
+            lp_results.append({"product_id":row["product_id"],"warehouse_id":row.get("warehouse_id",""),"DTE":int(dte),"Qty":int(Q),"Dispatch":round(x1),"Transfer":round(x2),"Liquidate":round(x3),"Dispose":round(x4),"Net_Saving_USD":round(-res.fun,2)})
+
+    if lp_results:
+        lp_df = pd.DataFrame(lp_results)
+        col1,col2,col3 = st.columns(3)
+        col1.metric("Batches Optimised",  f"{len(lp_df)}")
+        col2.metric("Total Net Savings",  f"${lp_df['Net_Saving_USD'].sum():,.0f}")
+        col3.metric("Avg Saving / Batch", f"${lp_df['Net_Saving_USD'].mean():,.0f}")
+        info_box("Optimization Metrics", "ℹ️ Performance metrics for LP optimization.")
+        fig, axes = plt.subplots(1, 2, figsize=(18, 6)); fig.patch.set_facecolor("#0f1117")
+        fig.suptitle("LP Inventory Cost Optimisation Results", fontsize=14, color="#10b981", fontweight="bold", y=1.04)
+        alloc = lp_df[["Dispatch","Transfer","Liquidate","Dispose"]].sum()
+        axes[0].pie(alloc.values, labels=alloc.index, autopct="%1.1f%%", colors=["#10b981","#3b82f6","#f59e0b","#ef4444"], wedgeprops={"edgecolor":"#0f1117","linewidth":2})
+        axes[0].set_title("Optimal Allocation Split")
+        axes[1].scatter(lp_df["DTE"], lp_df["Net_Saving_USD"], color="#00d4ff", alpha=0.7, s=40)
+        axes[1].axhline(0, color="#ef4444", linestyle="--", lw=1.5, label="Break-even")
+        axes[1].set_title("Net Savings vs Days-to-Expiry"); axes[1].set_xlabel("DTE"); axes[1].set_ylabel("Net Saving (USD)"); axes[1].legend(fontsize=9, framealpha=0)
+        plt.tight_layout(); show_fig(fig)
+        info_box("Optimization Charts", "ℹ️ Visualization of LP results.")
+        info_box("LP Optimizer", "ℹ️ How to interpret LP results")
+        with st.expander("📋 LP Results Table"):
+            st.dataframe(lp_df, use_container_width=True)
+        info_box("LP Table", "ℹ️ Detailed results of LP calculations.")
+    else:
+        st.warning("LP solver returned no feasible solutions.")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PAGE: IOT COLD-CHAIN MONITOR
+# ─────────────────────────────────────────────────────────────────────────────
+elif selected_page == "❄️ IoT Cold-Chain Monitor":
+    st.markdown('<div class="section-header">❄️ Cold-Chain IoT Telemetry Monitoring</div>', unsafe_allow_html=True)
+    info_box("IoT Header", "ℹ️ Cold-chain monitoring dashboard.")
+    st.markdown('<div class="section-desc">USP <659> = US Pharmacopeia standard | Safe zone: 2–8°C | RH target: 55% | Thermal Excursion = temperature outside 2–8°C band.</div>', unsafe_allow_html=True)
+    c1, c2 = st.columns(2)
+    with c1: info_box("IoT Monitor", "ℹ️ What do these 4 charts show?")
+    with c2: info_box("IoT Excursion Rate", "ℹ️ What is a thermal excursion?")
+
+    if not supp_ok:
+        st.warning("Upload IoT Telemetry Logs (file 05) to view this analysis.", icon="⚠️"); st.stop()
+
+    cold_wh_ids = warehouses.loc[warehouses["temp_controlled"]==True, "warehouse_id"].tolist() if "temp_controlled" in warehouses.columns else df_iot["warehouse_id"].unique().tolist()
+
+    fig, axes = plt.subplots(2, 2, figsize=(20, 12)); fig.patch.set_facecolor("#0f1117")
+    fig.suptitle("Cold-Chain IoT Telemetry — USP <659> Compliance Monitoring", fontsize=14, color="#00d4ff", fontweight="bold", y=1.03)
+
+    ax = axes[0,0]
+    for wid in cold_wh_ids:
+        wh_iot = df_iot[df_iot["warehouse_id"]==wid].sort_values("timestamp").tail(200)
+        if len(wh_iot)>0: ax.plot(range(len(wh_iot)), wh_iot["temperature_celsius"], lw=1.2, alpha=0.8, label=wid)
+    ax.axhline(8.0, color="#ef4444", linestyle="--", lw=1.5, label="Max 8°C"); ax.axhline(2.0, color="#3b82f6", linestyle="--", lw=1.5, label="Min 2°C")
+    if cold_wh_ids:
+        n_pts = max((len(df_iot[df_iot["warehouse_id"]==wid].tail(200)) for wid in cold_wh_ids), default=200)
+        ax.fill_between(range(n_pts), 2, 8, alpha=0.06, color="#10b981", label="Safe Zone")
+    ax.set_title("Cold-Chain Temperature Profile"); ax.set_xlabel("Readings (last 200 per WH)"); ax.set_ylabel("Temperature (°C)"); ax.legend(fontsize=8, framealpha=0)
+
+    ax = axes[0,1]
+    if "is_thermal_excursion" in df_iot.columns:
+        id_col = "telemetry_id" if "telemetry_id" in df_iot.columns else "timestamp"
+        exc_rate = df_iot.groupby("warehouse_id").agg(total=(id_col,"count"), excursions=("is_thermal_excursion","sum")).reset_index()
+        exc_rate["rate"] = exc_rate["excursions"] / exc_rate["total"] * 100
+        ax.bar(exc_rate["warehouse_id"], exc_rate["rate"], color=["#ef4444" if r>10 else "#f59e0b" if r>5 else "#10b981" for r in exc_rate["rate"]], alpha=0.9)
+        ax.axhline(5, color="#00d4ff", linestyle="--", lw=1.5, label="5% Threshold")
+        ax.set_title("Thermal Excursion Rate by Warehouse (%)"); ax.tick_params(axis="x", rotation=30); ax.legend(fontsize=8, framealpha=0)
+
+    ax = axes[1,0]
+    if "relative_humidity_pct" in df_iot.columns:
+        for wid in cold_wh_ids[:4]:
+            h_data = df_iot[df_iot["warehouse_id"]==wid]["relative_humidity_pct"].dropna()
+            if len(h_data)>0: ax.hist(h_data, bins=30, alpha=0.5, label=wid)
+        ax.axvline(55, color="#00d4ff", linestyle="--", lw=1.5, label="Target 55% RH")
+        ax.set_title("Relative Humidity Distribution"); ax.set_xlabel("Relative Humidity (%)"); ax.legend(fontsize=8, framealpha=0)
+
+    ax = axes[1,1]
+    if "alert_level" in df_iot.columns:
+        ac = df_iot["alert_level"].value_counts()
+        ax.pie(ac.values, labels=ac.index, autopct="%1.1f%%", colors=["#10b981","#f59e0b","#ef4444","#6b7280"][:len(ac)], wedgeprops={"edgecolor":"#0f1117","linewidth":2})
+        ax.set_title("IoT Alert Level Distribution")
+    elif "is_thermal_excursion" in df_iot.columns:
+        ev = df_iot["is_thermal_excursion"].value_counts()
+        ax.pie(ev.values, labels=["Excursion" if v else "Normal" for v in ev.index], colors=["#ef4444","#10b981"], autopct="%1.1f%%", wedgeprops={"edgecolor":"#0f1117","linewidth":2})
+        ax.set_title("Thermal Excursion vs Normal Readings")
+
+    plt.tight_layout(); show_fig(fig)
+    info_box("IoT Charts", "ℹ️ Visualization of cold-chain telemetry data.")
+    info_box("IoT Monitor", "ℹ️ What action should I take?")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PAGE: FREIGHT REBALANCING
+# ─────────────────────────────────────────────────────────────────────────────
+elif selected_page == "🚛 Freight Rebalancing":
+    st.markdown('<div class="section-header">🚛 Inter-Warehouse Stock Rebalancing</div>', unsafe_allow_html=True)
+    info_box("Freight Header", "ℹ️ Freight cost and logistics management.")
+    st.markdown('<div class="section-desc">Freight cost matrix across all warehouses | Economy=cheapest/slowest | Express=fastest/most expensive | Identify cheapest routes for near-expiry stock transfers.</div>', unsafe_allow_html=True)
+    info_box("Freight Rebalancing", "ℹ️ How to use the freight matrix")
+
+    if not supp_ok:
+        st.warning("Upload Freight Matrix file (file 04) to view this analysis.", icon="⚠️"); st.stop()
+
+    fig, axes = plt.subplots(1, 2, figsize=(18, 7)); fig.patch.set_facecolor("#0f1117")
+    fig.suptitle("Inter-Warehouse Stock Rebalancing — Freight Cost Matrix", fontsize=14, color="#f59e0b", fontweight="bold", y=1.04)
+
+    cost_col = "cold_chain_thermal_transfer_cost_per_unit_usd" if "cold_chain_thermal_transfer_cost_per_unit_usd" in df_freight.columns else df_freight.select_dtypes(include=np.number).columns[0]
+    freight_pivot = df_freight.pivot_table(values=cost_col, index="from_warehouse_id", columns="to_warehouse_id", fill_value=0)
+    sns.heatmap(freight_pivot, annot=True, fmt=".2f", cmap="YlOrBr", ax=axes[0], cbar_kws={"label":"Cost per Unit (USD)"}, linewidths=0.5, linecolor="#0f1117")
+    axes[0].set_title("Cold-Chain Freight Cost Matrix (USD per Unit)")
+
+    if "logistics_tier" in df_freight.columns:
+        tc = df_freight["logistics_tier"].value_counts()
+        axes[1].pie(tc.values, labels=tc.index, autopct="%1.1f%%", colors=["#10b981","#3b82f6","#ef4444"][:len(tc)], wedgeprops={"edgecolor":"#0f1117","linewidth":2})
+        axes[1].set_title("Freight Routes by Logistics Tier")
+    else:
+        axes[1].text(0.5, 0.5, "Logistics tier data not found", ha="center", va="center", color="#aaa", transform=axes[1].transAxes)
+
+    plt.tight_layout(); show_fig(fig)
+    info_box("Freight Charts", "ℹ️ Visualization of freight costs.")
+    info_box("Freight Rebalancing", "ℹ️ Reading the cost matrix")
+
+    amb_col = "ambient_transfer_cost_per_unit_usd" if "ambient_transfer_cost_per_unit_usd" in df_freight.columns else cost_col
+    show_cols = [c for c in ["from_warehouse_id","to_warehouse_id","logistics_tier",amb_col,cost_col] if c in df_freight.columns]
+    st.markdown("**Cheapest Transfer Routes**")
+    st.dataframe(df_freight[show_cols].sort_values(amb_col).head(20), use_container_width=True)
+    info_box("Freight Table", "ℹ️ List of economical freight routes.")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FOOTER
+# ─────────────────────────────────────────────────────────────────────────────
+st.markdown("---")
+st.markdown("""<div style='text-align:center; font-size:11px; color:#334155; padding: 8px 0;'>
+    🏥 PharmaTrace AI &nbsp;|&nbsp; ISB AMPBA Capstone &nbsp;|&nbsp; Sponsor: Innodatatics Inc.
+    &nbsp;|&nbsp; Module 3: Warehouse &amp; FEFO Inventory Optimization &nbsp;|&nbsp; Built with Streamlit
+</div>""", unsafe_allow_html=True)

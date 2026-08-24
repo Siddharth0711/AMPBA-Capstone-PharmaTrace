@@ -76,3 +76,4 @@ credentials.json
 
 # ── Output images (optional: remove these lines if you WANT to commit charts) ──
 # outputs/*.png
+!PharmaTrace_Data_Template.xlsx
