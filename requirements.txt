@@ -1,27 +1,17 @@
 # ── Core Data & Scientific ────────────────────────────────────────────────────
-numpy==1.26.4
-pandas==2.2.2
-openpyxl==3.1.2           # reads .xlsx files (required for pd.read_excel)
-xlrd==2.0.1               # legacy .xls support
+numpy>=1.26,<3                # pre-built wheels available for Python 3.12–3.14
+pandas>=2.1
+openpyxl>=3.1                 # reads .xlsx files (required for pd.read_excel)
 
 # ── Visualisation ─────────────────────────────────────────────────────────────
-matplotlib==3.8.4
-seaborn==0.13.2
+matplotlib>=3.8
+seaborn>=0.13
 
 # ── Machine Learning ──────────────────────────────────────────────────────────
-scikit-learn==1.4.2       # RandomForestClassifier, metrics, model_selection, preprocessing
+scikit-learn>=1.4             # RandomForestClassifier — flexible pin for Py3.14
 
 # ── Mathematical Optimisation ─────────────────────────────────────────────────
-scipy==1.13.0             # linprog (HiGHS LP solver)
+scipy>=1.13                   # linprog (HiGHS LP solver)
 
 # ── Streamlit Web App ─────────────────────────────────────────────────────────
-streamlit>=1.35.0         # main file: streamlit_app.py
-
-# ── Jupyter Environment ───────────────────────────────────────────────────────
-jupyter==1.0.0
-notebook==7.2.0           # classic Jupyter Notebook interface
-ipykernel==6.29.4         # Python kernel for Jupyter
-ipython==8.24.0
-
-# ── Optional: Voila dashboard server (converts notebook → web app) ────────────
-voila==0.5.7
+streamlit>=1.35.0             # main file: streamlit_app.py
