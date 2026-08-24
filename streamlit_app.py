@@ -443,10 +443,14 @@ with st.sidebar:
     LOCAL_MASTER = r"/Users/babitakironvedantam/Desktop/CAPSTONE FINAL/PharmaTrace AI - DATA/master_dataset/PharmaTrace_Master_Dataset.xlsx"
     LOCAL_ADD    = r"/Users/babitakironvedantam/Desktop/CAPSTONE FINAL/AI Modules/additional data"
     use_local = os.path.exists(LOCAL_MASTER)
+    SAMPLE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sample_data.xlsx")
+    use_sample = (not use_local) and (not uploaded_file) and os.path.exists(SAMPLE_PATH)
     if use_local:
         st.success("✅ Local data auto-detected", icon="💾")
     elif uploaded_file:
         st.success("✅ File uploaded successfully", icon="📊")
+    elif use_sample:
+        st.info("📊 Demo data loaded — upload your own file above to analyse your data", icon="🔬")
     else:
         st.info("Download the template, fill it in, then upload", icon="📤")
 
@@ -571,12 +575,19 @@ def load_local_legacy():
 
 
 def get_data():
-    """Return all datasets or None."""
+    """Return all datasets or None.
+    Priority: 1) user upload  2) local dev data  3) bundled sample_data.xlsx
+    """
     if uploaded_file:
         return load_all_data(uploaded_file)
     elif use_local:
         return load_local_legacy()
+    # ── Auto-load bundled sample data (works on Streamlit Cloud) ──────────────
+    sample_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sample_data.xlsx")
+    if os.path.exists(sample_path):
+        return load_all_data(sample_path)
     return None
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # HERO HEADER
