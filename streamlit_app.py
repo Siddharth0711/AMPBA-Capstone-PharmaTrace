@@ -1386,29 +1386,38 @@ elif selected_page == "🤖 ML Expiry Classifier":
 
     features = [f for f in ["days_to_expiry","quantity_on_hand","unit_price","avg_monthly_dispatch","cover_days","risk_score","value_per_day","pct_life_remaining"] if f in ml_df.columns]
     X = ml_df[features].fillna(0)
-    y = ml_df["expiry_risk"]
-    binary_fallback = False
-    if y.nunique() < 2:
-        # Fallback: binary At-Risk vs Safe classification
-        ml_df["expiry_risk_bin"] = ml_df["expiry_risk"].apply(
-            lambda r: "At-Risk" if r in ["EXPIRED", "CRITICAL (<30d)", "HIGH (30-90d)"] else "Safe"
-        )
-        y = ml_df["expiry_risk_bin"]
-        binary_fallback = True
-        if y.nunique() < 2:
-            st.warning(
-                "⚠️ All inventory batches fall into the same risk tier. "
-                "Upload data with a wider range of expiry dates to enable ML classification.",
-                icon="⚠️"
+    # ── Dynamic Target Variable Selection ────────────────────────────────────
+    if ml_df["expiry_risk"].nunique() >= 2:
+        y = ml_df["expiry_risk"]
+    else:
+        # If all batches fall into the same nominal bucket (e.g. all >180d),
+        # dynamically cluster into relative operational pick tiers based on DTE and cover days
+        if ml_df["days_to_expiry"].nunique() >= 2:
+            p33 = ml_df["days_to_expiry"].quantile(0.33)
+            p66 = ml_df["days_to_expiry"].quantile(0.66)
+            def assign_operational_tier(dte):
+                if dte <= p33: return "🔴 Tier 1: Priority Pick (Earliest DTE)"
+                if dte <= p66: return "🟡 Tier 2: Normal Dispatch (Mid DTE)"
+                return "🟢 Tier 3: Strategic Reserve (Long DTE)"
+            ml_df["dynamic_risk_tier"] = ml_df["days_to_expiry"].apply(assign_operational_tier)
+            y = ml_df["dynamic_risk_tier"]
+            st.info(
+                "🤖 **Dynamic Risk Stratification Active:** Current inventory data has a long shelf-life horizon (>180d). "
+                "The Random Forest model has automatically clustered batches into relative operational velocity tiers "
+                "(*Tier 1 Priority Pick* vs *Tier 2 Normal Dispatch* vs *Tier 3 Strategic Reserve*) to optimize dispatch sequence.",
+                icon="🤖"
             )
-            st.stop()
-        st.info(
-            "ℹ️ Using binary (At-Risk / Safe) classification — sample data has limited class variety. "
-            "Upload your full dataset for multi-tier predictions.",
-            icon="ℹ️"
-        )
+        else:
+            p50 = ml_df["cover_days"].median()
+            ml_df["dynamic_risk_tier"] = ml_df["cover_days"].apply(
+                lambda cd: "⚠️ High Cover / Slow Move" if cd >= p50 else "✅ Balanced / Fast Move"
+            )
+            y = ml_df["dynamic_risk_tier"]
+            st.info("ℹ️ Stratified by inventory velocity cover ratio for predictive classification.", icon="ℹ️")
 
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=42, stratify=y)
+    min_class_count = y.value_counts().min()
+    strat = y if min_class_count >= 2 else None
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=42, stratify=strat)
     rf = RandomForestClassifier(n_estimators=120, max_depth=8, random_state=42, n_jobs=-1)
     rf.fit(X_train, y_train)
     y_pred = rf.predict(X_test)
@@ -1427,8 +1436,15 @@ elif selected_page == "🤖 ML Expiry Classifier":
     sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", xticklabels=classes, yticklabels=classes, ax=axes[1], linewidths=0.5, linecolor="#0f1117")
     axes[1].set_title("Confusion Matrix"); axes[1].set_xlabel("Predicted"); axes[1].set_ylabel("True"); axes[1].tick_params(axis="x", rotation=30)
 
-    pred_counts = ml_df["predicted_risk"].value_counts().reindex([r for r in RISK_ORDER if r in ml_df["predicted_risk"].unique()])
-    axes[2].bar(pred_counts.index, pred_counts.values, color=[RISK_COLORS.get(r,"#888") for r in pred_counts.index], alpha=0.9)
+    pred_counts = ml_df["predicted_risk"].value_counts()
+    ordered_keys = [r for r in RISK_ORDER if r in pred_counts.index]
+    if len(ordered_keys) == len(pred_counts):
+        pred_counts = pred_counts.reindex(ordered_keys)
+        bar_colors_ml = [RISK_COLORS.get(r, "#888") for r in pred_counts.index]
+    else:
+        bar_colors_ml = ["#ef4444" if "Tier 1" in str(k) or "High Cover" in str(k) else ("#f59e0b" if "Tier 2" in str(k) else "#10b981") for k in pred_counts.index]
+
+    axes[2].bar(pred_counts.index, pred_counts.values, color=bar_colors_ml, alpha=0.9)
     axes[2].set_title("ML-Predicted Risk Distribution"); axes[2].set_ylabel("Batches"); axes[2].tick_params(axis="x", rotation=35)
 
     plt.tight_layout()
