@@ -540,6 +540,7 @@ with st.sidebar:
 
     curr_sym = "₹" if is_india else "$"
     curr_code = "INR" if is_india else "USD"
+    curr_label = "INR (₹)" if is_india else "USD ($)"
     reg_agency = "CDSCO / State FDA" if is_india else "US FDA"
     fefo_statute = "CDSCO Schedule M (Sec 8.2) & IP GSP" if is_india else "FDA 21 CFR §211.150 & USP <1079>"
     cold_chain_statute = "Indian Pharmacopoeia (IP) Cold-Chain & Zone IVb (30°C/75% RH)" if is_india else "USP <659> Cold-Chain & Zone II (25°C/60% RH)"
