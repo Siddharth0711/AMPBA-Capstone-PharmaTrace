@@ -1113,16 +1113,22 @@ elif selected_page == "✅ FEFO Compliance":
     fefo_mo = picks.groupby("month").agg(total_picks=("transaction_id","count"), fefo_picks=("is_fefo_compliant","sum")).reset_index().sort_values("month")
     fefo_mo["compliance_rate"] = fefo_mo["fefo_picks"] / fefo_mo["total_picks"] * 100
 
+    # Financial Valuation of FEFO Violations
+    p_price_map = dict(zip(products.product_id, products.unit_price)) if not products.empty else {}
+    picks["pick_val_usd"] = picks["quantity"] * picks["product_id"].map(p_price_map).fillna(40.0) if "quantity" in picks.columns and "product_id" in picks.columns else 0
+    _nc_df = picks[picks["is_fefo_compliant"]==False] if False in picks["is_fefo_compliant"].values else picks[picks["is_fefo_compliant"]==0]
+    _nc_picks_n = len(_nc_df)
+    _nc_val_total = _nc_df["pick_val_usd"].sum() if "pick_val_usd" in _nc_df.columns else 0
+
     _fefo_overall = picks["is_fefo_compliant"].mean() * 100
     _total_picks_n = len(picks)
-    _nc_picks_n = len(picks[picks["is_fefo_compliant"]==False]) if False in picks["is_fefo_compliant"].values else len(picks[picks["is_fefo_compliant"]==0])
     _fefo_status_txt = "🟢 FDA / USP Audit-Ready" if _fefo_overall >= 97 else ("🟡 Warning: Audit Gap" if _fefo_overall >= 90 else "🔴 Critical Non-Compliance")
 
-    # ── Executive Regulatory KPI Strip ──────────────────────────────────────
+    # ── Executive Regulatory & Financial KPI Strip ─────────────────────────
     fk1, fk2, fk3, fk4 = st.columns(4)
     fk1.metric("Network FEFO Rate", f"{_fefo_overall:.2f}%", delta=f"{_fefo_overall-97:.2f}% vs 97% target", help="Percentage of dispatches that strictly picked the earliest-expiring batch first")
-    fk2.metric("Total Picks Audited", f"{_total_picks_n:,}", help="Total warehouse outbound picking transactions tracked")
-    fk3.metric("FEFO Violations", f"{_nc_picks_n:,}", delta=f"{_nc_picks_n/_total_picks_n*100:.1f}% violation rate" if _total_picks_n>0 else "0%", delta_color="inverse", help="Non-compliant picks where a younger batch was selected ahead of an older lot")
+    fk2.metric("FEFO Violations (Picks)", f"{_nc_picks_n:,}", delta=f"{_nc_picks_n/_total_picks_n*100:.1f}% error rate" if _total_picks_n>0 else "0%", delta_color="inverse", help="Non-compliant picks where a younger batch was selected ahead of an older lot")
+    fk3.metric("Violation Value at Risk", f"${_nc_val_total:,.0f}", delta=f"${_nc_val_total/_total_picks_n if _total_picks_n>0 else 0:,.0f} avg/violation", delta_color="inverse", help="Total monetary value of goods dispatched in breach of FEFO protocol")
     fk4.metric("Regulatory Standing", _fefo_status_txt, help="Compliance status under FDA 21 CFR Part 211.150 and USP <1079>")
     st.markdown("---")
 
@@ -1226,15 +1232,21 @@ elif selected_page == "✅ FEFO Compliance":
 
     # ── Non-Compliant Pick Audit Ledger ────────────────────────────────────
     if len(non_comp) > 0:
-        with st.expander(f"🔍 View Non-Compliant Pick Audit Ledger ({len(non_comp):,} violations)", expanded=False):
-            st.markdown("This ledger details picking events where operators breached First-Expiry-First-Out protocol. These transactions represent direct compliance audit risks.")
-            show_cols_nc = [c for c in ["transaction_id","timestamp","warehouse_id","product_id","quantity","is_fefo_compliant"] if c in non_comp.columns]
-            st.dataframe(non_comp[show_cols_nc].head(200), use_container_width=True)
+        with st.expander(f"🔍 View Non-Compliant Pick Audit Ledger ({len(non_comp):,} violations | ${_nc_val_total:,.0f} at risk)", expanded=False):
+            st.markdown(f"This audit ledger logs every outbound pick where operators bypassed older inventory. These **{len(non_comp):,} non-compliant transactions (${_nc_val_total:,.0f} total value)** represent direct regulatory audit findings and cause bypassed stock to decay into write-offs.")
+            nc_display = non_comp.copy()
+            if "pick_val_usd" in nc_display.columns:
+                nc_display["Pick Value ($)"] = nc_display["pick_val_usd"].map("${:,.2f}".format)
+            show_cols_nc = [c for c in ["transaction_id","timestamp","warehouse_id","product_id","quantity","Pick Value ($)","batch_expiry_date","earliest_expiry_available","compliance_status"] if c in nc_display.columns]
+            st.dataframe(nc_display[show_cols_nc].head(200), use_container_width=True)
 
     # ── AI Insight: FEFO Root-Cause Analysis ──────────────────────────
     _worst_fefo   = fefo_wh.sort_values("compliance_rate").iloc[0] if not fefo_wh.empty else None
     _best_fefo    = fefo_wh.sort_values("compliance_rate").iloc[-1] if not fefo_wh.empty else None
-    _fefo_bullets = []
+    _fefo_bullets = [
+        f"💰 <b>Financial Value at Risk:</b> Non-compliant picks represent <b>${_nc_val_total:,.0f} in misallocated outbound volume</b>. "
+        f"When younger batches are picked ahead of older stock, the bypassed lots remain stranded in storage until they cross into the &lt;30-day CRITICAL or EXPIRED tiers.",
+    ]
     if _worst_fefo is not None:
         _fefo_bullets.append(
             f"🔴 <b>Worst performer: {_worst_fefo['warehouse_id']}</b> at <b>{_worst_fefo['compliance_rate']:.1f}% FEFO compliance</b> "
