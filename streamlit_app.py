@@ -414,6 +414,8 @@ with st.sidebar:
         "❄️ IoT Cold-Chain Monitor",
         "🚛 Freight Rebalancing",
         "🧪 Raw Materials & Pricing",
+        "📋 Order Fulfilment Simulator",
+        "🏷️ WIP & Manufacturing Tracker",
     ]
     selected_page = st.radio("Navigate", PAGES, label_visibility="collapsed")
     st.markdown("---")
@@ -1500,6 +1502,357 @@ elif selected_page == "🧪 Raw Materials & Pricing":
     price_summary.columns = ["Material","Trend","Recommendation","Current Price","3M Ago","12M Ago"]
     price_summary["12M Change %"] = ((price_summary["Current Price"] - price_summary["12M Ago"]) / price_summary["12M Ago"] * 100).round(1)
     st.dataframe(price_summary, use_container_width=True)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PAGE: ORDER FULFILMENT SIMULATOR  (Idea 3 + 4 + 6)
+# ─────────────────────────────────────────────────────────────────────────────
+elif selected_page == "📋 Order Fulfilment Simulator":
+    st.markdown('<div class="section-header">📋 Order Fulfilment Simulator</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-desc">Simulate an incoming sales order — check finished goods, WIP status, and raw material availability to determine fulfilment path.</div>', unsafe_allow_html=True)
+
+    # ── Synthetic BOM + WIP data ───────────────────────────────────────────────
+    @st.cache_data
+    def build_fulfilment_data():
+        # Bill of Materials: product_id -> {rm_id: qty_per_1000_units}
+        BOM = {
+            "P001": {"RM001":0.50, "RM013":0.30, "RM015":0.02, "RM014":0.20},
+            "P002": {"RM002":1.00, "RM017":1.00, "RM019":0.50},
+            "P003": {"RM003":0.55, "RM013":0.25, "RM014":0.18, "RM015":0.02},
+            "P004": {"RM004":0.02, "RM013":0.35, "RM016":0.05, "RM018":0.10},
+            "P005": {"RM005":0.01, "RM013":0.30, "RM014":0.20, "RM015":0.02},
+            "P006": {"RM006":0.005,"RM013":0.28, "RM014":0.18, "RM016":0.04},
+            "P007": {"RM007":0.30, "RM017":1.00, "RM019":0.30},
+            "P008": {"RM008":0.005,"RM013":0.22, "RM014":0.15, "RM015":0.015},
+            "P009": {"RM009":0.004,"RM013":0.18, "RM014":0.12, "RM016":0.03},
+            "P010": {"RM010":0.04, "RM013":0.32, "RM016":0.06, "RM018":0.08},
+            "P011": {"RM011":0.04, "RM017":1.00, "RM019":0.80},
+            "P012": {"RM012":1.00, "RM017":1.00, "RM019":0.60},
+        }
+        # Raw material current stock
+        RM_STOCK = {
+            "RM001":420,"RM002":180,"RM003":950,"RM004":310,"RM005":730,
+            "RM006":520,"RM007":85, "RM008":210,"RM009":440,"RM010":680,
+            "RM011":55, "RM012":370,"RM013":1800,"RM014":2100,"RM015":640,
+            "RM016":390,"RM017":9800,"RM018":220,"RM019":1400,"RM020":3200,
+        }
+        RM_NAMES = {
+            "RM001":"Amoxicillin API","RM002":"Insulin Biosynthetic","RM003":"Metformin HCl",
+            "RM004":"Atorvastatin Calcium","RM005":"Lisinopril USP","RM006":"Amlodipine Besylate",
+            "RM007":"Epinephrine Bitartrate","RM008":"Warfarin Sodium","RM009":"Ondansetron HCl",
+            "RM010":"Pantoprazole Sodium","RM011":"Adalimumab Drug Substance","RM012":"Ceftriaxone Sodium",
+            "RM013":"Microcrystalline Cellulose","RM014":"Lactose Monohydrate","RM015":"Magnesium Stearate",
+            "RM016":"HPMC (Coating)","RM017":"Vial Glass Type I","RM018":"Blister Foil Aluminium",
+            "RM019":"Sodium Chloride 0.9%","RM020":"Water for Injection (WFI)",
+        }
+        # Synthetic WIP (manufacturing orders in progress)
+        WIP = [
+            {"mo_id":"MO-2026-001","product_id":"P001","status":"IN_PROGRESS","wip_units":5000,"expected_date":"2026-09-05","pct_complete":72},
+            {"mo_id":"MO-2026-002","product_id":"P002","status":"IN_PROGRESS","wip_units":800, "expected_date":"2026-09-12","pct_complete":45},
+            {"mo_id":"MO-2026-003","product_id":"P007","status":"IN_PROGRESS","wip_units":300, "expected_date":"2026-09-03","pct_complete":88},
+            {"mo_id":"MO-2026-004","product_id":"P011","status":"IN_PROGRESS","wip_units":150, "expected_date":"2026-09-20","pct_complete":30},
+            {"mo_id":"MO-2026-005","product_id":"P003","status":"SCHEDULED",  "wip_units":10000,"expected_date":"2026-10-01","pct_complete":0},
+        ]
+        df_wip = pd.DataFrame(WIP)
+        return BOM, RM_STOCK, RM_NAMES, df_wip
+
+    BOM, RM_STOCK, RM_NAMES, df_wip = build_fulfilment_data()
+
+    # ── SECTION A: Live Finished-Goods Stock Snapshot (Idea 4) ─────────────────
+    st.markdown('<div class="section-header">📦 Live Finished-Goods Snapshot</div>', unsafe_allow_html=True)
+    st.caption(f"🕒 Last updated: {TODAY.strftime('%d %b %Y')} | Source: Inventory ledger")
+
+    # Product × Warehouse pivot (Idea 6 — multi-warehouse grid)
+    if not inventory.empty:
+        fg_pivot = inventory.groupby(["product_id","warehouse_id"])["quantity_on_hand"].sum().unstack(fill_value=0)
+        fg_pivot.index = fg_pivot.index.map(
+            lambda pid: products[products.product_id==pid]["generic_name"].values[0]
+            if len(products[products.product_id==pid]) > 0 else pid
+        )
+        fg_pivot["TOTAL"] = fg_pivot.sum(axis=1)
+        fg_pivot = fg_pivot.sort_values("TOTAL", ascending=False)
+        st.markdown("**Product × Warehouse Stock Grid** (units on hand — RELEASED batches)")
+        st.dataframe(fg_pivot.style.background_gradient(cmap="Blues", axis=None).format("{:,.0f}"),
+                     use_container_width=True)
+    st.markdown("---")
+
+    # ── SECTION B: ORDER ENTRY SIMULATOR ──────────────────────────────────────────
+    st.markdown('<div class="section-header">📧 Simulate Incoming Sales Order</div>', unsafe_allow_html=True)
+    st.markdown("Enter an order as if it arrived via email or EDI — the system checks fulfilment options automatically.")
+
+    prod_options = products[["product_id","generic_name","dosage_form"]].copy()
+    prod_options["label"] = prod_options["product_id"] + " — " + prod_options["generic_name"] + " (" + prod_options["dosage_form"] + ")"
+    prod_map = dict(zip(prod_options["label"], prod_options["product_id"]))
+
+    col_i1, col_i2, col_i3 = st.columns([3, 2, 1])
+    sel_label   = col_i1.selectbox("💊 Product",  list(prod_map.keys()), key="ofs_prod")
+    order_qty   = col_i2.number_input("📋 Order Quantity (units)", min_value=1, max_value=100000, value=500, step=50, key="ofs_qty")
+    pref_wh     = col_i3.selectbox("🏢 Preferred WH", ["Any"] + sorted(warehouses["warehouse_id"].tolist()), key="ofs_wh")
+    simulate_btn = st.button("▶️  Check Fulfilment", type="primary", use_container_width=False)
+
+    if simulate_btn or True:   # always show after first render
+        sel_pid = prod_map[sel_label]
+        prod_name = products[products.product_id==sel_pid]["generic_name"].values[0]
+
+        # ── Step 1: Check finished goods ───────────────────────────────────────
+        inv_prod = inventory[(inventory["product_id"]==sel_pid) &
+                             (inventory.get("qc_status", pd.Series(["RELEASED"]*len(inventory)))=="RELEASED")].copy() \
+                  if "qc_status" in inventory.columns \
+                  else inventory[inventory["product_id"]==sel_pid].copy()
+        if pref_wh != "Any":
+            inv_prod_wh = inv_prod[inv_prod["warehouse_id"]==pref_wh]
+            avail_pref = int(inv_prod_wh["quantity_on_hand"].sum())
+        else:
+            avail_pref = 0
+        avail_total = int(inv_prod["quantity_on_hand"].sum())
+
+        # ── Step 2: Check WIP ────────────────────────────────────────────────
+        wip_prod   = df_wip[df_wip["product_id"]==sel_pid]
+        wip_total  = int(wip_prod["wip_units"].sum()) if not wip_prod.empty else 0
+        wip_date   = wip_prod["expected_date"].min() if not wip_prod.empty else None
+
+        # ── Decision path ────────────────────────────────────────────────────────
+        st.markdown("### 🔍 Fulfilment Decision")
+        r1, r2, r3 = st.columns(3)
+        r1.metric("Order Quantity",     f"{order_qty:,} units",   help="What the customer ordered")
+        r2.metric("Available in Stock", f"{avail_total:,} units",  delta=f"{avail_total - order_qty:+,} vs order",
+                  delta_color="normal",   help="RELEASED finished goods across all warehouses")
+        r3.metric("In WIP / Production",f"{wip_total:,} units",    delta=wip_date if wip_date else "None",
+                  delta_color="off",      help="Units currently being manufactured")
+
+        if avail_total >= order_qty:
+            # Path 1 — Ship from stock
+            best_whs = inv_prod.groupby("warehouse_id")["quantity_on_hand"].sum().sort_values(ascending=False)
+            st.success(
+                f"✅ **SHIP FROM STOCK** — {avail_total:,} units available (order = {order_qty:,}). "
+                f"Best warehouse: **{best_whs.index[0]}** ({int(best_whs.iloc[0]):,} units)",
+                icon="✅"
+            )
+            st.markdown("**Stock by Warehouse:**")
+            wh_stock = inv_prod.groupby("warehouse_id").agg(
+                Units=("quantity_on_hand","sum"),
+                Batches=("fp_batch_id","nunique")
+            ).sort_values("Units", ascending=False)
+            wh_stock["Can Fulfil Order"] = wh_stock["Units"].apply(lambda u: "✅ Yes" if u>=order_qty else "⚠️ Partial")
+            st.dataframe(wh_stock, use_container_width=True)
+
+        elif avail_total > 0 and avail_total < order_qty:
+            # Path 1b — Partial from stock, rest from WIP or manufacture
+            deficit = order_qty - avail_total
+            st.warning(
+                f"⚠️ **PARTIAL FULFILMENT** — {avail_total:,} of {order_qty:,} units available in stock. "
+                f"**{deficit:,} units short.**",
+                icon="⚠️"
+            )
+            if wip_total >= deficit:
+                st.info(f"⏳ Remaining **{deficit:,} units** can come from WIP — expected ready by **{wip_date}**", icon="🏷️")
+            else:
+                st.error(f"🚨 WIP covers {wip_total:,} more units — still short **{deficit-wip_total:,} units**. → New Manufacturing Order required.", icon="🏷️")
+
+        elif wip_total >= order_qty:
+            # Path 2 — Fulfill from WIP
+            st.info(
+                f"⏳ **FULFIL FROM WIP** — No finished stock, but **{wip_total:,} units in production**. "
+                f"Expected ready: **{wip_date}**",
+                icon="🏷️"
+            )
+            st.dataframe(wip_prod[["mo_id","status","wip_units","expected_date","pct_complete"]], use_container_width=True)
+
+        else:
+            # Path 3 — Trigger new manufacturing order + RM check
+            still_short = max(0, order_qty - avail_total - wip_total)
+            st.error(
+                f"🚨 **MANUFACTURE REQUIRED** — Stock: {avail_total:,} | WIP: {wip_total:,} | Still short: **{still_short:,} units**. "
+                f"New manufacturing order must be raised.",
+                icon="🏷️"
+            )
+
+        # ── Step 3: Raw Material Check (always show for manufactu-required path) ───
+        needs_manufacture = avail_total < order_qty and (wip_total + avail_total) < order_qty
+        if needs_manufacture:
+            units_to_make = order_qty - avail_total - wip_total
+            st.markdown("---")
+            st.markdown(f"### 🧪 Raw Material Check for {units_to_make:,} units of {prod_name}")
+
+            if sel_pid in BOM:
+                bom_rows = []
+                for rm_id, qty_per_1k in BOM[sel_pid].items():
+                    needed = round(qty_per_1k * units_to_make / 1000, 3)
+                    on_hand = RM_STOCK.get(rm_id, 0)
+                    deficit_rm = max(0, needed - on_hand)
+                    status_rm = "🟢 OK" if deficit_rm == 0 else "🔴 SHORTAGE"
+                    bom_rows.append({
+                        "RM ID": rm_id,
+                        "Material": RM_NAMES.get(rm_id, rm_id),
+                        "Needed": needed,
+                        "On Hand": on_hand,
+                        "Deficit": deficit_rm,
+                        "Status": status_rm,
+                    })
+                df_bom = pd.DataFrame(bom_rows)
+                shortages = df_bom[df_bom["Deficit"] > 0]
+
+                if shortages.empty:
+                    st.success("✅ All raw materials are available — manufacturing can begin immediately.", icon="✅")
+                else:
+                    st.error(
+                        f"🛑 **{len(shortages)} raw material(s) insufficient.** Raise purchase orders before manufacturing.",
+                        icon="🛑"
+                    )
+                    st.markdown("**📦 Purchase Orders Required:**")
+                    for _, srow in shortages.iterrows():
+                        st.markdown(
+                            f"- **{srow['Material']}** (`{srow['RM ID']}`): "
+                            f"need **{srow['Needed']:.3f}**, have **{srow['On Hand']}**, "
+                            f"🔴 order **{srow['Deficit']:.3f}** more"
+                        )
+
+                st.markdown("**Bill of Materials — Full Breakdown:**")
+                st.dataframe(df_bom, use_container_width=True)
+            else:
+                st.info("BOM not configured for this product in the simulator.")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PAGE: WIP & MANUFACTURING TRACKER  (Idea 5)
+# ─────────────────────────────────────────────────────────────────────────────
+elif selected_page == "🏷️ WIP & Manufacturing Tracker":
+    st.markdown('<div class="section-header">🏷️ Work-In-Progress & Manufacturing Tracker</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-desc">Real-time view of all active manufacturing orders — status, completion %, expected finish date, and WIP unit count per product.</div>', unsafe_allow_html=True)
+
+    @st.cache_data
+    def build_wip_full():
+        import numpy as np
+        rng3 = np.random.default_rng(77)
+        PROD_NAMES = {
+            "P001":"Amoxicillin","P002":"Insulin Lispro","P003":"Metformin",
+            "P004":"Atorvastatin","P005":"Lisinopril","P006":"Amlodipine",
+            "P007":"Epinephrine","P008":"Warfarin","P009":"Ondansetron",
+            "P010":"Pantoprazole","P011":"Adalimumab","P012":"Ceftriaxone",
+        }
+        STATUS_OPTS = ["IN_PROGRESS","IN_PROGRESS","IN_PROGRESS","SCHEDULED","QC_HOLD","COMPLETED"]
+        STAGE_OPTS  = ["Granulation","Compression","Coating","Filling","QC Testing","Packaging","Dispatch Ready"]
+        rows = []
+        for i in range(22):
+            pid  = rng3.choice(list(PROD_NAMES.keys()))
+            stat = rng3.choice(STATUS_OPTS)
+            pct  = int(rng3.integers(0,101)) if stat == "IN_PROGRESS" else (100 if stat=="COMPLETED" else 0)
+            start_date = TODAY - pd.Timedelta(days=int(rng3.integers(1,20)))
+            duration   = int(rng3.integers(7,30))
+            end_date   = start_date + pd.Timedelta(days=duration)
+            rows.append({
+                "MO ID":        f"MO-2026-{i+1:03d}",
+                "Product ID":   pid,
+                "Product":      PROD_NAMES[pid],
+                "Status":       stat,
+                "Stage":        rng3.choice(STAGE_OPTS),
+                "WIP Units":    int(rng3.integers(200, 15000)),
+                "Start Date":   start_date.date(),
+                "Expected End": end_date.date(),
+                "% Complete":   pct,
+                "Manufacturer": f"M00{rng3.integers(1,4)}",
+            })
+        return pd.DataFrame(rows)
+
+    df_wip_full = build_wip_full()
+
+    # ── KPI row ─────────────────────────────────────────────────────────────────
+    in_prog  = df_wip_full[df_wip_full["Status"]=="IN_PROGRESS"]
+    sched    = df_wip_full[df_wip_full["Status"]=="SCHEDULED"]
+    qc_hold  = df_wip_full[df_wip_full["Status"]=="QC_HOLD"]
+    done     = df_wip_full[df_wip_full["Status"]=="COMPLETED"]
+
+    if not qc_hold.empty:
+        st.warning(f"⚠️ **{len(qc_hold)} order(s) on QC HOLD** — {', '.join(qc_hold['MO ID'].tolist())}", icon="⚠️")
+
+    w1, w2, w3, w4, w5 = st.columns(5)
+    w1.metric("Total MOs",     len(df_wip_full), help="Total manufacturing orders in the system")
+    w2.metric("⏳ In Progress", len(in_prog),     help="Orders actively being manufactured right now")
+    w3.metric("🗓️ Scheduled",   len(sched),      help="Orders planned but not yet started")
+    w4.metric("🔬 QC Hold",     len(qc_hold),    help="Orders paused for quality control investigation")
+    w5.metric("WIP Units Total",f"{df_wip_full['WIP Units'].sum():,}", help="Total units currently in various production stages")
+
+    st.markdown("---")
+
+    # ── Progress Chart ──────────────────────────────────────────────────────────────
+    st.markdown('<div class="section-header">📈 Manufacturing Order Progress</div>', unsafe_allow_html=True)
+
+    fig, axes = plt.subplots(1, 2, figsize=(22, 8))
+    fig.patch.set_facecolor("#0f1117")
+
+    # Left: Gantt-style progress bars
+    ax_g = axes[0]
+    active = df_wip_full[df_wip_full["Status"].isin(["IN_PROGRESS","QC_HOLD"])].sort_values("% Complete", ascending=True)
+    bar_cols_wip = ["#ef4444" if s=="QC_HOLD" else "#00d4ff" for s in active["Status"]]
+    bars_wip = ax_g.barh(active["MO ID"] + " " + active["Product"], active["% Complete"],
+                         color=bar_cols_wip, alpha=0.85, height=0.55)
+    ax_g.barh(active["MO ID"] + " " + active["Product"], 100,
+              color="#1e2a45", alpha=0.5, height=0.55)
+    for bar, (_, row) in zip(bars_wip, active.iterrows()):
+        ax_g.text(bar.get_width() + 1, bar.get_y() + bar.get_height()/2,
+                  f"{row['% Complete']}% • {row['Stage']}", va="center", fontsize=8, color="#94a3b8")
+    ax_g.set_xlim(0, 115)
+    ax_g.set_xlabel("% Complete", color="#ccc")
+    ax_g.set_title("Active Manufacturing Orders — Progress", color="#00d4ff", fontweight="bold")
+    ax_g.axvline(100, color="#10b981", lw=1.5, linestyle="--", alpha=0.6, label="100% Done")
+
+    # Right: WIP units by product
+    ax_p = axes[1]
+    wip_by_prod = df_wip_full.groupby("Product")["WIP Units"].sum().sort_values()
+    colors_prod = PALETTE[:len(wip_by_prod)]
+    ax_p.barh(wip_by_prod.index, wip_by_prod.values / 1000, color=colors_prod, alpha=0.85)
+    ax_p.set_xlabel("WIP Units (thousands)", color="#ccc")
+    ax_p.set_title("WIP Units by Product", color="#00d4ff", fontweight="bold")
+    for i, (prod, val) in enumerate(wip_by_prod.items()):
+        ax_p.text(val/1000 + 0.1, i, f"{val:,}", va="center", fontsize=9, color="#94a3b8")
+
+    plt.tight_layout()
+    show_fig(fig)
+
+    # ── Status filter + full table ─────────────────────────────────────────────────
+    st.markdown('<div class="section-header">📋 All Manufacturing Orders</div>', unsafe_allow_html=True)
+    status_filter = st.multiselect(
+        "Filter by Status",
+        options=df_wip_full["Status"].unique().tolist(),
+        default=df_wip_full["Status"].unique().tolist(),
+        key="wip_status_filter"
+    )
+    df_wip_show = df_wip_full[df_wip_full["Status"].isin(status_filter)] if status_filter else df_wip_full
+
+    # Colour-code status
+    def highlight_wip(row):
+        color = {"IN_PROGRESS":"#0f2a1a","SCHEDULED":"#0f1a2a",
+                 "QC_HOLD":"#2a1a0f","COMPLETED":"#1a2a0f"}.get(row["Status"],"")
+        return [f"background-color:{color}"]*len(row)
+
+    st.dataframe(
+        df_wip_show.style.apply(highlight_wip, axis=1),
+        use_container_width=True,
+        height=420
+    )
+
+    st.markdown("---")
+    # ── WIP × Warehouse visibility ───────────────────────────────────────────────────
+    st.markdown('<div class="section-header">📊 WIP Units by Product — Expected Completion Timeline</div>', unsafe_allow_html=True)
+    fig3, ax3 = plt.subplots(figsize=(20, 6))
+    fig3.patch.set_facecolor("#0f1117")
+    ax3.set_facecolor("#1a1d27")
+    timeline_df = df_wip_full[df_wip_full["Status"].isin(["IN_PROGRESS","SCHEDULED"])].copy()
+    timeline_df["Expected End"] = pd.to_datetime(timeline_df["Expected End"])
+    timeline_df = timeline_df.sort_values("Expected End")
+    for i, (_, row) in enumerate(timeline_df.iterrows()):
+        color = "#00d4ff" if row["Status"]=="IN_PROGRESS" else "#7c3aed"
+        ax3.barh(i, row["WIP Units"] / 1000, color=color, alpha=0.8, height=0.6)
+        ax3.text(row["WIP Units"]/1000 + 0.2, i,
+                 f"{row['Product']} • {row['Expected End'].strftime('%d %b')} • {row['% Complete']}%",
+                 va="center", fontsize=8, color="#94a3b8")
+    ax3.set_xlabel("WIP Units (thousands)", color="#ccc")
+    ax3.set_title("WIP Orders Sorted by Expected Completion Date", color="#00d4ff", fontweight="bold")
+    ax3.set_yticks(range(len(timeline_df)))
+    ax3.set_yticklabels([r["MO ID"] for _, r in timeline_df.iterrows()], fontsize=8)
+    from matplotlib.patches import Patch
+    ax3.legend(handles=[Patch(color="#00d4ff",label="In Progress"),Patch(color="#7c3aed",label="Scheduled")],
+               fontsize=9, framealpha=0.2)
+    plt.tight_layout()
+    show_fig(fig3)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # FOOTER
