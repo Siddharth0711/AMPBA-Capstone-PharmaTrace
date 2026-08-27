@@ -24,7 +24,7 @@ from matplotlib.colors import LinearSegmentedColormap
 import seaborn as sns
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import classification_report, confusion_matrix, accuracy_score
+from sklearn.metrics import classification_report, confusion_matrix, accuracy_score, precision_score, recall_score, f1_score
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 from scipy.optimize import linprog
 import streamlit as st
@@ -928,7 +928,16 @@ elif selected_page == "📦 Inventory Overview":
     inv_f = inventory.copy()
     if sel_wh   != "All": inv_f = inv_f[inv_f["warehouse_id"] == sel_wh]
     if sel_risk != "All": inv_f = inv_f[inv_f["expiry_risk"]  == sel_risk]
-    st.markdown(f"**{len(inv_f):,}** records | **${inv_f['inventory_value_usd'].sum():,.0f}** total value")
+
+    # Executive KPI summary strip
+    kpi_inv1, kpi_inv2, kpi_inv3, kpi_inv4 = st.columns(4)
+    kpi_inv1.metric("Filtered Records", f"{len(inv_f):,}", help="Number of active inventory batch records matching filter")
+    kpi_inv2.metric("Portfolio Value", f"${inv_f['inventory_value_usd'].sum()/1e3:,.0f}K", help="Total USD inventory valuation on hand")
+    _cc_u = inv_f[inv_f['is_cold_chain']]['quantity_on_hand'].sum() if 'is_cold_chain' in inv_f.columns else 0
+    kpi_inv3.metric("Cold-Chain Units", f"{_cc_u:,}", help="Biologics & cold-chain stock requiring continuous 2-8°C control")
+    _at_risk_val = inv_f[inv_f['expiry_risk'].isin(['EXPIRED','CRITICAL (<30d)','HIGH (30-90d)'])]['inventory_value_usd'].sum()
+    kpi_inv4.metric("At-Risk Capital", f"${_at_risk_val/1e3:,.0f}K", delta=f"{_at_risk_val/max(inv_f['inventory_value_usd'].sum(),1)*100:.1f}% of total", delta_color="inverse", help="Value in Expired, Critical, or High risk tiers")
+    st.markdown("---")
 
     fig, axes = plt.subplots(2, 4, figsize=(22, 10))
     fig.patch.set_facecolor("#0f1117")
@@ -1453,12 +1462,74 @@ elif selected_page == "🤖 ML Expiry Classifier":
     info_box("ML Classifier", "ℹ️ How to act on these ML results")
 
     acc = accuracy_score(y_test, y_pred) * 100
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Model Accuracy",    f"{acc:.1f}%",   help="% of test-set batches correctly classified into the right expiry risk tier. Above 90% = excellent.")
-    col2.metric("Training Samples",  f"{len(X_train):,}", help="Number of inventory records used to train the Random Forest model.")
-    col3.metric("Test Samples",      f"{len(X_test):,}", help="Held-out records used to evaluate model accuracy — these were not seen during training.")
+    prec = precision_score(y_test, y_pred, average="weighted", zero_division=0) * 100
+    rec = recall_score(y_test, y_pred, average="weighted", zero_division=0) * 100
+    f1 = f1_score(y_test, y_pred, average="weighted", zero_division=0) * 100
+
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("🎯 Model Accuracy", f"{acc:.1f}%", help="Percentage of test-set batches assigned the correct risk tier (Target: >90%)")
+    col2.metric("🔬 Precision (Weighted)", f"{prec:.1f}%", help="Weighted precision — minimizes false alarm risk across tiers")
+    col3.metric("📡 Recall / Sensitivity", f"{rec:.1f}%", help="Weighted recall — ensures near-expiry batches are never missed")
+    col4.metric("⚖️ F1-Score", f"{f1:.1f}%", help="Harmonic mean of precision and recall")
     info_box("Performance Metrics", "ℹ️ Model evaluation metrics.")
-    with st.expander("📋 Classification Report"):
+
+    # ── Interactive What-If Scenario Simulator ──────────────────────────────
+    st.markdown('<div class="section-header">🔮 Interactive Expiry Risk Simulator (What-If Analysis)</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-desc">Test how adjusting Days-to-Expiry, Batch Quantity, Unit Price, and Monthly Dispatch Velocity affects the machine learning risk classification in real-time.</div>', unsafe_allow_html=True)
+
+    sim_c1, sim_c2, sim_c3, sim_c4 = st.columns(4)
+    with sim_c1: sim_dte = st.slider("Days to Expiry (DTE)", 1, 365, 45, key="sim_dte_sl")
+    with sim_c2: sim_qty = st.number_input("Batch Quantity (Units)", 50, 50000, 2500, step=100, key="sim_qty_in")
+    with sim_c3: sim_prc = st.number_input("Unit Price ($ USD)", 1.0, 5000.0, 45.0, step=5.0, key="sim_prc_in")
+    with sim_c4: sim_vel = st.number_input("Monthly Dispatch (Units/Mo)", 10, 10000, 400, step=50, key="sim_vel_in")
+
+    sim_val = sim_qty * sim_prc
+    sim_cov = sim_qty / max(sim_vel, 1) * 30
+    sim_rsc = min(1.0, max(0.0, sim_dte / 365.0))
+    sim_vpd = sim_val / max(sim_dte, 1)
+    sim_pct = min(100.0, max(0.0, sim_dte / 365.0 * 100))
+
+    sim_row = pd.DataFrame([{
+        "days_to_expiry": sim_dte,
+        "quantity_on_hand": sim_qty,
+        "unit_price": sim_prc,
+        "avg_monthly_dispatch": sim_vel,
+        "cover_days": sim_cov,
+        "risk_score": sim_rsc,
+        "value_per_day": sim_vpd,
+        "pct_life_remaining": sim_pct
+    }])[features].fillna(0)
+
+    sim_pred = rf.predict(sim_row)[0]
+    sim_probs = rf.predict_proba(sim_row)[0]
+    sim_conf = max(sim_probs) * 100
+    sim_color = "#ef4444" if ("Tier 1" in str(sim_pred) or "CRITICAL" in str(sim_pred) or "EXPIRED" in str(sim_pred) or "HIGH" in str(sim_pred)) else ("#f59e0b" if ("Tier 2" in str(sim_pred) or "MEDIUM" in str(sim_pred)) else "#10b981")
+
+    st.markdown(f"""
+<div style='background:linear-gradient(135deg, {sim_color}18, {sim_color}08);
+            border:1px solid {sim_color}40; border-left:5px solid {sim_color};
+            border-radius:10px; padding:16px 20px; margin:12px 0;'>
+  <div style='display:flex; justify-content:space-between; align-items:center;'>
+    <span style='font-size:16px; font-weight:700; color:{sim_color};'>🎯 Predicted Risk Tier: {sim_pred}</span>
+    <span style='font-size:13px; color:#cbd5e1;'>Confidence: <b>{sim_conf:.1f}%</b></span>
+  </div>
+  <div style='font-size:12px; color:#94a3b8; margin-top:6px;'>
+    Batch Value: <b>${sim_val:,.0f}</b> &nbsp;|&nbsp;
+    Stock Coverage: <b>{sim_cov:.0f} days</b> &nbsp;|&nbsp;
+    Daily Capital Exposure: <b>${sim_vpd:,.1f}/day</b>
+  </div>
+  <div style='font-size:12px; color:#cbd5e1; margin-top:6px;'>
+    <b>Recommended FEFO Action:</b> {'🚨 Critical risk: Expedite dispatch within 7 days or initiate inter-warehouse transfer via LP Optimizer.' if sim_color=='#ef4444' else ('⚠️ Moderate risk: Monitor weekly and prioritize in next picking cycle.' if sim_color=='#f59e0b' else '✅ Safe tier: Normal FEFO dispatch sequence. Stock levels and shelf life are balanced.')}
+  </div>
+</div>""", unsafe_allow_html=True)
+
+    # Full batch prediction table with confidence score
+    with st.expander("📋 Full Batch Prediction & Confidence Table", expanded=False):
+        ml_df["confidence_pct"] = (rf.predict_proba(X).max(axis=1) * 100).round(1)
+        show_cols_ml = [c for c in ["fp_batch_id","product_id","generic_name","warehouse_id","quantity_on_hand","days_to_expiry","predicted_risk","confidence_pct"] if c in ml_df.columns]
+        st.dataframe(ml_df[show_cols_ml].head(500), use_container_width=True)
+
+    with st.expander("📋 Detailed Classification Report"):
         st.text(classification_report(y_test, y_pred, zero_division=0))
     info_box("Classification Report", "ℹ️ Detailed report of ML accuracy.")
 
@@ -1468,7 +1539,7 @@ elif selected_page == "🤖 ML Expiry Classifier":
     _rf_bullets = [
         f"🤖 <b>Multi-variable risk intelligence:</b> The Random Forest model captures non-linear interactions between <b>Days-to-Expiry (DTE)</b>, <b>Dispatch Velocity</b>, and <b>Shelf-Life Consumption</b> that static calendar thresholds overlook.",
         f"📊 <b>Primary risk driver:</b> <b>{_top_feat}</b> is the single most influential feature (<b>{_top_imp_val:.1f}% relative importance</b>). Batches with high stock relative to monthly velocity are flagged early, even when nominal DTE appears safe.",
-        f"🎯 <b>Accuracy validation:</b> Model achieved <b>{acc:.1f}% accuracy</b> on held-out test batches. High classification precision on critical tiers prevents false negatives that could lead to dispatching expired pharmaceuticals to clinical partners.",
+        f"🎯 <b>Accuracy & Reliability:</b> Model achieved <b>{acc:.1f}% accuracy</b> and <b>{f1:.1f}% F1-Score</b> on held-out test batches. High classification precision ensures operational resources are directed only to truly at-risk lots.",
         f"💡 <b>Operational deployment:</b> (1) Integrate ML risk scores directly into WMS pick-list generation to prioritize at-risk batches automatically, "
         f"(2) Retrain model monthly as seasonal demand shifts, "
         f"(3) Set automated early-warning alerts for batches whose predicted risk tier worsens over consecutive weekly runs."
@@ -1520,10 +1591,15 @@ elif selected_page == "⚖️ LP Cost Optimizer":
 
     if lp_results:
         lp_df = pd.DataFrame(lp_results)
-        col1,col2,col3 = st.columns(3)
-        col1.metric("Batches Optimised",  f"{len(lp_df)}")
-        col2.metric("Total Net Savings",  f"${lp_df['Net_Saving_USD'].sum():,.0f}")
-        col3.metric("Avg Saving / Batch", f"${lp_df['Net_Saving_USD'].mean():,.0f}")
+        _tot_opt_saving = lp_df['Net_Saving_USD'].sum()
+        _tot_opt_qty    = lp_df['Qty'].sum()
+
+        # ROI & Financial Impact Summary
+        lp_k1, lp_k2, lp_k3, lp_k4 = st.columns(4)
+        lp_k1.metric("Batches Optimised", f"{len(lp_df)}", help="Number of near-expiry inventory lots evaluated by the HiGHS simplex solver")
+        lp_k2.metric("Total Net Savings", f"${_tot_opt_saving:,.0f}", help="Total dollar value recovered vs default disposal write-off")
+        lp_k3.metric("Avg Saving / Batch", f"${lp_df['Net_Saving_USD'].mean():,.0f}", help="Average financial recovery per at-risk batch")
+        lp_k4.metric("Units Protected", f"{_tot_opt_qty:,}", help="Total pharmaceutical units allocated across optimal recovery channels")
         info_box("Optimization Metrics", "ℹ️ Performance metrics for LP optimization.")
         fig, axes = plt.subplots(1, 2, figsize=(18, 6)); fig.patch.set_facecolor("#0f1117")
         fig.suptitle("LP Inventory Cost Optimisation Results", fontsize=14, color="#10b981", fontweight="bold", y=1.04)
