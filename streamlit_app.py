@@ -490,12 +490,60 @@ if "_pending_nav" in st.session_state:
 # SIDEBAR
 # ─────────────────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.markdown("""<div style='text-align:center; padding: 12px 0 16px;'>
+    st.markdown("""<div style='text-align:center; padding: 12px 0 14px;'>
         <div style='font-size:28px;'>🏥</div>
         <div style='font-size:16px; font-weight:700; color:#00d4ff;'>PharmaTrace AI</div>
-        <div style='font-size:10px; color:#475569; margin-top:4px;'>Warehouse &amp; FEFO Optimization</div>
+        <div style='font-size:10px; color:#475569; margin-top:3px;'>Warehouse &amp; FEFO Optimization</div>
         <div style='font-size:9px; color:#334155; margin-top:2px;'>ISB AMPBA Capstone | Innodatatics</div>
     </div>""", unsafe_allow_html=True)
+    st.markdown("---")
+
+    # ── Geography & Regulatory Jurisdiction Toggle ─────────────────────────
+    st.markdown("<div style='font-size:11px; font-weight:700; color:#00d4ff; letter-spacing:0.08em; margin: 0 0 6px;'>🌍 JURISDICTION & CURRENCY</div>", unsafe_allow_html=True)
+    jurisdiction = st.radio(
+        "Select Jurisdiction",
+        ["🇺🇸 United States (FDA • USD $)", "🇮🇳 India (CDSCO • INR ₹)"],
+        key="jurisdiction_toggle",
+        label_visibility="collapsed"
+    )
+    is_india = "India" in jurisdiction
+    USD_TO_INR = 83.50
+
+    def fmt_curr(val_usd, compact=True):
+        """Format currency dynamically for US (USD $) vs India (INR ₹ Lakhs/Crores)."""
+        if pd.isna(val_usd): return "N/A"
+        try:
+            val = float(val_usd)
+        except:
+            return str(val_usd)
+        if is_india:
+            inr = val * USD_TO_INR
+            if compact:
+                if abs(inr) >= 1e7:
+                    return f"₹{inr/1e7:.2f} Cr"
+                elif abs(inr) >= 1e5:
+                    return f"₹{inr/1e5:.2f} L"
+                elif abs(inr) >= 1e3:
+                    return f"₹{inr/1e3:.1f} K"
+                return f"₹{inr:,.0f}"
+            else:
+                return f"₹{inr:,.2f}"
+        else:
+            if compact:
+                if abs(val) >= 1e6:
+                    return f"${val/1e6:.2f}M"
+                elif abs(val) >= 1e3:
+                    return f"${val/1e3:.1f}K"
+                return f"${val:,.0f}"
+            else:
+                return f"${val:,.2f}"
+
+    curr_sym = "₹" if is_india else "$"
+    curr_code = "INR" if is_india else "USD"
+    reg_agency = "CDSCO / State FDA" if is_india else "US FDA"
+    fefo_statute = "CDSCO Schedule M (Sec 8.2) & IP GSP" if is_india else "FDA 21 CFR §211.150 & USP <1079>"
+    cold_chain_statute = "Indian Pharmacopoeia (IP) Cold-Chain & Zone IVb (30°C/75% RH)" if is_india else "USP <659> Cold-Chain & Zone II (25°C/60% RH)"
+
     st.markdown("---")
 
     # ── Grouped Navigation ─────────────────────────────────────────────────
@@ -788,8 +836,8 @@ if selected_page == "🏠 Home & KPI Summary":
 
     cols = st.columns(5)
     kpis = [
-        ("Total Inventory Value",  f"${total_inv_value/1e6:.1f}M",            "#00d4ff", "USD millions across all warehouses"),
-        ("At-Risk Value",          f"${at_risk_value/1e3:.0f}K",              "#ef4444", f"{pct_at_risk:.1f}% of total stock value"),
+        ("Total Inventory Value",  fmt_curr(total_inv_value),                 "#00d4ff", f"{curr_label} across all warehouses"),
+        ("At-Risk Value",          fmt_curr(at_risk_value),                   "#ef4444", f"{pct_at_risk:.1f}% of total stock value"),
         ("FEFO Compliance",        f"{fefo_rate:.1f}%" if supp_ok else "N/A", "#10b981" if fefo_rate>=97 else "#f59e0b", "Target ≥ 97%"),
         ("Avg Fill Rate",          f"{avg_fill_rate:.1f}%" if supp_ok else "N/A", "#10b981" if avg_fill_rate>=97 else "#f59e0b", "24-month service level"),
         ("IoT Excursion Rate",     f"{excursion_rate:.1f}%" if supp_ok else "N/A", "#10b981" if excursion_rate<5 else "#ef4444", "Cold-chain thermal events"),
@@ -1151,18 +1199,18 @@ elif selected_page == "✅ FEFO Compliance":
 
     _fefo_overall = picks["is_fefo_compliant"].mean() * 100
     _total_picks_n = len(picks)
-    _nc_val_str = f"${_nc_val_total/1e6:.2f}M" if _nc_val_total >= 1e6 else (f"${_nc_val_total/1e3:.1f}K" if _nc_val_total >= 1e3 else f"${_nc_val_total:,.0f}")
-    _fefo_status_txt = "🟢 Audit-Ready" if _fefo_overall >= 97 else ("🟡 Audit Gap" if _fefo_overall >= 90 else "🔴 Non-Compliant")
+    _nc_val_str = fmt_curr(_nc_val_total)
+    _fefo_status_txt = ("🟢 CDSCO Audit-Ready" if is_india else "🟢 FDA Audit-Ready") if _fefo_overall >= 97 else (("🟡 Schedule M Gap" if is_india else "🟡 FDA 483 Gap") if _fefo_overall >= 90 else "🔴 Critical Non-Compliance")
 
     # ── Executive Regulatory & NC-VaR KPI Strip ─────────────────────────
     fk1, fk2, fk3, fk4, fk5 = st.columns(5)
-    fk1.metric("Network FEFO Rate", f"{_fefo_overall:.2f}%", delta=f"{_fefo_overall-97:.2f}% vs 97%", help="Percentage of outbound picks adhering to strict earliest-expiry sequencing (FDA target ≥ 97%)")
+    fk1.metric("Network FEFO Rate", f"{_fefo_overall:.2f}%", delta=f"{_fefo_overall-97:.2f}% vs 97%", help=f"Outbound picks adhering to earliest-expiry sequencing ({reg_agency} target ≥ 97%)")
     fk2.metric("Total Picks Audited", f"{_total_picks_n:,}", help="Total warehouse outbound picking transactions audited")
     fk3.metric("FEFO Violations", f"{_nc_picks_n:,}", delta=f"{_nc_picks_n/_total_picks_n*100:.1f}% error", delta_color="inverse", help="Picks where a fresher lot was dispatched ahead of an older lot")
-    fk4.metric("NC-VaR (Value at Risk)", _nc_val_str, delta=f"{_nc_var_intensity:.1f}% of dispatch", delta_color="inverse", help=f"Non-Compliance Value at Risk: ${_nc_val_total:,.0f} total dollar volume dispatched out of sequence")
-    fk5.metric("Regulatory Standing", _fefo_status_txt, help="Classification under FDA 21 CFR §211.150 and USP <1079>")
+    fk4.metric(f"NC-VaR ({curr_code} Risk)", _nc_val_str, delta=f"{_nc_var_intensity:.1f}% of dispatch", delta_color="inverse", help=f"Non-Compliance Value at Risk: {fmt_curr(_nc_val_total, compact=False)} total value dispatched out of sequence")
+    fk5.metric("Regulatory Standing", _fefo_status_txt, help=f"Compliance classification under {fefo_statute}")
     
-    with st.expander("📐 NC-VaR Metric Definition & Regulatory Standard (FDA 21 CFR §211.150)", expanded=False):
+    with st.expander(f"📐 NC-VaR Metric Definition & Regulatory Standard ({fefo_statute})", expanded=False):
         st.markdown(r"""
 ### 📐 Non-Compliance Value at Risk ($\text{NC-VaR}$) Formulation
 
@@ -1171,12 +1219,12 @@ $$\mathbf{\text{NC-VaR}} = \sum_{i \in \mathcal{V}} \left( Q_i \times P_i \right
 Where:
 - $\mathcal{V}$ = Set of all non-compliant pick transactions (where $\text{is\_fefo\_compliant} = \text{False}$).
 - $Q_i$ = Quantity of units dispatched in violation of FEFO in pick transaction $i$.
-- $P_i$ = Product unit price (USD).
+- $P_i$ = Product unit price.
 """ + f"""
 - **NC-VaR Intensity Rate:** $\\frac{{\\text{{NC-VaR}}}}{{\\text{{Total Audited Dispatch Value}}}} \\times 100 = \\mathbf{{{_nc_var_intensity:.2f}\\%}}$.
 
-**Regulatory Impact (FDA 21 CFR § 211.150 / USP <1079>):**
-When an operator picks a newer batch, the older batch remains stranded on warehouse racks. Each non-compliant transaction directly converts working capital into **Avoidable Expiry Hazard**, leading to certified batch destruction, 483 audit observations, and potential product recall actions.
+**Regulatory Impact ({fefo_statute}):**
+When an operator picks a newer batch, the older batch remains stranded on warehouse racks. Under **{'CDSCO Schedule M (Rules 71-78)' if is_india else 'FDA 21 CFR §211.150'}**, out-of-sequence picking triggers non-conformance audit findings and leads to mandatory batch disposal.
         """)
     st.markdown("---")
 
@@ -1810,7 +1858,7 @@ elif selected_page == "⚖️ LP Cost Optimizer":
 elif selected_page == "❄️ IoT Cold-Chain Monitor":
     st.markdown('<div class="section-header">❄️ Cold-Chain IoT Telemetry Monitoring</div>', unsafe_allow_html=True)
     info_box("IoT Header", "ℹ️ Cold-chain monitoring dashboard.")
-    st.markdown('<div class="section-desc">USP <659> = US Pharmacopeia standard | Safe zone: 2–8°C | RH target: 55% | Thermal Excursion = temperature outside 2–8°C band.</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="section-desc"><b>{cold_chain_statute}</b> | Safe temperature band: 2–8°C | Relative Humidity Control | Thermal Excursion = temperature outside 2–8°C band.</div>', unsafe_allow_html=True)
     c1, c2 = st.columns(2)
     with c1: info_box("IoT Monitor", "ℹ️ What do these 4 charts show?")
     with c2: info_box("IoT Excursion Rate", "ℹ️ What is a thermal excursion?")
@@ -1821,7 +1869,7 @@ elif selected_page == "❄️ IoT Cold-Chain Monitor":
     cold_wh_ids = warehouses.loc[warehouses["temp_controlled"]==True, "warehouse_id"].tolist() if "temp_controlled" in warehouses.columns else df_iot["warehouse_id"].unique().tolist()
 
     fig, axes = plt.subplots(2, 2, figsize=(20, 12)); fig.patch.set_facecolor("#0f1117")
-    fig.suptitle("Cold-Chain IoT Telemetry — USP <659> Compliance Monitoring", fontsize=14, color="#00d4ff", fontweight="bold", y=1.03)
+    fig.suptitle(f"Cold-Chain IoT Telemetry — {cold_chain_statute}", fontsize=14, color="#00d4ff", fontweight="bold", y=1.03)
 
     ax = axes[0,0]
     for wid in cold_wh_ids:
