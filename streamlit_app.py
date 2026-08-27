@@ -416,6 +416,8 @@ with st.sidebar:
         "🧪 Raw Materials & Pricing",
         "📋 Order Fulfilment Simulator",
         "🏷️ WIP & Manufacturing Tracker",
+        "🗺️ Geo Sales Intelligence",
+        "💡 Smart Transfer Recommender",
     ]
     selected_page = st.radio("Navigate", PAGES, label_visibility="collapsed")
     st.markdown("---")
@@ -1853,6 +1855,464 @@ elif selected_page == "🏷️ WIP & Manufacturing Tracker":
                fontsize=9, framealpha=0.2)
     plt.tight_layout()
     show_fig(fig3)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PAGE: GEO SALES INTELLIGENCE  (Idea 7)
+# ─────────────────────────────────────────────────────────────────────────────
+elif selected_page == "🗺️ Geo Sales Intelligence":
+    st.markdown('<div class="section-header">🗺️ Geographical Sales Pattern Analysis</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-desc">Identify where demand is highest vs lowest across warehouses/regions — spot 🔥 HOT locations (high demand, low stock) and ❄️ COLD locations (low demand, surplus stock) for smart rebalancing decisions.</div>', unsafe_allow_html=True)
+
+    if not supp_ok:
+        st.warning("⚠️ Upload Monthly Demand data (via the template) to enable this analysis.", icon="⚠️")
+        st.stop()
+
+    # ── Build geo demand summary ────────────────────────────────────────────────────
+    @st.cache_data
+    def build_geo_data(demand_hash):
+        # Aggregate demand and stock by warehouse + product
+        dem_agg = df_demand.groupby(["warehouse_id","product_id"]).agg(
+            total_demanded  = ("quantity_demanded_units","sum"),
+            total_dispatched= ("quantity_dispatched_units","sum"),
+            avg_monthly_demand=("quantity_demanded_units","mean"),
+            fill_rate_avg   = ("quantity_demanded_units", lambda x:
+                                (df_demand.loc[x.index,"quantity_dispatched_units"].sum() /
+                                 x.sum() * 100) if x.sum()>0 else 0),
+        ).reset_index()
+
+        inv_agg = inventory.groupby(["warehouse_id","product_id"]).agg(
+            stock_on_hand=("quantity_on_hand","sum"),
+            stock_value  =("inventory_value_usd","sum"),
+        ).reset_index()
+
+        geo = dem_agg.merge(inv_agg, on=["warehouse_id","product_id"], how="left")
+        geo["stock_on_hand"]  = geo["stock_on_hand"].fillna(0)
+        geo["stock_value"]    = geo["stock_value"].fillna(0)
+
+        # Days of stock at current demand rate
+        geo["days_of_stock"] = (geo["stock_on_hand"] /
+                                 (geo["avg_monthly_demand"] / 30)).replace([float("inf"),float("nan")], 999).round(0)
+
+        # Classify location-product pairs
+        def classify(row):
+            if row.avg_monthly_demand > row.avg_monthly_demand * 1.0 and row.days_of_stock < 20:
+                return "🔥 HOT",  "#ef4444"
+            if row.days_of_stock > 120:
+                return "❄️ COLD", "#3b82f6"
+            return "✅ BALANCED", "#10b981"
+
+        # Use percentile-based thresholds instead
+        p75_demand = geo["avg_monthly_demand"].quantile(0.75)
+        p25_demand = geo["avg_monthly_demand"].quantile(0.25)
+        p25_dos    = geo["days_of_stock"].clip(upper=300).quantile(0.25)
+        p75_dos    = geo["days_of_stock"].clip(upper=300).quantile(0.75)
+
+        def classify2(row):
+            high_demand = row.avg_monthly_demand >= p75_demand
+            low_demand  = row.avg_monthly_demand <= p25_demand
+            low_stock   = row.days_of_stock <= p25_dos
+            high_stock  = min(row.days_of_stock, 300) >= p75_dos
+            if high_demand and low_stock:  return "🔥 HOT",      "#ef4444"
+            if low_demand  and high_stock: return "❄️ COLD",     "#3b82f6"
+            return                                "✅ BALANCED",  "#10b981"
+
+        geo[["location_type","loc_color"]] = geo.apply(classify2, axis=1, result_type="expand")
+
+        # Add product names
+        prod_name_map = dict(zip(products.product_id, products.generic_name))
+        geo["product_name"] = geo["product_id"].map(prod_name_map).fillna(geo["product_id"])
+
+        # Warehouse info
+        if "city" in warehouses.columns:
+            wh_info = dict(zip(warehouses.warehouse_id, warehouses.city + " (" + warehouses.warehouse_id + ")"))
+        else:
+            wh_info = dict(zip(warehouses.warehouse_id, warehouses.warehouse_id))
+        geo["wh_label"] = geo["warehouse_id"].map(wh_info).fillna(geo["warehouse_id"])
+        return geo, p75_demand, p25_demand
+
+    geo, p75d, p25d = build_geo_data(str(len(df_demand)))
+
+    hot  = geo[geo["location_type"]=="🔥 HOT"]
+    cold = geo[geo["location_type"]=="❄️ COLD"]
+    bal  = geo[geo["location_type"]=="✅ BALANCED"]
+
+    # ── KPI row ─────────────────────────────────────────────────────────────────
+    g1, g2, g3, g4 = st.columns(4)
+    g1.metric("🔥 HOT Locations",     len(hot),  help="High demand + low stock — risk of stockout")
+    g2.metric("❄️ COLD Locations",    len(cold), help="Low demand + surplus stock — capital tied up")
+    g3.metric("✅ Balanced",           len(bal),  help="Demand and stock are well-matched")
+    g4.metric("Products × Warehouses", len(geo),  help="Total product-warehouse combinations analysed")
+
+    if not hot.empty:
+        st.error(
+            f"🔥 **{len(hot)} HOT location-product pairs** — stock replenishment urgent: "
+            + ", ".join(f"{r.product_name} @ {r.warehouse_id}" for _, r in hot.head(4).iterrows())
+            + (" & more..." if len(hot)>4 else ""),
+            icon="🔥"
+        )
+
+    st.markdown("---")
+
+    # ── Filter controls ────────────────────────────────────────────────────────────
+    cf1, cf2 = st.columns(2)
+    sel_prod_geo = cf1.multiselect("Filter Products",
+                                   options=sorted(geo.product_name.unique()),
+                                   default=sorted(geo.product_name.unique())[:6],
+                                   key="geo_prod_filter")
+    sel_type_geo = cf2.multiselect("Location Type",
+                                   options=["🔥 HOT","❄️ COLD","✅ BALANCED"],
+                                   default=["🔥 HOT","❄️ COLD","✅ BALANCED"],
+                                   key="geo_type_filter")
+    geo_f = geo[geo.product_name.isin(sel_prod_geo) & geo.location_type.isin(sel_type_geo)]
+
+    # ── CHART 1: Demand heatmap — product × warehouse ──────────────────────────────
+    st.markdown('<div class="section-header">🔥❄️ Demand Intensity × Warehouse Heatmap</div>', unsafe_allow_html=True)
+    info_box("Demand Trend", "ℹ️ How to read the demand heatmap")
+
+    fig, axes = plt.subplots(1, 3, figsize=(24, 7))
+    fig.patch.set_facecolor("#0f1117")
+
+    # Panel 1: demand heatmap
+    ax1 = axes[0]
+    pivot_dem = geo_f.pivot_table(index="product_name", columns="warehouse_id",
+                                   values="avg_monthly_demand", aggfunc="sum", fill_value=0)
+    if not pivot_dem.empty:
+        import matplotlib.cm as cm
+        vmax = pivot_dem.values.max()
+        im1  = ax1.imshow(pivot_dem.values, cmap="RdYlGn_r", aspect="auto",
+                           vmin=0, vmax=vmax if vmax>0 else 1)
+        ax1.set_xticks(range(len(pivot_dem.columns)))
+        ax1.set_xticklabels(pivot_dem.columns, rotation=45, ha="right", fontsize=9)
+        ax1.set_yticks(range(len(pivot_dem.index)))
+        ax1.set_yticklabels([n[:20] for n in pivot_dem.index], fontsize=8)
+        for i in range(len(pivot_dem.index)):
+            for j in range(len(pivot_dem.columns)):
+                ax1.text(j, i, f"{pivot_dem.values[i,j]:.0f}",
+                         ha="center", va="center", fontsize=7, color="white")
+        ax1.set_title("Avg Monthly Demand\n(Red=High, Green=Low)", color="#00d4ff", fontweight="bold")
+        plt.colorbar(im1, ax=ax1, fraction=0.046, pad=0.04).ax.yaxis.set_tick_params(color="white")
+
+    # Panel 2: stock heatmap
+    ax2 = axes[1]
+    pivot_stk = geo_f.pivot_table(index="product_name", columns="warehouse_id",
+                                   values="days_of_stock", aggfunc="mean", fill_value=0).clip(upper=200)
+    if not pivot_stk.empty:
+        im2 = ax2.imshow(pivot_stk.values, cmap="RdYlGn", aspect="auto", vmin=0, vmax=200)
+        ax2.set_xticks(range(len(pivot_stk.columns)))
+        ax2.set_xticklabels(pivot_stk.columns, rotation=45, ha="right", fontsize=9)
+        ax2.set_yticks(range(len(pivot_stk.index)))
+        ax2.set_yticklabels([n[:20] for n in pivot_stk.index], fontsize=8)
+        for i in range(len(pivot_stk.index)):
+            for j in range(len(pivot_stk.columns)):
+                v = pivot_stk.values[i,j]
+                ax2.text(j, i, f"{v:.0f}d", ha="center", va="center", fontsize=7, color="white")
+        ax2.set_title("Days of Stock\n(Green=Ample, Red=Low)", color="#00d4ff", fontweight="bold")
+        plt.colorbar(im2, ax=ax2, fraction=0.046, pad=0.04)
+
+    # Panel 3: HOT/COLD scatter — demand vs days-of-stock
+    ax3 = axes[2]
+    ax3.set_facecolor("#1a1d27")
+    for ltype, color, marker in [("🔥 HOT","#ef4444","^"),("❄️ COLD","#3b82f6","v"),("✅ BALANCED","#10b981","o")]:
+        sub = geo_f[geo_f.location_type==ltype]
+        if not sub.empty:
+            ax3.scatter(sub.avg_monthly_demand, sub.days_of_stock.clip(upper=200),
+                        c=color, marker=marker, s=80, alpha=0.8, label=ltype)
+    ax3.axhline(30,  color="#ef4444", lw=1.5, linestyle="--", alpha=0.6, label="30d threshold")
+    ax3.axhline(120, color="#3b82f6", lw=1.5, linestyle="--", alpha=0.6, label="120d threshold")
+    ax3.set_xlabel("Avg Monthly Demand (units)", color="#ccc")
+    ax3.set_ylabel("Days of Stock", color="#ccc")
+    ax3.set_title("Demand vs Days-of-Stock\n(HOT=top-left, COLD=bottom-right)", color="#00d4ff", fontweight="bold")
+    ax3.legend(fontsize=8, framealpha=0.2)
+    ax3.grid(True, alpha=0.2)
+
+    plt.tight_layout()
+    show_fig(fig)
+
+    # ── CHART 2: HOT vs COLD bar breakdown ────────────────────────────────────────
+    fig2, axes2 = plt.subplots(1, 2, figsize=(22, 6))
+    fig2.patch.set_facecolor("#0f1117")
+
+    # Top HOT locations by demand gap
+    ax4 = axes2[0]
+    if not hot.empty:
+        top_hot = hot.copy()
+        top_hot["demand_gap"] = top_hot["total_demanded"] - top_hot["total_dispatched"]
+        top_hot = top_hot.nlargest(12, "total_demanded")
+        labels_hot = top_hot["product_name"].str[:15] + "\n" + top_hot["warehouse_id"]
+        ax4.barh(labels_hot, top_hot["total_demanded"]/1000, color="#ef4444", alpha=0.85, label="Demanded", height=0.5)
+        ax4.barh(labels_hot, top_hot["total_dispatched"]/1000, color="#f97316", alpha=0.65, label="Dispatched", height=0.5)
+        ax4.set_xlabel("Units (thousands)", color="#ccc")
+        ax4.set_title("🔥 Top HOT Locations — Demand vs Dispatched", color="#ef4444", fontweight="bold")
+        ax4.legend(fontsize=9, framealpha=0.2)
+    else:
+        ax4.text(0.5, 0.5, "No HOT locations detected", ha="center", va="center", color="#aaa", transform=ax4.transAxes)
+        ax4.set_title("🔥 HOT Locations", color="#00d4ff")
+
+    # Top COLD locations by surplus stock
+    ax5 = axes2[1]
+    if not cold.empty:
+        top_cold = cold.nlargest(12, "stock_on_hand")
+        labels_cold = top_cold["product_name"].str[:15] + "\n" + top_cold["warehouse_id"]
+        ax5.barh(labels_cold, top_cold["stock_on_hand"]/1000, color="#3b82f6", alpha=0.85, label="Stock on Hand", height=0.5)
+        ax5.barh(labels_cold, top_cold["avg_monthly_demand"]/1000, color="#93c5fd", alpha=0.65, label="Avg Monthly Demand", height=0.5)
+        ax5.set_xlabel("Units (thousands)", color="#ccc")
+        ax5.set_title("❄️ Top COLD Locations — Surplus Stock", color="#3b82f6", fontweight="bold")
+        ax5.legend(fontsize=9, framealpha=0.2)
+    else:
+        ax5.text(0.5, 0.5, "No COLD locations detected", ha="center", va="center", color="#aaa", transform=ax5.transAxes)
+        ax5.set_title("❄️ COLD Locations", color="#00d4ff")
+
+    plt.tight_layout()
+    show_fig(fig2)
+
+    # ── Detailed table ─────────────────────────────────────────────────────────────────
+    st.markdown('<div class="section-header">📋 Location Intelligence Table</div>', unsafe_allow_html=True)
+    show_cols_geo = ["location_type","product_name","warehouse_id","avg_monthly_demand",
+                     "stock_on_hand","days_of_stock","fill_rate_avg","stock_value"]
+    display_geo = geo_f[show_cols_geo].rename(columns={
+        "location_type":"Type","product_name":"Product","warehouse_id":"Warehouse",
+        "avg_monthly_demand":"Avg Monthly Demand","stock_on_hand":"Stock",
+        "days_of_stock":"Days of Stock","fill_rate_avg":"Fill Rate %","stock_value":"Stock Value (USD)"
+    }).sort_values(["Type","Avg Monthly Demand"], ascending=[True,False]).reset_index(drop=True)
+    display_geo["Fill Rate %"] = display_geo["Fill Rate %"].round(1)
+    display_geo["Avg Monthly Demand"] = display_geo["Avg Monthly Demand"].round(0)
+    display_geo["Days of Stock"] = display_geo["Days of Stock"].clip(upper=999).round(0)
+    st.dataframe(display_geo, use_container_width=True, height=420)
+    st.caption("→ Go to 💡 Smart Transfer Recommender to see cost-optimal rebalancing suggestions based on this analysis.")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PAGE: SMART TRANSFER RECOMMENDER  (Idea 8)
+# ─────────────────────────────────────────────────────────────────────────────
+elif selected_page == "💡 Smart Transfer Recommender":
+    st.markdown('<div class="section-header">💡 Smart Stock Transfer Recommendation Engine</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-desc">For every 🔥 HOT location, compare <b>Transfer cost</b> (move surplus from ❄️ COLD warehouse) vs <b>Manufacturing cost</b> (make fresh units) — and recommend the cheaper option with $ savings.</div>', unsafe_allow_html=True)
+
+    if not supp_ok:
+        st.warning("⚠️ Upload data via the template to enable this analysis.", icon="⚠️")
+        st.stop()
+
+    # ── Re-use geo data ────────────────────────────────────────────────────────────────
+    @st.cache_data
+    def build_recommender(demand_hash, freight_hash):
+        # Geo analysis
+        dem_agg = df_demand.groupby(["warehouse_id","product_id"]).agg(
+            avg_monthly_demand=("quantity_demanded_units","mean"),
+            total_demanded    =("quantity_demanded_units","sum"),
+        ).reset_index()
+        inv_agg = inventory.groupby(["warehouse_id","product_id"]).agg(
+            stock_on_hand=("quantity_on_hand","sum"),
+        ).reset_index()
+        geo2 = dem_agg.merge(inv_agg, on=["warehouse_id","product_id"], how="left")
+        geo2["stock_on_hand"] = geo2["stock_on_hand"].fillna(0)
+        geo2["days_of_stock"] = (geo2["stock_on_hand"] /
+                                  (geo2["avg_monthly_demand"] / 30)).replace([float("inf"), float("nan")], 999)
+        p75d2 = geo2["avg_monthly_demand"].quantile(0.75)
+        p25d2 = geo2["avg_monthly_demand"].quantile(0.25)
+        p25s2 = geo2["days_of_stock"].clip(upper=300).quantile(0.25)
+        p75s2 = geo2["days_of_stock"].clip(upper=300).quantile(0.75)
+        def cls2(row):
+            hd = row.avg_monthly_demand >= p75d2
+            ld = row.avg_monthly_demand <= p25d2
+            ls = row.days_of_stock    <= p25s2
+            hs = min(row.days_of_stock, 300) >= p75s2
+            if hd and ls: return "🔥 HOT"
+            if ld and hs: return "❄️ COLD"
+            return "✅ BALANCED"
+        geo2["location_type"] = geo2.apply(cls2, axis=1)
+
+        hot2  = geo2[geo2.location_type=="🔥 HOT"].copy()
+        cold2 = geo2[geo2.location_type=="❄️ COLD"].copy()
+
+        prod_name_map2 = dict(zip(products.product_id, products.generic_name))
+        prod_price_map = dict(zip(products.product_id, products.unit_price))
+
+        # Freight cost lookup
+        cost_col  = next((c for c in df_freight.columns if "cost" in c.lower() and "ambient" in c.lower()), None)
+        cold_col  = next((c for c in df_freight.columns if "cold" in c.lower() and "cost" in c.lower()), None)
+        freight_map = {}
+        if cost_col and "from_warehouse_id" in df_freight.columns:
+            for _, fr in df_freight.iterrows():
+                freight_map[(fr.from_warehouse_id, fr.to_warehouse_id)] = {
+                    "ambient": float(fr[cost_col]),
+                    "cold":    float(fr[cold_col]) if cold_col else float(fr[cost_col]) * 2.0,
+                    "tier":    fr.get("logistics_tier", "Standard"),
+                }
+
+        # Manufacturing cost proxy: 40% of unit price (COGS estimate)
+        MFG_COST_FACTOR = 0.40
+
+        recs = []
+        for _, hot_row in hot2.iterrows():
+            pid      = hot_row.product_id
+            hot_wh   = hot_row.warehouse_id
+            shortage = max(0, hot_row.avg_monthly_demand * 2 - hot_row.stock_on_hand)  # 2-month coverage goal
+            if shortage < 10: continue
+
+            unit_price  = prod_price_map.get(pid, 50)
+            mfg_cost_pu = unit_price * MFG_COST_FACTOR
+            mfg_total   = round(mfg_cost_pu * shortage, 2)
+
+            # Find best COLD warehouse with surplus of same product
+            cold_same = cold2[cold2.product_id == pid].copy()
+            if cold_same.empty:
+                recs.append({
+                    "Product":         prod_name_map2.get(pid, pid),
+                    "HOT Warehouse":   hot_wh,
+                    "Shortage (units)": round(shortage),
+                    "Best Action":     "🏷️ Manufacture",
+                    "COLD Warehouse":  "—",
+                    "Transfer Cost ($)":  "—",
+                    "Mfg Cost ($)":    f"${mfg_total:,.0f}",
+                    "Recommended":     "🏷️ Manufacture",
+                    "Est. Saving ($)":  0,
+                    "Reason":          "No surplus stock found elsewhere — manufacture new units",
+                })
+                continue
+
+            # For each COLD source, find transfer cost
+            best_transfer_cost = float("inf")
+            best_cold_wh       = None
+            best_freight_info  = {}
+            for _, cold_row in cold_same.iterrows():
+                cold_wh      = cold_row.warehouse_id
+                surplus      = cold_row.stock_on_hand - cold_row.avg_monthly_demand * 2  # keep 2m buffer
+                if surplus < shortage * 0.5: continue  # not enough to be useful
+                transferable = min(surplus, shortage)
+                fkey         = (cold_wh, hot_wh)
+                if fkey in freight_map:
+                    fc_pu = freight_map[fkey]["ambient"]
+                    fc_total = fc_pu * transferable
+                    if fc_total < best_transfer_cost:
+                        best_transfer_cost = fc_total
+                        best_cold_wh       = cold_wh
+                        best_freight_info  = freight_map[fkey]
+
+            if best_cold_wh is None:
+                # No freight route found — default to manufacture
+                recs.append({
+                    "Product":         prod_name_map2.get(pid, pid),
+                    "HOT Warehouse":   hot_wh,
+                    "Shortage (units)": round(shortage),
+                    "Best Action":     "🏷️ Manufacture",
+                    "COLD Warehouse":  "—",
+                    "Transfer Cost ($)":  "—",
+                    "Mfg Cost ($)":    f"${mfg_total:,.0f}",
+                    "Recommended":     "🏷️ Manufacture",
+                    "Est. Saving ($)":  0,
+                    "Reason":          "No direct freight route found — manufacture recommended",
+                })
+            else:
+                saving     = round(mfg_total - best_transfer_cost, 2)
+                if best_transfer_cost < mfg_total:
+                    action = "🚛 Transfer from " + best_cold_wh
+                    reason = (f"Transfer from {best_cold_wh} → {hot_wh} costs ${best_transfer_cost:,.0f} — "
+                              f"saves ${saving:,.0f} vs manufacturing (${mfg_total:,.0f})")
+                else:
+                    action = "🏷️ Manufacture"
+                    saving = round(best_transfer_cost - mfg_total, 2)
+                    reason = (f"Manufacturing (${mfg_total:,.0f}) is cheaper than transfer from "
+                              f"{best_cold_wh} (${best_transfer_cost:,.0f}) by ${saving:,.0f}")
+                recs.append({
+                    "Product":          prod_name_map2.get(pid, pid),
+                    "HOT Warehouse":    hot_wh,
+                    "Shortage (units)": round(shortage),
+                    "Best Action":      action,
+                    "COLD Warehouse":   best_cold_wh,
+                    "Transfer Cost ($)": f"${best_transfer_cost:,.0f}" if best_transfer_cost < float("inf") else "—",
+                    "Mfg Cost ($)":     f"${mfg_total:,.0f}",
+                    "Recommended":      action,
+                    "Est. Saving ($)":  max(0, saving),
+                    "Reason":           reason,
+                })
+        return pd.DataFrame(recs) if recs else pd.DataFrame()
+
+    df_recs = build_recommender(str(len(df_demand)), str(len(df_freight)))
+
+    if df_recs.empty:
+        st.info("✅ No HOT locations detected with your current data — all warehouses appear well-stocked.", icon="ℹ️")
+    else:
+        transfer_recs = df_recs[df_recs["Recommended"].str.startswith("🚛")]
+        mfg_recs      = df_recs[df_recs["Recommended"].str.startswith("🏷️")]
+        total_savings = df_recs["Est. Saving ($)"].sum()
+
+        # ── KPI row ───────────────────────────────────────────────────────────────
+        s1, s2, s3, s4 = st.columns(4)
+        s1.metric("HOT Locations Analysed", len(df_recs),           help="Number of product-warehouse pairs with HOT status")
+        s2.metric("🚛 Transfer Recommended",   len(transfer_recs),    help="Cases where inter-warehouse transfer is cheaper than manufacturing")
+        s3.metric("🏷️ Manufacture Recommended",len(mfg_recs),         help="Cases where manufacturing new units is cheaper than transferring")
+        s4.metric("💰 Total Estimated Savings", f"${total_savings:,.0f}", help="Total $ saved by choosing transfer over manufacture (where applicable)")
+
+        st.markdown("---")
+
+        # ── Recommendation cards ──────────────────────────────────────────────────────
+        st.markdown('<div class="section-header">📦 Action Cards — Top Recommendations</div>', unsafe_allow_html=True)
+        for _, rec in df_recs.sort_values("Est. Saving ($)", ascending=False).head(10).iterrows():
+            is_transfer = rec["Recommended"].startswith("🚛")
+            border_col  = "#10b981" if is_transfer else "#7c3aed"
+            icon        = "🚛" if is_transfer else "🏷️"
+            saving_str  = f"**Save ${rec['Est. Saving ($)']:,.0f}**" if rec["Est. Saving ($)"] > 0 else "Cost-optimised"
+            st.markdown(f"""
+<div style='background:#0f1a2a; border-left:5px solid {border_col}; border-radius:10px;
+            padding:14px 20px; margin-bottom:10px;'>
+  <div style='display:flex; justify-content:space-between; align-items:center;'>
+    <span style='font-size:15px; font-weight:700; color:{border_col};'>{icon} {rec['Product']} → {rec['HOT Warehouse']}</span>
+    <span style='font-size:13px; color:#10b981; font-weight:600;'>{saving_str}</span>
+  </div>
+  <div style='color:#94a3b8; font-size:12px; margin-top:6px;'>
+    Shortage: <b>{rec['Shortage (units)']:,.0f} units</b> &nbsp;|
+    Transfer: <b>{rec['Transfer Cost ($)']}</b> &nbsp;|
+    Manufacture: <b>{rec['Mfg Cost ($)']}</b>
+  </div>
+  <div style='color:#cbd5e1; font-size:12px; margin-top:4px;'>{rec['Reason']}</div>
+</div>""", unsafe_allow_html=True)
+
+        # ── Cost comparison chart ───────────────────────────────────────────────────────────
+        st.markdown('<div class="section-header">📊 Transfer vs Manufacturing Cost Comparison</div>', unsafe_allow_html=True)
+
+        chart_df = df_recs[df_recs["Transfer Cost ($)"] != "—"].copy()
+        if not chart_df.empty:
+            fig_r, ax_r = plt.subplots(figsize=(20, max(5, len(chart_df)*0.7)))
+            fig_r.patch.set_facecolor("#0f1117")
+            ax_r.set_facecolor("#1a1d27")
+
+            labels_r  = chart_df["Product"].str[:14] + "\n→ " + chart_df["HOT Warehouse"]
+            xpos      = range(len(chart_df))
+            w_bar     = 0.35
+
+            # Parse numeric costs
+            t_costs = chart_df["Transfer Cost ($)"].str.replace("[$,]","",regex=True).astype(float)
+            m_costs = chart_df["Mfg Cost ($)"].str.replace("[$,]","",regex=True).astype(float)
+
+            bars1 = ax_r.bar([x - w_bar/2 for x in xpos], t_costs,  width=w_bar, color="#10b981", alpha=0.85, label="Transfer Cost")
+            bars2 = ax_r.bar([x + w_bar/2 for x in xpos], m_costs,  width=w_bar, color="#7c3aed", alpha=0.85, label="Manufacturing Cost")
+
+            ax_r.set_xticks(xpos)
+            ax_r.set_xticklabels(labels_r, rotation=0, ha="center", fontsize=8)
+            ax_r.set_ylabel("Cost (USD)", color="#ccc")
+            ax_r.set_title("Transfer vs Manufacturing Cost per HOT Location",
+                           color="#00d4ff", fontweight="bold", fontsize=13)
+            ax_r.legend(fontsize=10, framealpha=0.2)
+            ax_r.grid(True, axis="y", alpha=0.2)
+
+            # Saving annotations
+            for i, (tc, mc) in enumerate(zip(t_costs, m_costs)):
+                saving_ann = mc - tc
+                color_ann  = "#10b981" if saving_ann > 0 else "#ef4444"
+                ax_r.annotate(f"{'Save' if saving_ann>0 else 'Cost'} ${abs(saving_ann):,.0f}",
+                              xy=(i, max(tc, mc) + max(tc,mc)*0.03),
+                              ha="center", fontsize=8, color=color_ann, fontweight="bold")
+            plt.tight_layout()
+            show_fig(fig_r)
+
+        # ── Full recommendations table ───────────────────────────────────────────────────────
+        st.markdown('<div class="section-header">📋 Full Recommendations Table</div>', unsafe_allow_html=True)
+        st.dataframe(
+            df_recs[["Product","HOT Warehouse","Shortage (units)","COLD Warehouse",
+                     "Transfer Cost ($)","Mfg Cost ($)","Recommended","Est. Saving ($)","Reason"]]
+            .sort_values("Est. Saving ($)", ascending=False).reset_index(drop=True),
+            use_container_width=True
+        )
 
 # ─────────────────────────────────────────────────────────────────────────────
 # FOOTER
