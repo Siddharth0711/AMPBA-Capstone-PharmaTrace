@@ -1113,23 +1113,43 @@ elif selected_page == "✅ FEFO Compliance":
     fefo_mo = picks.groupby("month").agg(total_picks=("transaction_id","count"), fefo_picks=("is_fefo_compliant","sum")).reset_index().sort_values("month")
     fefo_mo["compliance_rate"] = fefo_mo["fefo_picks"] / fefo_mo["total_picks"] * 100
 
-    # Financial Valuation of FEFO Violations
+    # Financial Valuation & NC-VaR (Non-Compliance Value at Risk)
     p_price_map = dict(zip(products.product_id, products.unit_price)) if not products.empty else {}
     picks["pick_val_usd"] = picks["quantity"] * picks["product_id"].map(p_price_map).fillna(40.0) if "quantity" in picks.columns and "product_id" in picks.columns else 0
+    _total_pick_val = picks["pick_val_usd"].sum()
     _nc_df = picks[picks["is_fefo_compliant"]==False] if False in picks["is_fefo_compliant"].values else picks[picks["is_fefo_compliant"]==0]
     _nc_picks_n = len(_nc_df)
     _nc_val_total = _nc_df["pick_val_usd"].sum() if "pick_val_usd" in _nc_df.columns else 0
+    _nc_var_intensity = (_nc_val_total / _total_pick_val * 100) if _total_pick_val > 0 else 0
 
     _fefo_overall = picks["is_fefo_compliant"].mean() * 100
     _total_picks_n = len(picks)
     _fefo_status_txt = "🟢 FDA / USP Audit-Ready" if _fefo_overall >= 97 else ("🟡 Warning: Audit Gap" if _fefo_overall >= 90 else "🔴 Critical Non-Compliance")
 
-    # ── Executive Regulatory & Financial KPI Strip ─────────────────────────
-    fk1, fk2, fk3, fk4 = st.columns(4)
-    fk1.metric("Network FEFO Rate", f"{_fefo_overall:.2f}%", delta=f"{_fefo_overall-97:.2f}% vs 97% target", help="Percentage of dispatches that strictly picked the earliest-expiring batch first")
-    fk2.metric("FEFO Violations (Picks)", f"{_nc_picks_n:,}", delta=f"{_nc_picks_n/_total_picks_n*100:.1f}% error rate" if _total_picks_n>0 else "0%", delta_color="inverse", help="Non-compliant picks where a younger batch was selected ahead of an older lot")
-    fk3.metric("Violation Value at Risk", f"${_nc_val_total:,.0f}", delta=f"${_nc_val_total/_total_picks_n if _total_picks_n>0 else 0:,.0f} avg/violation", delta_color="inverse", help="Total monetary value of goods dispatched in breach of FEFO protocol")
-    fk4.metric("Regulatory Standing", _fefo_status_txt, help="Compliance status under FDA 21 CFR Part 211.150 and USP <1079>")
+    # ── Executive Regulatory & NC-VaR KPI Strip ─────────────────────────
+    fk1, fk2, fk3, fk4, fk5 = st.columns(5)
+    fk1.metric("Network FEFO Rate", f"{_fefo_overall:.2f}%", delta=f"{_fefo_overall-97:.2f}% vs 97% target", help="Percentage of outbound picks adhering to strict earliest-expiry sequencing")
+    fk2.metric("Total Picks Audited", f"{_total_picks_n:,}", help="Total warehouse outbound picking transactions audited")
+    fk3.metric("FEFO Violations", f"{_nc_picks_n:,}", delta=f"{_nc_picks_n/_total_picks_n*100:.1f}% error rate" if _total_picks_n>0 else "0%", delta_color="inverse", help="Picks where a fresher lot was dispatched ahead of an older lot")
+    fk4.metric("NC-VaR (Value at Risk)", f"${_nc_val_total:,.0f}", delta=f"{_nc_var_intensity:.1f}% of dispatch value", delta_color="inverse", help="Non-Compliance Value at Risk: Total dollar volume dispatched out of sequence")
+    fk5.metric("Regulatory Standing", _fefo_status_txt, help="FDA 21 CFR §211.150 and USP <1079> compliance classification")
+    
+    with st.expander("📐 NC-VaR Metric Definition & Regulatory Standard (FDA 21 CFR §211.150)", expanded=False):
+        st.markdown(r"""
+### 📐 Non-Compliance Value at Risk ($\text{NC-VaR}$) Formulation
+
+$$\mathbf{\text{NC-VaR}} = \sum_{i \in \mathcal{V}} \left( Q_i \times P_i \right)$$
+
+Where:
+- $\mathcal{V}$ = Set of all non-compliant pick transactions (where $\text{is\_fefo\_compliant} = \text{False}$).
+- $Q_i$ = Quantity of units dispatched in violation of FEFO in pick transaction $i$.
+- $P_i$ = Product unit price (USD).
+""" + f"""
+- **NC-VaR Intensity Rate:** $\\frac{{\\text{{NC-VaR}}}}{{\\text{{Total Audited Dispatch Value}}}} \\times 100 = \\mathbf{{{_nc_var_intensity:.2f}\\%}}$.
+
+**Regulatory Impact (FDA 21 CFR § 211.150 / USP <1079>):**
+When an operator picks a newer batch, the older batch remains stranded on warehouse racks. Each non-compliant transaction directly converts working capital into **Avoidable Expiry Hazard**, leading to certified batch destruction, 483 audit observations, and potential product recall actions.
+        """)
     st.markdown("---")
 
     # ── Interactive FEFO Dispatch Queue & Pick Slip Generator ───────────────
@@ -1220,11 +1240,15 @@ elif selected_page == "✅ FEFO Compliance":
     ax = axes[2]
     non_comp = picks[picks["is_fefo_compliant"]==False] if False in picks["is_fefo_compliant"].values else picks[picks["is_fefo_compliant"]==0]
     if len(non_comp) > 0 and "warehouse_id" in non_comp.columns:
-        nc_wh = non_comp.groupby("warehouse_id").size().sort_values(ascending=True)
-        ax.barh(nc_wh.index, nc_wh.values, color="#ef4444", alpha=0.85)
-        ax.set_title("Non-Compliant Picks by Warehouse"); ax.set_xlabel("Non-Compliant Picks Count")
+        nc_wh_val = non_comp.groupby("warehouse_id")["pick_val_usd"].sum().sort_values(ascending=True)
+        nc_wh_cnt = non_comp.groupby("warehouse_id").size()
+        bars_nc = ax.barh(nc_wh_val.index, nc_wh_val.values/1e3, color="#ef4444", alpha=0.85)
+        ax.set_title("NC-VaR Exposure by Warehouse (USD K)", color="#ef4444", fontweight="bold"); ax.set_xlabel("Value at Risk (USD Thousands)")
+        for bar, (wh_id, val) in zip(bars_nc, nc_wh_val.items()):
+            cnt = nc_wh_cnt.get(wh_id, 0)
+            ax.text(bar.get_width()+0.3, bar.get_y()+bar.get_height()/2, f"${val/1e3:.1f}K ({cnt} picks)", va="center", fontsize=8, color="#cbd5e1")
     else:
-        ax.text(0.5, 0.5, "✅ No non-compliant picks found!", ha="center", va="center", transform=ax.transAxes, fontsize=13, color="#10b981")
+        ax.text(0.5, 0.5, "✅ Zero NC-VaR Exposure!", ha="center", va="center", transform=ax.transAxes, fontsize=13, color="#10b981")
 
     plt.tight_layout()
     show_fig(fig)
