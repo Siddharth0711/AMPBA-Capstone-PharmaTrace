@@ -190,296 +190,220 @@ def ai_insight(title, bullets, icon="🧠", color="#7c3aed"):
 </div>""", unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# GLOSSARY — plain-English explanations for every metric & chart
+# GLOSSARY & HELP SYSTEM — dynamically localized for US (FDA) vs India (CDSCO)
 # ─────────────────────────────────────────────────────────────────────────────
-GLOSSARY = {
-    # ── KPI Cards ──────────────────────────────────────────────────────────
-    "Total Inventory Value": (
-        "**Total Inventory Value** is the total USD value of all pharmaceutical stock "
-        "currently held across every warehouse.\n\n"
-        "📌 *Calculated as:* `quantity_on_hand × unit_price` summed for every batch.\n\n"
-        "💡 A high value means more capital is tied up in stock — monitor this alongside "
-        "expiry risk to avoid write-offs."
-    ),
-    "At-Risk Value": (
-        "**At-Risk Value** is the total USD value of stock that is EXPIRED, within 30 days "
-        "of expiry (CRITICAL), or within 30–90 days (HIGH).\n\n"
-        "📌 *Formula:* Sum of `inventory_value_usd` for risk tiers EXPIRED + CRITICAL + HIGH.\n\n"
-        "🔴 If this is a large % of total value, urgent action is needed: dispatch, liquidate, "
-        "or transfer stock before it expires unsold."
-    ),
-    "FEFO Compliance": (
-        "**FEFO = First Expiry, First Out** — a regulatory requirement that when dispatching "
-        "products, the batch with the soonest expiry date must always be picked first.\n\n"
-        "📌 *Formula:* `(Compliant Picks / Total Picks) × 100`\n\n"
-        "✅ Target ≥ 97% (industry standard). Falling below this risks FDA/regulatory "
-        "action and patient safety issues."
-    ),
-    "Regulatory Standing": (
-        "**Regulatory Standing** classifies the warehouse network's audit-readiness based on FEFO compliance:\n\n"
-        "- **🟢 Audit-Ready (≥ 97%)**: Full compliance with FDA 21 CFR §211.150 / CDSCO Schedule M.\n"
-        "- **🟡 Gap (90%–96.9%)**: Out-of-sequence picking detected; risk of Form 483 / Schedule M audit findings.\n"
-        "- **🔴 Critical Non-Compliance (< 90%)**: Severe stock rotation breakdown; risk of Warning Letter & forced write-offs."
-    ),
-    "Avg Fill Rate": (
-        "**Average Fill Rate (Service Level)** measures how much of customer demand was "
-        "actually fulfilled on time.\n\n"
-        "📌 *Formula:* `(Units Dispatched / Units Demanded) × 100`, averaged over 24 months.\n\n"
-        "✅ Target ≥ 97%. Below 95% indicates stockouts — patients/hospitals may not receive "
-        "medicines they ordered."
-    ),
-    "IoT Excursion Rate": (
-        "**Thermal Excursion Rate** = % of IoT sensor readings where temperature was outside "
-        "the safe storage range (2–8°C for cold-chain products per USP <659> standard).\n\n"
-        "📌 *Formula:* `(Excursion Readings / Total Readings) × 100`\n\n"
-        "🌡️ Even brief temperature excursions can degrade drug potency. Above 5% signals "
-        "a cold-chain failure requiring immediate investigation."
-    ),
-    "Active Products": (
-        "**Active Products** = count of unique pharmaceutical SKUs (Stock Keeping Units) "
-        "with status = 'active' currently held in the warehouse network.\n\n"
-        "💡 A large SKU count increases complexity in FEFO management and expiry monitoring."
-    ),
-    "Warehouses": (
-        "**Warehouses** = number of distinct distribution centres (DCs) in the network.\n\n"
-        "Each warehouse has its own capacity, temperature control capability, and inventory. "
-        "The dashboard tracks all of them simultaneously."
-    ),
-    "Total Stock Units": (
-        "**Total Stock Units** = sum of `quantity_on_hand` across all batches and warehouses.\n\n"
-        "This is the raw physical unit count (capsules, vials, boxes etc.) before pricing."
-    ),
-    "Cold-Chain Value": (
-        "**Cold-Chain Value %** = % of total inventory value that requires temperature-controlled "
-        "storage (2–8°C or below).\n\n"
-        "🧊 Cold-chain products (injectables, vaccines, biologics) are more expensive to store "
-        "and transport, and carry higher excursion risk."
-    ),
-    # ── Charts ─────────────────────────────────────────────────────────────
-    "Inventory Overview": (
-        "**Inventory Overview** shows 8 panels covering the key dimensions of your stock:\n\n"
-        "- **Value by WH** — which warehouses hold the most USD value\n"
-        "- **Expiry Risk** — how much stock is near or past expiry\n"
-        "- **Units by Pharma Class** — drug category breakdown\n"
-        "- **DEA Controlled** — controlled substance proportion (Schedule II–V)\n"
-        "- **DTE Histogram** — distribution of days-to-expiry across all batches\n"
-        "- **Value by Dosage Form** — tablets vs injectables vs solutions etc.\n"
-        "- **Cold-Chain by WH** — which warehouses carry the most temperature-sensitive stock\n"
-        "- **QC Status** — proportion released, quarantined, or under review"
-    ),
-    "ABC-FSN": (
-        "**ABC-FSN Analysis** combines two segmentation methods:\n\n"
-        "🔠 **ABC (Value-based Pareto)**\n"
-        "- **A items** = top 20% of SKUs contributing 80% of inventory value → highest priority\n"
-        "- **B items** = next 15% value (15% of SKUs)\n"
-        "- **C items** = remaining 5% value — low priority, candidate for disposal\n\n"
-        "⚡ **FSN (Velocity-based)**\n"
-        "- **Fast movers** = high monthly dispatch rate → keep well-stocked\n"
-        "- **Slow movers** = low but steady demand → monitor for over-stocking\n"
-        "- **Non-moving** = no recent dispatch → expiry risk, consider liquidation\n\n"
-        "💡 **A-Fast** items need constant replenishment. **C-Non-Moving** items need "
-        "urgent attention before they expire."
-    ),
-    "FEFO Analysis": (
-        "**FEFO Compliance Analysis** shows three charts:\n\n"
-        "1. **By Warehouse** — bar chart of compliance % per DC. Red < 90%, Yellow 90–97%, Green ≥ 97%.\n"
-        "2. **Monthly Trend** — time-series showing if compliance is improving or declining.\n"
-        "3. **Non-Compliant Picks** — count of actual wrong-batch picks by warehouse.\n\n"
-        "📋 *Non-compliant pick* = an operator dispatched a batch that was NOT the earliest-expiring "
-        "available batch, violating FEFO rules. Each such event is a potential regulatory violation."
-    ),
-    "Expiry Risk Heatmap": (
-        "**Expiry Risk Heatmap** shows three views:\n\n"
-        "1. **Heatmap** — grid of warehouses × risk tiers. Brighter/redder cells = more units in that risk bucket.\n"
-        "2. **At-Risk Value Bar** — USD exposure from EXPIRED + CRITICAL + HIGH stock per warehouse.\n"
-        "3. **DTE Scatter** — each dot is a batch; position = days remaining, height = USD value. "
-        "Dots on the left are urgent.\n\n"
-        "🎯 **Action zones:**\n"
-        "- Red (EXPIRED): Immediate regulatory disposal required\n"
-        "- Orange (CRITICAL <30d): Emergency dispatch or liquidation within days\n"
-        "- Yellow (HIGH 30-90d): Plan redistribution now"
-    ),
-    "Demand Trend": (
-        "**24-Month Demand & Seasonality Analysis** has 4 panels:\n\n"
-        "1. **Demand vs Dispatch** — blue line = what customers ordered, green = what was shipped. "
-        "Red gap = unmet demand (stockout).\n"
-        "2. **Fill Rate** — monthly service level. Green bars ≥ 97% (target met), red < 95% (stockout month).\n"
-        "3. **Seasonality** — average demand by calendar month per therapeutic category. "
-        "Peaks guide pre-season stock-building.\n"
-        "4. **Revenue Trend** — total USD value of dispatches per month. Shows business trajectory."
-    ),
-    "ML Classifier": (
-        "**Random Forest Expiry Risk Classifier** trains a machine-learning model on your current "
-        "inventory to *predict* which batches are at risk of expiring unsold.\n\n"
-        "📊 **Three panels:**\n"
-        "1. **Feature Importance** — which variables the model relies on most. "
-        "Longer bar = stronger predictor.\n"
-        "2. **Confusion Matrix** — how accurately the model classifies each risk tier. "
-        "Diagonal = correct predictions.\n"
-        "3. **Predicted Distribution** — model's risk assessment across all current batches.\n\n"
-        "🤖 *Features used:* Days-to-Expiry, Quantity, Unit Price, Monthly Velocity, "
-        "Coverage Days, % Life Remaining, Value-per-Day."
-    ),
-    "LP Optimizer": (
-        "**Linear Programming Cost Optimizer** solves a mathematical optimisation problem "
-        "for each at-risk batch to find the cheapest way to handle it.\n\n"
-        "🔢 **4 decision variables per batch:**\n"
-        "- **Dispatch** — sell immediately through normal channels (best recovery)\n"
-        "- **Transfer** — move to a warehouse nearer high-demand customers\n"
-        "- **Liquidate** — sell through secondary/near-expiry channel at discount\n"
-        "- **Dispose** — certified regulatory destruction (cost, no recovery)\n\n"
-        "⚖️ The LP minimises total cost subject to:\n"
-        "- Can only dispatch what demand velocity supports in remaining DTE\n"
-        "- Liquidation channel can absorb max 35% of units\n"
-        "- Mandatory 5% disposal if already expired\n\n"
-        "💰 **Net Saving** = revenue recovered minus holding & destruction costs."
-    ),
-    "IoT Monitor": (
-        "**Cold-Chain IoT Telemetry Monitor** analyses sensor data from refrigerated warehouses:\n\n"
-        "1. **Temperature Profile** — real-time temperature readings per cold WH. "
-        "Dashed lines = USP <659> safe zone (2–8°C). Any spike above 8°C is an excursion.\n"
-        "2. **Excursion Rate** — % of sensor readings outside safe zone per warehouse.\n"
-        "3. **Humidity Distribution** — Relative Humidity (RH) should stay near 55%. "
-        "Too high → mould risk; too low → product desiccation.\n"
-        "4. **Alert Levels** — IoT alert classification: GREEN = normal, YELLOW = caution, "
-        "RED = critical excursion requiring QA review.\n\n"
-        "📋 **USP <659>** = US Pharmacopeia storage standard that pharma companies must comply with."
-    ),
-    "Freight Rebalancing": (
-        "**Inter-Warehouse Freight Rebalancing** helps decide where to transfer near-expiry stock:\n\n"
-        "1. **Freight Cost Matrix** — heatmap of transfer cost (USD per unit) between every pair "
-        "of warehouses. Lower = cheaper route to move stock.\n"
-        "2. **Logistics Tier** — Economy (cheapest, slowest), Standard, or Express (fastest, most expensive).\n\n"
-        "🚛 **How to use it:**\n"
-        "- Find a warehouse with HIGH expiry-risk stock (from the Heatmap page)\n"
-        "- Find a warehouse with HIGH demand (from Demand page)\n"
-        "- Use this matrix to find the cheapest cold-chain route between them"
-    ),
-    # ── Risk tiers ──────────────────────────────────────────────────────────
-    "Risk Tiers": (
-        "**Expiry Risk Tiers** classify every batch by how many days remain until expiry:\n\n"
-        "| Tier | Days to Expiry | Action Required |\n"
-        "|------|---------------|------------------|\n"
-        "| 🔴 EXPIRED | < 0 days | Mandatory regulatory disposal |\n"
-        "| 🟠 CRITICAL | 0–30 days | Emergency dispatch/liquidation |\n"
-        "| 🟡 HIGH | 31–90 days | Prioritise in FEFO picks |\n"
-        "| 🟨 MEDIUM | 91–180 days | Monitor & plan redistribution |\n"
-        "| 🟢 LOW | > 180 days | Normal stock management |"
-    ),
-    "QC Status": (
-        "**QC Status** = Quality Control release status of each batch:\n\n"
-        "- ✅ **RELEASED** — batch has passed all QC tests and is cleared for dispatch\n"
-        "- ⏳ **QUARANTINE** — batch is on hold pending QC results or investigation\n"
-        "- ❌ **REJECTED** — batch failed QC and cannot be sold (must be disposed)\n\n"
-        "Only RELEASED batches count toward available inventory for dispatch."
-    ),
-    "FEFO Compliance Detail": (
-        "**FEFO = First Expiry, First Out**\n\n"
-        "When picking stock to fulfil an order, operators *must* always select the batch "
-        "with the earliest (soonest) expiry date first.\n\n"
-        "✅ **is_fefo_compliant = True** → correct batch was picked\n"
-        "❌ **is_fefo_compliant = False** → a longer-dated batch was picked instead, "
-        "leaving the shorter-dated batch to potentially expire unsold\n\n"
-        "This is mandated by FDA 21 CFR Part 211 and USP <1079>."
-    ),
-    "Pareto Curve": (
-        "**Pareto Curve (80/20 Rule)**\n\n"
-        "The curve shows cumulative % of total inventory value (Y-axis) as you add more "
-        "SKUs ranked by value (X-axis, most valuable first).\n\n"
-        "📌 A typical pharma inventory follows the 80/20 rule:\n"
-        "- ~20% of SKUs = 80% of value (A items)\n"
-        "- Next ~30% = 15% of value (B items)\n"
-        "- Remaining ~50% = only 5% of value (C items)\n\n"
-        "💡 Focus expiry monitoring efforts on A items — that's where the most financial "
-        "risk is concentrated."
-    ),
-    "Capacity Utilisation": (
-        "**Capacity Utilisation** = `(Units on Hand / Max Capacity Units) × 100`\n\n"
-        "🟢 < 75% = healthy headroom\n"
-        "🟡 75–90% = caution — limited space for incoming shipments\n"
-        "🔴 > 90% = over-capacity risk — may need inter-warehouse transfers or expedited dispatch\n\n"
-        "Over-capacity can force storage of cold-chain items in non-compliant conditions."
-    ),
-    "DTE Histogram": (
-        "**Days-to-Expiry (DTE) Histogram**\n\n"
-        "Each bar represents a count of batches expiring within that DTE range.\n\n"
-        "- Bars to the **left of 0** = already expired (must dispose)\n"
-        "- Bars between **0–30** = CRITICAL — act now\n"
-        "- Bars between **30–90** = HIGH risk — plan dispatch\n"
-        "- Bars to the **right of 90** = manageable shelf life remaining\n\n"
-        "📊 A healthy inventory has most bars concentrated on the right (>180 days)."
-    ),
-    "Feature Importance": (
-        "**Feature Importance** shows which input variables the Random Forest model relies on "
-        "most when predicting expiry risk tier.\n\n"
-        "📊 Longer bar = stronger predictor of risk.\n\n"
-        "Common key features:\n"
-        "- **days_to_expiry** — most direct predictor\n"
-        "- **risk_score** — % of shelf life elapsed\n"
-        "- **cover_days** — how many days of demand velocity are left vs. DTE\n"
-        "- **value_per_day** — daily financial exposure\n\n"
-        "💡 If `cover_days` ranks high, it means products are expiring faster than they're "
-        "being sold — a demand-supply mismatch."
-    ),
-    "Confusion Matrix": (
-        "**Confusion Matrix** shows how accurately the ML model classifies risk tiers.\n\n"
-        "📊 **Reading it:**\n"
-        "- Rows = actual (true) risk tier\n"
-        "- Columns = model's predicted risk tier\n"
-        "- **Diagonal cells** (top-left to bottom-right) = correct predictions ✅\n"
-        "- **Off-diagonal cells** = misclassifications ❌\n\n"
-        "A good model has large diagonal numbers and small off-diagonal numbers. "
-        "Misclassifying CRITICAL as LOW would be dangerous — check those cells specifically."
-    ),
-    # ── Raw Materials / Pricing keys ────────────────────────────────────────
-    "Raw Material Stock": (
-        "**Raw Material Stock Levels** shows how much of each API, excipient, solvent and packaging "
-        "material is currently on hand versus the defined restock point and maximum capacity.\n\n"
-        "🟢 **Sufficient** = stock well above restock point.\n"
-        "🟠 **Low / Reorder Soon** = stock is within 40% of the restock threshold — place a PO this week.\n"
-        "🔴 **Critical / Order Now** = stock is *below* the restock point — manufacturing may be constrained.\n\n"
-        "📌 *Days of Stock* = how many days current stock lasts at the current consumption rate."
-    ),
-    "Price Monitor": (
-        "**Raw Material Price Monitor** tracks the 12-month price trend for each material and generates "
-        "actionable buy signals.\n\n"
-        "📈 **Rising ⬆️** — price has increased more than 3% over 12 months. If above 8%, a '🚨 Buy Now' "
-        "alert is raised — procure before further increases erode margins.\n"
-        "➡️ **Stable** — price is flat (±3%). No immediate action needed.\n"
-        "📉 **Falling ⬇️** — price has dropped more than 3%. Good opportunity to buy in bulk and lock in "
-        "lower costs.\n\n"
-        "💡 Cross-reference the price signal with the stock level status — a 'Critical' stock + 'Rising' price "
-        "is the most urgent combination."
-    ),
-    # ── Fallback / supplementary keys ──────────────────────────────────────
-    "FEFO Header":          "See 'FEFO Compliance' — FEFO = First Expiry First Out, the regulatory rule that soonest-expiring stock must always be dispatched first.",
-    "Demand Charts":        "These 4 charts together tell the story of 24-month demand: **how much was ordered** (Demanded), **how much was fulfilled** (Dispatched), **service level trend** (Fill Rate %), **seasonal patterns** by therapy area, and **revenue trajectory** over time.",
-    "IoT Charts":           "These 4 panels together assess cold-chain health: **temperature stability** over time, **excursion frequency** by warehouse, **humidity compliance**, and **overall alert level distribution**. Together they determine regulatory USP <659> compliance.",
-    "Heatmap Charts":       "The 3 panels work together: the **heatmap** shows WHERE units are at risk (by warehouse), the **bar chart** shows the USD exposure per warehouse, and the **scatter** shows individual batch-level DTE vs financial stake.",
-    "LP Table":             "The LP Results Table shows the optimal allocation for each at-risk batch:\n- **Dispatch** = units to sell immediately\n- **Transfer** = units to move to another warehouse\n- **Liquidate** = units to sell via secondary channel\n- **Dispose** = units requiring certified destruction\n- **Net_Saving_USD** = total USD recovered vs. doing nothing",
-    "FEFO Charts":          "The 3 FEFO charts together show **where** compliance issues occur (by warehouse), **when** they occur (monthly trend), and **how many** non-compliant picks happened. Use all three together to target improvement actions at specific warehouses and time periods.",
-    "ABC-FSN Charts":       "The 3 panels show: (1) **Pareto curve** — the cumulative value concentration, (2) **ABC group comparison** — SKU count vs value contribution, and (3) **FSN matrix** — cross-referencing value tier (A/B/C) with velocity tier (Fast/Slow/Non-moving).",
-    "FEFO Metric":          "**Overall Network FEFO Rate** aggregates compliance across all warehouses and all time periods into a single headline number. Use this as your top-line regulatory KPI. If below 97%, drill into the charts above to find which warehouse and month is dragging it down.",
-    "ML Header":            "This page trains a **Random Forest** machine learning model directly on your inventory data and uses it to classify each batch into a predicted risk tier. No manual rules — the model learns patterns automatically from the data.",
-    "ML Charts":            "The 3 ML charts show: (1) **Feature Importance** bar chart — which variables most influence risk predictions, (2) **Confusion Matrix** heatmap — how accurate the predictions are per risk tier, and (3) **Predicted Distribution** — the model's current risk tier breakdown of all batches.",
-    "Demand Header":        "This page analyses **24 months of demand history** to reveal: how well supply matched demand, which months see seasonal spikes, and how revenue has trended. Use it for procurement planning and pre-season stock-building.",
-    "Heatmap Header":       "This page maps **expiry risk spatially** — showing which warehouses hold the most at-risk stock and by how much. Combine with the Freight Rebalancing page to plan transfers of near-expiry stock to high-demand warehouses.",
-    "LP Header":            "This page runs a **Linear Programming (LP) optimisation** — a mathematical technique that finds the mathematically optimal allocation of near-expiry stock across four disposal channels to maximise net recovery while respecting all regulatory constraints.",
-    "Freight Header":       "This page maps the **cost of moving stock between warehouses** using a freight cost matrix. Use it alongside the Expiry Risk Heatmap to identify the cheapest route to transfer near-expiry stock to high-demand locations before it expires.",
-    "Freight Charts":       "The **heatmap** shows pairwise transfer costs between every warehouse combination. Darker colour = cheaper route. The **pie chart** shows the breakdown of routes by logistics tier (Economy / Standard / Express), reflecting the speed-cost tradeoff.",
-    "IoT Header":           "This page monitors **cold-chain temperature and humidity** from IoT sensors embedded in refrigerated warehouses. Compliance with USP <659> (2–8°C storage) is a regulatory requirement — even brief excursions can compromise drug potency and trigger QA investigations.",
-    "Summary Table":        "This table summarises inventory across expiry risk tiers:\n- **Products** = unique SKUs in that risk tier\n- **Total_Units** = total physical units\n- **Total_Value_USD** = total USD value at stake\n\nFocus attention on EXPIRED and CRITICAL rows — these represent immediate financial and regulatory exposure.",
-    "Performance Metrics":  "**Model Accuracy** = how often the RF model correctly predicted the right risk tier on unseen test data.\n\n**Training Samples** = records used to fit the model.\n**Test Samples** = held-out records used to evaluate it (model never saw these during training).\n\nAbove 85% accuracy = good for this type of classification task.",
-    "Classification Report":"The classification report shows precision, recall and F1-score per risk tier:\n- **Precision** = of all batches predicted as CRITICAL, what % actually were CRITICAL\n- **Recall** = of all actually-CRITICAL batches, what % did the model catch\n- **F1** = harmonic mean of precision & recall (overall quality)\n\nFor risk management, high **recall on CRITICAL** is most important — missing a CRITICAL batch is worse than a false alarm.",
-    "Optimization Metrics": "- **Batches Optimised** = number of at-risk records the LP solver successfully found an optimal allocation for\n- **Total Net Savings** = total USD value recovered vs. passively letting stock expire\n- **Avg Saving / Batch** = average recovery per batch — higher means the LP is finding high-value opportunities",
-    "Optimization Charts":  "The **allocation pie** shows the aggregate split of all at-risk units across the 4 channels (Dispatch / Transfer / Liquidate / Dispose). The **scatter plot** shows individual batch savings vs. their DTE — batches further left (less time) tend to have lower savings because options are more limited.",
-    "Freight Table":        "This table lists all warehouse-to-warehouse routes sorted by **ambient transfer cost** (cheapest first).\n\nTo find the best transfer route:\n1. Identify a source warehouse with excess near-expiry stock (from Expiry Risk page)\n2. Identify a destination warehouse with high demand (from Demand page)\n3. Look up the cost in this table and cross-check with the heatmap",
-}
+def build_glossary(is_in=False):
+    c_sym = "₹" if is_in else "$"
+    c_code = "INR" if is_in else "USD"
+    agency = "CDSCO / State FDA" if is_in else "US FDA"
+    f_statute = "CDSCO Schedule M (Sec 8.2) & IP GSP" if is_in else "FDA 21 CFR §211.150 & USP <1079>"
+    cc_statute = "Indian Pharmacopoeia (IP) Cold-Chain & Zone IVb (30°C/75% RH)" if is_in else "USP <659> Cold-Chain & Zone II (25°C/60% RH)"
+    ctrl_law = "NDPS Act & Schedule X/H1" if is_in else "DEA Schedule II–V (21 CFR Part 1304)"
+    
+    return {
+        # ── KPI Cards ──────────────────────────────────────────────────────────
+        "Total Inventory Value": (
+            f"**Total Inventory Value** is the total {c_code} value of all pharmaceutical stock "
+            f"currently held across every warehouse.\n\n"
+            f"📌 *Calculated as:* `quantity_on_hand × unit_price` summed for every batch.\n\n"
+            f"💡 A high value means more working capital is tied up in stock — monitor alongside expiry risk to avoid write-offs."
+        ),
+        "At-Risk Value": (
+            f"**At-Risk Value** is the total {c_code} value of stock that is EXPIRED, within 30 days "
+            f"of expiry (CRITICAL), or within 30–90 days (HIGH).\n\n"
+            f"📌 *Formula:* Sum of inventory value for risk tiers EXPIRED + CRITICAL + HIGH.\n\n"
+            f"🔴 High at-risk value requires urgent action: emergency dispatch, secondary liquidation, or inter-warehouse transfer."
+        ),
+        "FEFO Compliance": (
+            f"**FEFO = First Expiry, First Out** — a mandatory Good Distribution Practice requirement under **{f_statute}**.\n\n"
+            f"When dispatching pharmaceutical orders, operators *must* pick the batch with the earliest expiry date first.\n\n"
+            f"📌 *Formula:* `(Compliant Picks / Total Picks) × 100`\n\n"
+            f"✅ **Target ≥ 97.0%** ({agency} industry standard). Falling below this risks regulatory audit findings and patient safety issues."
+        ),
+        "FEFO Compliance Detail": (
+            f"**📐 How FEFO Compliance is Measured ({agency} Standards):**\n\n"
+            f"1. **Audit Methodology:** Every outbound pick transaction in the warehouse pick ledger is cross-referenced with available batches at that exact timestamp.\n\n"
+            f"2. **Pick Evaluation:**\n"
+            f"   - ✅ **Compliant (`is_fefo_compliant = True`):** Operator picked the batch with earliest expiration date in the facility.\n"
+            f"   - ❌ **Violation (`is_fefo_compliant = False`):** A fresher batch was picked, leaving older stock stranded to expire.\n\n"
+            f"3. **Formula:**\n"
+            f"   $$\\text{{FEFO Compliance Rate (\\%)}} = \\left( \\frac{{\\text{{Compliant Picks}}}}{{\\text{{Total Audited Picks}}}} \\right) \\times 100$$\n\n"
+            f"4. **Governing Statute:** **{f_statute}** ({'CDSCO Schedule M Section 8.2 & Rules 71-78' if is_in else 'FDA 21 CFR §211.150'})."
+        ),
+        "Regulatory Standing": (
+            f"**Regulatory Standing** evaluates the warehouse network's audit-readiness under **{f_statute}**:\n\n"
+            f"- **🟢 Audit-Ready (≥ 97.0%)**: Strict compliance with {agency} standards; minimal inspection risk.\n\n"
+            f"- **🟡 Gap / Warning (90.0%–96.9%)**: Out-of-sequence picking detected; risk of {'CDSCO Schedule M inspectional non-conformance' if is_in else 'FDA Form 483 inspectional observations'}.\n\n"
+            f"- **🔴 Critical Non-Compliance (< 90.0%)**: Severe stock rotation breakdown; risk of {'CDSCO show-cause notice & license risk' if is_in else 'FDA Warning Letter & mandatory product write-offs'}."
+        ),
+        "Avg Fill Rate": (
+            f"**Average Fill Rate (Service Level)** measures how much customer demand was fulfilled on time.\n\n"
+            f"📌 *Formula:* `(Units Dispatched / Units Demanded) × 100`, averaged over 24 months.\n\n"
+            f"✅ **Target ≥ 97%**. Below 95% indicates stockouts — downstream healthcare providers may face medicine shortages."
+        ),
+        "IoT Excursion Rate": (
+            f"**Thermal Excursion Rate** = % of IoT sensor readings outside safe storage range (2–8°C for cold-chain products).\n\n"
+            f"📌 *Formula:* `(Excursion Readings / Total Readings) × 100`\n\n"
+            f"🌡️ **Standard:** **{cc_statute}**. Temperature excursions degrade drug potency and require immediate QA quarantine investigation."
+        ),
+        "Active Products": (
+            f"**Active Products** = count of unique pharmaceutical SKUs currently held across the warehouse network.\n\n"
+            f"💡 High SKU count increases picking complexity and demands strict barcode-driven FEFO controls."
+        ),
+        "Warehouses": (
+            f"**Warehouses** = count of active distribution centers (DCs) tracked across the network.\n\n"
+            f"Each facility is monitored for temperature control capability, stock levels, and FEFO picking compliance."
+        ),
+        "Total Stock Units": (
+            f"**Total Stock Units** = physical sum of `quantity_on_hand` (capsules, vials, ampoules, tablets) across all batches."
+        ),
+        "Cold-Chain Value": (
+            f"**Cold-Chain Value %** = % of total inventory value requiring refrigerated storage (2–8°C per {cc_statute}).\n\n"
+            f"🧊 Cold-chain stock (biologics, vaccines, insulins) carries high unit value and strict compliance liability."
+        ),
+        # ── Charts ─────────────────────────────────────────────────────────────
+        "Inventory Overview": (
+            f"**Inventory Overview** shows 8 panels covering the key dimensions of your stock:\n\n"
+            f"- **Value by WH** — which warehouses hold the most {c_code} value\n"
+            f"- **Expiry Risk** — how much stock is near or past expiry\n"
+            f"- **Units by Pharma Class** — drug category breakdown\n"
+            f"- **Controlled Substances** — proportion subject to {ctrl_law}\n"
+            f"- **DTE Histogram** — distribution of days-to-expiry across all batches\n"
+            f"- **Value by Dosage Form** — tablets vs injectables vs solutions etc.\n"
+            f"- **Cold-Chain by WH** — which warehouses carry the most temperature-sensitive stock\n"
+            f"- **QC Status** — proportion released, quarantined, or under review"
+        ),
+        "ABC-FSN": (
+            f"**ABC-FSN Analysis** combines two segmentation methods:\n\n"
+            f"🔠 **ABC (Value-based Pareto)**\n"
+            f"- **A items** = top 20% of SKUs contributing 80% of inventory value → highest priority\n"
+            f"- **B items** = next 15% value (15% of SKUs)\n"
+            f"- **C items** = remaining 5% value — low priority, candidate for disposal\n\n"
+            f"⚡ **FSN (Velocity-based)**\n"
+            f"- **Fast movers** = high monthly dispatch rate → keep well-stocked\n"
+            f"- **Slow movers** = low but steady demand → monitor for over-stocking\n"
+            f"- **Non-moving** = no recent dispatch → expiry risk, consider liquidation\n\n"
+            f"💡 **A-Fast** items need constant replenishment. **C-Non-Moving** items need urgent attention before they expire."
+        ),
+        "FEFO Analysis": (
+            f"**FEFO Compliance Analysis** shows three views under **{f_statute}**:\n\n"
+            f"1. **By Warehouse** — compliance rate per DC (Red < 90%, Yellow 90–97%, Green ≥ 97%).\n"
+            f"2. **Monthly Trend** — 24-month trajectory of compliance.\n"
+            f"3. **NC-VaR Exposure** — financial value of stock dispatched out of sequence.\n\n"
+            f"📋 Non-compliant picks represent direct regulatory audit findings."
+        ),
+        "Expiry Risk Heatmap": (
+            f"**Expiry Risk Heatmap** shows three views:\n\n"
+            f"1. **Heatmap** — grid of warehouses × risk tiers.\n"
+            f"2. **At-Risk Value Bar** — {c_code} exposure from EXPIRED + CRITICAL + HIGH stock per warehouse.\n"
+            f"3. **DTE Scatter** — batch-by-batch days remaining vs {c_code} value.\n\n"
+            f"🎯 **Action zones:**\n"
+            f"- Red (EXPIRED): Mandatory regulatory disposal\n"
+            f"- Orange (CRITICAL <30d): Emergency dispatch or liquidation within days\n"
+            f"- Yellow (HIGH 30-90d): Proactive redistribution"
+        ),
+        "Demand Trend": (
+            f"**24-Month Demand & Seasonality Analysis** has 4 panels:\n\n"
+            f"1. **Demand vs Dispatch** — demanded volume vs actual fulfilled volume.\n"
+            f"2. **Fill Rate** — monthly service level (Green ≥ 97%, Red < 95%).\n"
+            f"3. **Seasonality** — average monthly demand by therapy area.\n"
+            f"4. **Revenue Trend** — total {c_code} value of dispatches per month."
+        ),
+        "ML Classifier": (
+            f"**Random Forest Expiry Risk Classifier** predicts near-expiry risk for active batches.\n\n"
+            f"📊 **Three panels:**\n"
+            f"1. **Feature Importance** — relative predictive weight of each feature.\n"
+            f"2. **Confusion Matrix** — classification accuracy per risk tier.\n"
+            f"3. **Predicted Distribution** — distribution of model predictions across current inventory."
+        ),
+        "LP Optimizer": (
+            f"**Linear Programming Cost Optimizer** minimizes total inventory holding, transportation, and destruction costs.\n\n"
+            f"🔢 **4 Channels:** Dispatch (highest recovery), Transfer, Secondary Liquidation (max 35%), and Certified Disposal.\n\n"
+            f"💰 **Net Saving ({c_code})** = revenue recovered minus holding and destruction costs."
+        ),
+        "IoT Monitor": (
+            f"**Cold-Chain IoT Telemetry Monitor** ({cc_statute}):\n\n"
+            f"1. **Temperature Profile** — real-time sensor readings (2–8°C safe zone).\n"
+            f"2. **Excursion Rate** — % readings violating temperature thresholds.\n"
+            f"3. **Humidity Distribution** — Relative Humidity control.\n"
+            f"4. **Alert Levels** — GREEN (normal), YELLOW (caution), RED (critical)."
+        ),
+        "Freight Rebalancing": (
+            f"**Inter-Warehouse Freight Rebalancing** identifies cost-effective transfer routes for at-risk stock:\n\n"
+            f"1. **Freight Cost Matrix** — transfer cost ({c_code} per unit) between distribution centers.\n"
+            f"2. **Logistics Tier** — Economy, Standard, Express."
+        ),
+        "Risk Tiers": (
+            f"**Expiry Risk Tiers** classify every batch by days remaining until expiration:\n\n"
+            f"| Tier | Days to Expiry | Mandated Action |\n"
+            f"| :--- | :--- | :--- |\n"
+            f"| 🔴 **EXPIRED** | < 0 days | Mandatory certified regulatory disposal |\n"
+            f"| 🟠 **CRITICAL** | 0–30 days | Emergency dispatch / secondary liquidation |\n"
+            f"| 🟡 **HIGH** | 31–90 days | Priority FEFO pick sequencing |\n"
+            f"| 🟨 **MEDIUM** | 91–180 days | Stock redistribution & monitoring |\n"
+            f"| 🟢 **LOW** | > 180 days | Standard warehouse management |"
+        ),
+        "QC Status": (
+            f"**QC Status** = Quality Control release status:\n\n"
+            f"- ✅ **RELEASED** — batch cleared for commercial distribution\n"
+            f"- ⏳ **QUARANTINE** — batch on QC hold pending testing\n"
+            f"- ❌ **REJECTED** — batch failed QC; mandatory disposal"
+        ),
+        "Pareto Curve": (
+            f"**Pareto Curve (80/20 Rule)**\n\n"
+            f"Shows cumulative % of total inventory {c_code} value across ranked SKUs (A: 80%, B: 15%, C: 5%)."
+        ),
+        "Capacity Utilisation": (
+            f"**Capacity Utilisation** = `(Units on Hand / Max Capacity) × 100`\n\n"
+            f"🟢 < 75% = healthy | 🟡 75–90% = caution | 🔴 > 90% = over-capacity risk."
+        ),
+        "DTE Histogram": (
+            f"**Days-to-Expiry (DTE) Distribution** shows batch concentration across the shelf-life timeline."
+        ),
+        "Feature Importance": (
+            f"**Feature Importance** ranks variables influencing the Random Forest risk classifier (DTE, Velocity, Cover Days, Value)."
+        ),
+        "Confusion Matrix": (
+            f"**Confusion Matrix** shows model classification accuracy across risk tiers."
+        ),
+        "Raw Material Stock": (
+            f"**Raw Material Stock Levels** tracks APIs, excipients, solvents, and packaging vs tailored restock thresholds."
+        ),
+        "Price Monitor": (
+            f"**Raw Material Price Monitor** tracks 12-month commodity price trends and generates procurement signals."
+        ),
+        "FEFO Header":          f"FEFO = First Expiry First Out per **{f_statute}**.",
+        "Demand Charts":        f"24-Month Demand, Dispatch, Fill Rate %, Seasonality, and {c_code} Revenue trends.",
+        "IoT Charts":           f"Cold-chain temperature, humidity, excursion frequency, and alert levels ({cc_statute}).",
+        "Heatmap Charts":       f"Spatial mapping of expiry risk across warehouse network in {c_code}.",
+        "LP Table":             f"Optimal batch allocation across Dispatch, Transfer, Liquidate, and Disposal in {c_code}.",
+        "FEFO Charts":          f"FEFO compliance rates, monthly trends, and NC-VaR exposure across warehouses under {f_statute}.",
+        "ABC-FSN Charts":       f"Pareto concentration curve, ABC value categories, and FSN velocity matrix.",
+        "FEFO Metric":          f"Overall Network FEFO Rate benchmarked against {agency} standard (≥ 97%).",
+        "ML Header":            f"Machine Learning risk prediction trained on live inventory.",
+        "ML Charts":            f"Feature Importance, Confusion Matrix, and Prediction breakdown.",
+        "Demand Header":        f"24-Month historical demand & seasonal distribution.",
+        "Heatmap Header":       f"Network-wide expiry risk and {c_code} capital exposure.",
+        "LP Header":            f"Linear programming cost minimization under regulatory constraints.",
+        "Freight Header":       f"Inter-warehouse freight cost matrix and route optimization.",
+        "Freight Charts":       f"Pairwise transfer cost heatmap and logistics tiers.",
+        "IoT Header":           f"Continuous cold-chain monitoring under {cc_statute}.",
+        "Summary Table":        f"Inventory count and {c_code} valuation by expiry risk tier.",
+        "Performance Metrics":  f"Model Accuracy, F1-Score, and test sample evaluation.",
+        "Classification Report":f"Precision, Recall, and F1 per risk category.",
+        "Optimization Metrics": f"Total Net Savings ({c_code}) and units protected via LP optimization.",
+        "Optimization Charts":  f"Optimal allocation pie and savings vs DTE scatter.",
+        "Freight Table":        f"Warehouse-to-warehouse freight rates sorted by ambient/cold transfer cost.",
+    }
 
+def get_current_glossary():
+    is_in = "India" in st.session_state.get("jurisdiction_toggle", "")
+    return build_glossary(is_in)
 
 def info_box(key, label="ℹ️ What does this mean?"):
-    """Render a Streamlit popover with the glossary explanation for the given key."""
-    explanation = GLOSSARY.get(key, f"*No explanation available for '{key}'.*")
+    """Render a Streamlit popover with the dynamically localized glossary explanation for the given key."""
+    glossary = get_current_glossary()
+    explanation = glossary.get(key, f"*No explanation available for '{key}'.*")
     with st.popover(label, use_container_width=False):
         st.markdown(explanation)
 
@@ -847,7 +771,7 @@ if selected_page == "🏠 Home & KPI Summary":
     # ── Top KPI strip ─────────────────────────────────────────────────────
     st.markdown('<div class="section-header">📊 Executive KPI Summary</div>', unsafe_allow_html=True)
     with st.expander("ℹ️ What do these KPIs mean?", expanded=False):
-        st.markdown(GLOSSARY["Total Inventory Value"] + "\n\n---\n\n" + GLOSSARY["FEFO Compliance"] + "\n\n---\n\n" + GLOSSARY["IoT Excursion Rate"])
+        st.markdown(get_current_glossary()["Total Inventory Value"] + "\n\n---\n\n" + get_current_glossary()["FEFO Compliance"] + "\n\n---\n\n" + get_current_glossary()["IoT Excursion Rate"])
 
     cols = st.columns(5)
     kpis = [
@@ -1225,15 +1149,17 @@ elif selected_page == "✅ FEFO Compliance":
     _fefo_status_txt = ("🟢 CDSCO Audit-Ready" if is_india else "🟢 FDA Audit-Ready") if _fefo_overall >= 97 else (("🟡 Schedule M Gap" if is_india else "🟡 FDA 483 Gap") if _fefo_overall >= 90 else "🔴 Critical Non-Compliance")
 
     _help_reg = (
-        f"Compliance classification under {fefo_statute}:\n\n"
-        "• 🟢 CDSCO Audit-Ready (≥97%): Strict adherence to Schedule M Sec 8.2; minimal inspection finding risk.\n"
-        "• 🟡 Schedule M Gap (90–96.9%): Out-of-sequence picking deviations; risk of GMP audit observation/notice.\n"
-        "• 🔴 Critical Non-Compliance (<90%): Severe rotation failure; risk of license suspension & regulatory disposal."
+        f"**Regulatory Standing ({reg_agency}):**\n\n"
+        "🟢 **Audit-Ready (≥ 97.0%)** — Schedule M Sec 8.2 compliant; minimal inspection risk.\n\n"
+        "🟡 **Schedule M Gap (90.0%–96.9%)** — Out-of-sequence picking; risk of GMP inspection observation.\n\n"
+        "🔴 **Critical Non-Compliance (< 90.0%)** — Severe rotation breakdown; license suspension risk.\n\n"
+        "*(See classification guide expander below for statutory details)*"
     ) if is_india else (
-        f"Compliance classification under {fefo_statute}:\n\n"
-        "• 🟢 FDA Audit-Ready (≥97%): Strict adherence to 21 CFR §211.150; minimal inspection finding risk.\n"
-        "• 🟡 FDA 483 Gap (90–96.9%): Out-of-sequence picking deviations; triggers Form 483 inspectional observations.\n"
-        "• 🔴 Critical Non-Compliance (<90%): Severe rotation failure; triggers FDA Warning Letter & mandatory disposal."
+        f"**Regulatory Standing ({reg_agency}):**\n\n"
+        "🟢 **Audit-Ready (≥ 97.0%)** — 21 CFR §211.150 compliant; minimal inspection risk.\n\n"
+        "🟡 **FDA 483 Gap (90.0%–96.9%)** — Out-of-sequence picking; Form 483 observation risk.\n\n"
+        "🔴 **Critical Non-Compliance (< 90.0%)** — Severe rotation breakdown; Warning Letter risk.\n\n"
+        "*(See classification guide expander below for statutory details)*"
     )
 
     # ── Executive Regulatory & NC-VaR KPI Strip ─────────────────────────
@@ -1509,7 +1435,7 @@ elif selected_page == "📈 Demand & Seasonality":
     st.markdown('<div class="section-header">📈 24-Month Demand Trend & Seasonality</div>', unsafe_allow_html=True)
     st.markdown('<div class="section-desc">Monthly demand vs dispatch | Service level (fill rate) | Seasonal patterns by therapy area | Revenue trajectory</div>', unsafe_allow_html=True)
     with st.expander("ℹ️ What these 4 charts show", expanded=False):
-        st.markdown(GLOSSARY["Demand Trend"])
+        st.markdown(get_current_glossary()["Demand Trend"])
     if not supp_ok:
         st.warning("Upload Monthly Demand data (via the template) to view this analysis.", icon="⚠️"); st.stop()
 
