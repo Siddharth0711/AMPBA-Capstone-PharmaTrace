@@ -49,6 +49,33 @@ st.markdown("""
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
 html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 .stApp { background: #0b0e1a; color: #e2e8f0; }
+.block-container { padding-top: 1.5rem !important; padding-bottom: 2rem !important; }
+
+/* Metric Widget Customization - compact & responsive */
+[data-testid="stMetricValue"] {
+    font-size: 1.25rem !important;
+    font-weight: 700 !important;
+    color: #00d4ff !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+}
+[data-testid="stMetricLabel"] {
+    font-size: 0.74rem !important;
+    font-weight: 600 !important;
+    color: #94a3b8 !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    letter-spacing: 0.03em !important;
+}
+[data-testid="stMetricDelta"] {
+    font-size: 0.70rem !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+}
+
 [data-testid="stSidebar"] {
     background: linear-gradient(180deg, #0f1628 0%, #0d1220 100%);
     border-right: 1px solid #1e2a45;
@@ -58,46 +85,46 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
     background: linear-gradient(135deg, #131929 0%, #1a2540 100%);
     border: 1px solid #1e3a5f;
     border-radius: 12px;
-    padding: 18px 22px;
+    padding: 14px 18px;
     text-align: center;
-    margin-bottom: 10px;
+    margin-bottom: 8px;
     box-shadow: 0 4px 24px rgba(0,0,0,0.4);
     transition: transform 0.2s;
 }
 .kpi-card:hover { transform: translateY(-2px); }
-.kpi-label { font-size: 11px; font-weight: 500; color: #64748b; letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 6px; }
-.kpi-value { font-size: 26px; font-weight: 700; }
-.kpi-sub   { font-size: 11px; color: #64748b; margin-top: 4px; }
+.kpi-label { font-size: 10px; font-weight: 500; color: #64748b; letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 4px; }
+.kpi-value { font-size: 22px; font-weight: 700; }
+.kpi-sub   { font-size: 10px; color: #64748b; margin-top: 3px; }
 .section-header {
     background: linear-gradient(90deg, #00d4ff22 0%, transparent 100%);
     border-left: 3px solid #00d4ff;
-    padding: 10px 16px;
+    padding: 8px 14px;
     border-radius: 0 8px 8px 0;
-    margin: 20px 0 10px 0;
-    font-size: 17px;
+    margin: 16px 0 8px 0;
+    font-size: 15px;
     font-weight: 600;
     color: #e2e8f0;
 }
-.section-desc { font-size: 12px; color: #64748b; font-style: italic; margin-bottom: 16px; padding-left: 4px; }
+.section-desc { font-size: 11px; color: #64748b; font-style: italic; margin-bottom: 12px; padding-left: 4px; }
 .nav-group-label {
     font-size: 9px; font-weight: 700; letter-spacing: 0.12em;
-    color: #475569; text-transform: uppercase; padding: 14px 0 4px 4px;
+    color: #475569; text-transform: uppercase; padding: 12px 0 4px 4px;
 }
 .alert-card {
-    border-radius: 10px; padding: 12px 16px; margin-bottom: 8px;
+    border-radius: 10px; padding: 10px 14px; margin-bottom: 6px;
     border-left: 4px solid;
-    font-size: 13px;
+    font-size: 12px;
 }
 .nav-card {
     background: linear-gradient(135deg,#131929,#1a2540);
     border:1px solid #1e3a5f; border-radius:12px;
-    padding:16px 14px; text-align:center; cursor:pointer;
+    padding:14px 12px; text-align:center; cursor:pointer;
     transition: transform .2s, border-color .2s;
 }
 .nav-card:hover { transform:translateY(-3px); border-color:#00d4ff55; }
-.nav-card-icon { font-size:24px; margin-bottom:6px; }
-.nav-card-title { font-size:12px; font-weight:600; color:#00d4ff; }
-.nav-card-desc  { font-size:10px; color:#64748b; margin-top:4px; }
+.nav-card-icon { font-size:22px; margin-bottom:4px; }
+.nav-card-title { font-size:11px; font-weight:600; color:#00d4ff; }
+.nav-card-desc  { font-size:9.5px; color:#64748b; margin-top:3px; }
 #MainMenu {visibility: hidden;} footer {visibility: hidden;}
 </style>
 """, unsafe_allow_html=True)
@@ -1124,15 +1151,16 @@ elif selected_page == "✅ FEFO Compliance":
 
     _fefo_overall = picks["is_fefo_compliant"].mean() * 100
     _total_picks_n = len(picks)
-    _fefo_status_txt = "🟢 FDA / USP Audit-Ready" if _fefo_overall >= 97 else ("🟡 Warning: Audit Gap" if _fefo_overall >= 90 else "🔴 Critical Non-Compliance")
+    _nc_val_str = f"${_nc_val_total/1e6:.2f}M" if _nc_val_total >= 1e6 else (f"${_nc_val_total/1e3:.1f}K" if _nc_val_total >= 1e3 else f"${_nc_val_total:,.0f}")
+    _fefo_status_txt = "🟢 Audit-Ready" if _fefo_overall >= 97 else ("🟡 Audit Gap" if _fefo_overall >= 90 else "🔴 Non-Compliant")
 
     # ── Executive Regulatory & NC-VaR KPI Strip ─────────────────────────
     fk1, fk2, fk3, fk4, fk5 = st.columns(5)
-    fk1.metric("Network FEFO Rate", f"{_fefo_overall:.2f}%", delta=f"{_fefo_overall-97:.2f}% vs 97% target", help="Percentage of outbound picks adhering to strict earliest-expiry sequencing")
+    fk1.metric("Network FEFO Rate", f"{_fefo_overall:.2f}%", delta=f"{_fefo_overall-97:.2f}% vs 97%", help="Percentage of outbound picks adhering to strict earliest-expiry sequencing (FDA target ≥ 97%)")
     fk2.metric("Total Picks Audited", f"{_total_picks_n:,}", help="Total warehouse outbound picking transactions audited")
-    fk3.metric("FEFO Violations", f"{_nc_picks_n:,}", delta=f"{_nc_picks_n/_total_picks_n*100:.1f}% error rate" if _total_picks_n>0 else "0%", delta_color="inverse", help="Picks where a fresher lot was dispatched ahead of an older lot")
-    fk4.metric("NC-VaR (Value at Risk)", f"${_nc_val_total:,.0f}", delta=f"{_nc_var_intensity:.1f}% of dispatch value", delta_color="inverse", help="Non-Compliance Value at Risk: Total dollar volume dispatched out of sequence")
-    fk5.metric("Regulatory Standing", _fefo_status_txt, help="FDA 21 CFR §211.150 and USP <1079> compliance classification")
+    fk3.metric("FEFO Violations", f"{_nc_picks_n:,}", delta=f"{_nc_picks_n/_total_picks_n*100:.1f}% error", delta_color="inverse", help="Picks where a fresher lot was dispatched ahead of an older lot")
+    fk4.metric("NC-VaR (Value at Risk)", _nc_val_str, delta=f"{_nc_var_intensity:.1f}% of dispatch", delta_color="inverse", help=f"Non-Compliance Value at Risk: ${_nc_val_total:,.0f} total dollar volume dispatched out of sequence")
+    fk5.metric("Regulatory Standing", _fefo_status_txt, help="Classification under FDA 21 CFR §211.150 and USP <1079>")
     
     with st.expander("📐 NC-VaR Metric Definition & Regulatory Standard (FDA 21 CFR §211.150)", expanded=False):
         st.markdown(r"""
