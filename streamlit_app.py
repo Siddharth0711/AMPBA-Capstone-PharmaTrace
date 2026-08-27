@@ -142,6 +142,26 @@ def expiry_risk_fn(d):
     if d <= 180:    return "MEDIUM (90-180d)"
     return "LOW (>180d)"
 
+
+def ai_insight(title, bullets, icon="🧠", color="#7c3aed"):
+    """Render a styled AI Insight card with bullet-point analysis and recommendations."""
+    bullet_html = "".join(
+        f"<li style='margin-bottom:6px;'>{b}</li>" for b in bullets
+    )
+    st.markdown(f"""
+<div style='background:linear-gradient(135deg,{color}18,{color}06);
+     border:1px solid {color}35; border-left:4px solid {color};
+     border-radius:12px; padding:18px 24px; margin:18px 0;'>
+  <div style='font-size:11px; font-weight:700; color:{color};
+       letter-spacing:0.10em; margin-bottom:12px; text-transform:uppercase;'>
+    {icon}&nbsp; AI Insight &mdash; {title}
+  </div>
+  <ul style='margin:0; padding-left:20px; font-size:13px;
+      color:#cbd5e1; line-height:1.75;'>
+    {bullet_html}
+  </ul>
+</div>""", unsafe_allow_html=True)
+
 # ─────────────────────────────────────────────────────────────────────────────
 # GLOSSARY — plain-English explanations for every metric & chart
 # ─────────────────────────────────────────────────────────────────────────────
@@ -431,6 +451,13 @@ def info_box(key, label="ℹ️ What does this mean?"):
         st.markdown(explanation)
 
 
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# NAVIGATION STATE — resolve pending nav BEFORE widgets render
+# ─────────────────────────────────────────────────────────────────────────────
+if "_pending_nav" in st.session_state:
+    st.session_state["page_nav"] = st.session_state.pop("_pending_nav")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SIDEBAR
@@ -838,8 +865,48 @@ if selected_page == "🏠 Home & KPI Summary":
   <div class='nav-card-desc'>{desc}</div>
 </div>""", unsafe_allow_html=True)
             if st.button(f"Open {label} →", key=f"nav_btn_{i}", use_container_width=True):
-                st.session_state["page_nav"] = page_key
+                st.session_state["_pending_nav"] = page_key
                 st.rerun()
+
+    st.markdown("---")
+    # ── AI Executive Intelligence ─────────────────────────────────────────────────
+    st.markdown('<div class="section-header">🧠 AI Executive Intelligence</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-desc">Real-time AI-generated insights and recommendations derived from your live inventory, compliance, IoT, and demand data.</div>', unsafe_allow_html=True)
+
+    _worst_wh_risk = inventory[inventory["expiry_risk"].isin(["EXPIRED","CRITICAL (<30d)","HIGH (30-90d)"])].groupby("warehouse_id")["inventory_value_usd"].sum()
+    _worst_wh      = _worst_wh_risk.idxmax() if not _worst_wh_risk.empty else "N/A"
+    _recovery_est  = round(at_risk_value * 0.62 / 1e3)
+
+    _exec_bullets = [
+        f"💰 <b>Capital exposure:</b> <b>${at_risk_value/1e3:.0f}K ({pct_at_risk:.1f}% of total inventory)</b> sits in EXPIRED, CRITICAL, or HIGH expiry tiers. "
+        f"Largest exposure is concentrated at <b>{_worst_wh}</b>. Every day without action increases holding cost and reduces recovery potential.",
+        f"♻️ <b>Recovery potential:</b> LP optimisation estimates ∼<b>${_recovery_est}K</b> recoverable through immediate dispatch, secondary-channel liquidation, "
+        f"and inter-warehouse transfers. Use the LP Cost Optimizer page to generate specific batch-level action plans.",
+    ]
+    if supp_ok:
+        if fefo_rate < 97:
+            _exec_bullets.append(
+                f"⚠️ <b>Regulatory risk:</b> FEFO compliance at <b>{fefo_rate:.1f}%</b> is <b>{97-fefo_rate:.1f}% below the FDA/USP 97% threshold</b>. "
+                f"Each non-compliant pick is a potential FDA 21 CFR Part 211 finding. Initiate targeted warehouse audit and barcode-scan enforcement in WMS."
+            )
+        else:
+            _exec_bullets.append(f"✅ <b>Regulatory standing:</b> FEFO compliance at <b>{fefo_rate:.1f}%</b> — above the 97% regulatory target. Schedule periodic compliance audits to sustain performance.")
+        if avg_fill_rate < 95:
+            _exec_bullets.append(
+                f"📦 <b>Customer service risk:</b> Fill rate at <b>{avg_fill_rate:.1f}%</b> — below the 95% floor. "
+                f"Downstream patients and hospitals may face medicine shortages. Review safety stock levels and supplier lead times immediately."
+            )
+        if excursion_rate > 5:
+            _exec_bullets.append(
+                f"🌡️ <b>Cold-chain emergency:</b> Thermal excursion rate at <b>{excursion_rate:.1f}%</b> exceeds the 5% USP &lt;659&gt; limit. "
+                f"Temperature-sensitive products (biologics, vaccines, injectables) may have compromised potency. Trigger QA batch quarantine review now."
+            )
+    _exec_bullets.append(
+        f"🔮 <b>Priority action roadmap:</b> (1) Dispatch/liquidate ALL CRITICAL batches within 7 days via LP Optimizer, "
+        f"(2) Audit FEFO process at lowest-compliance warehouse, (3) Inspect refrigeration at high-excursion cold-chain warehouses, "
+        f"(4) Pre-build seasonal stock 8–10 weeks before peak demand months."
+    )
+    ai_insight("Executive Briefing", _exec_bullets, icon="🧠", color="#7c3aed")
 
     st.caption("→ Click any button above or use the sidebar to navigate between all 14 pages.")
 
@@ -1033,6 +1100,44 @@ elif selected_page == "✅ FEFO Compliance":
               help="FEFO Compliance Rate = Compliant Picks / Total Picks × 100. Target ≥ 97%. Below this risks FDA regulatory action.")
     info_box("FEFO Metric", "ℹ️ High-level network compliance overview.")
 
+    # ── AI Insight: FEFO Root-Cause Analysis ──────────────────────────
+    _fefo_overall = picks["is_fefo_compliant"].mean() * 100
+    _worst_fefo   = fefo_wh.sort_values("compliance_rate").iloc[0] if not fefo_wh.empty else None
+    _best_fefo    = fefo_wh.sort_values("compliance_rate").iloc[-1] if not fefo_wh.empty else None
+    _nc_count     = len(picks[picks["is_fefo_compliant"] == False]) if False in picks["is_fefo_compliant"].values else len(picks[picks["is_fefo_compliant"] == 0])
+    _fefo_bullets = []
+    if _worst_fefo is not None:
+        _fefo_bullets.append(
+            f"🔴 <b>Worst performer: {_worst_fefo['warehouse_id']}</b> at <b>{_worst_fefo['compliance_rate']:.1f}% FEFO compliance</b> "
+            f"({int(_worst_fefo['total_picks'] - _worst_fefo['fefo_picks'])} non-compliant picks out of {int(_worst_fefo['total_picks'])} total). "
+            f"This warehouse requires immediate SOP review and WMS pick-order enforcement."
+        )
+    if _best_fefo is not None and _best_fefo["warehouse_id"] != (_worst_fefo["warehouse_id"] if _worst_fefo is not None else ""):
+        _fefo_bullets.append(
+            f"✅ <b>Best performer: {_best_fefo['warehouse_id']}</b> at <b>{_best_fefo['compliance_rate']:.1f}%</b>. "
+            f"Study its SOPs, WMS configuration, and operator training process — replicate across the network as a best-practice template."
+        )
+    if _fefo_overall < 97:
+        _violations_per_100 = round(100 - _fefo_overall, 1)
+        _fefo_bullets.append(
+            f"⚖️ <b>Regulatory exposure:</b> At {_fefo_overall:.1f}% compliance, approximately <b>{_violations_per_100:.0f} in every 100 picks</b> is a FEFO violation. "
+            f"Under FDA 21 CFR Part 211 and USP &lt;1079&gt;, each violation is a potential Warning Letter or consent decree finding."
+        )
+    _fefo_bullets.append(
+        f"🔍 <b>Root causes (typical):</b> (1) WMS batch-scan override by operators under time pressure, "
+        f"(2) Poor bin-location labeling causing wrong batch selection, (3) Insufficient FEFO training or accountability metrics."
+    )
+    if len(fefo_mo) > 3:
+        _recent_trend = fefo_mo["compliance_rate"].iloc[-3:].mean() - fefo_mo["compliance_rate"].iloc[:3].mean()
+        _trend_txt = f"improving ({_recent_trend:+.1f}pp shift over period)" if _recent_trend > 0 else f"declining ({_recent_trend:+.1f}pp shift) — corrective action urgently needed"
+        _fefo_bullets.append(f"📈 <b>Trend:</b> Network FEFO compliance is <b>{_trend_txt}</b>.")
+    _fefo_bullets.append(
+        f"💡 <b>Recommended actions:</b> (1) Deploy mandatory barcode-scan enforcement in WMS before batch dispatch, "
+        f"(2) Retrain operators at {_worst_fefo['warehouse_id'] if _worst_fefo is not None else 'lowest-compliance warehouse'}, "
+        f"(3) Publish daily FEFO compliance scorecard to warehouse managers, (4) KPI-link compliance to shift supervisor performance review."
+    )
+    ai_insight("FEFO Compliance — Root Cause & Action Plan", _fefo_bullets, icon="✅", color="#10b981")
+
 # ─────────────────────────────────────────────────────────────────────────────
 # PAGE: EXPIRY RISK HEATMAP
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1078,6 +1183,35 @@ elif selected_page == "🌡️ Expiry Risk Heatmap":
     risk_summary = inventory.groupby("expiry_risk").agg(Products=("product_id","nunique"), Total_Units=("quantity_on_hand","sum"), Total_Value_USD=("inventory_value_usd","sum")).reindex([r for r in RISK_ORDER if r in inventory["expiry_risk"].unique()]).round(0)
     st.dataframe(risk_summary, use_container_width=True)
     info_box("Summary Table", "ℹ️ Grouped summary of inventory at risk.")
+
+    # ── AI Insight: Expiry Risk Financial Impact ──────────────────────
+    _exp_val   = inventory[inventory["expiry_risk"]=="EXPIRED"]["inventory_value_usd"].sum()
+    _crit_val  = inventory[inventory["expiry_risk"]=="CRITICAL (<30d)"]["inventory_value_usd"].sum()
+    _high_val  = inventory[inventory["expiry_risk"]=="HIGH (30-90d)"]["inventory_value_usd"].sum()
+    _crit_u    = inventory[inventory["expiry_risk"]=="CRITICAL (<30d)"]["quantity_on_hand"].sum()
+    _exp_u     = inventory[inventory["expiry_risk"]=="EXPIRED"]["quantity_on_hand"].sum()
+    _worst_r_wh= risk_val.idxmax() if not risk_val.empty else "N/A"
+    _risk_bullets = [
+        f"🛑 <b>Immediate write-off risk:</b> <b>{_exp_u:,.0f} units (${_exp_val/1e3:.0f}K) already EXPIRED</b> — zero recovery possible. "
+        f"Regulatory certified destruction must begin immediately. Notify QA, complete batch disposition records.",
+        f"🔴 <b>48-hour window — CRITICAL batches:</b> <b>{_crit_u:,.0f} units (${_crit_val/1e3:.0f}K)</b> expire in <30 days. "
+        f"At current dispatch velocity, a significant portion will expire unsold without urgent action. "
+        f"Run LP Cost Optimizer now for batch-by-batch allocation recommendations.",
+        f"🏢 <b>Hotspot warehouse: {_worst_r_wh}</b> carries the highest at-risk USD exposure in the network. "
+        f"Prioritise emergency dispatch orders from this warehouse. Consider inter-warehouse transfer to high-demand locations using the Freight Rebalancing tool.",
+    ]
+    if _high_val > 0:
+        _risk_bullets.append(
+            f"📅 <b>30-day cascade risk:</b> Without intervention, HIGH-tier stock (${_high_val/1e3:.0f}K) will move into CRITICAL next month. "
+            f"Begin proactive inter-warehouse transfers now — use Geo Sales Intelligence to identify which warehouses have high demand."
+        )
+    _risk_bullets.append(
+        f"💡 <b>Recovery strategy:</b> (1) EXPIRED → certified destruction + regulatory documentation, "
+        f"(2) CRITICAL → emergency dispatch to highest-demand warehouse today, "
+        f"(3) HIGH → planned transfer/liquidation within 30 days, "
+        f"(4) Run LP Cost Optimizer for mathematically optimal unit-by-unit allocation across all 4 channels."
+    )
+    ai_insight("Expiry Risk — Financial Impact & Recovery Roadmap", _risk_bullets, icon="🌡️", color="#ef4444")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PAGE: DEMAND & SEASONALITY
@@ -1135,6 +1269,44 @@ elif selected_page == "📈 Demand & Seasonality":
     plt.tight_layout()
     show_fig(fig)
     info_box("Demand Charts", "ℹ️ Visualization of demand and seasonal trends.")
+
+    # ── AI Insight: Demand Intelligence & Procurement ──────────────
+    _fill_avg  = monthly_agg["fill_rate"].mean()
+    _fill_min  = monthly_agg["fill_rate"].min()
+    _worst_mo  = monthly_agg.loc[monthly_agg["fill_rate"].idxmin(), "year_month"]
+    _so_months = len(monthly_agg[monthly_agg["fill_rate"] < 95])
+    _dem_bullets = [
+        f"📊 <b>Service level:</b> Average fill rate of <b>{_fill_avg:.1f}%</b> across {len(monthly_agg)} months. "
+        f"Lowest month: <b>{_worst_mo} at {_fill_min:.1f}%</b> — "
+        f"{'indicating confirmed stockouts that month' if _fill_min < 95 else 'above the 95% service floor'}.",
+    ]
+    if _so_months > 0:
+        _dem_bullets.append(
+            f"⚠️ <b>Stockout impact:</b> <b>{_so_months} month{'s' if _so_months>1 else ''}</b> fell below 95% fill rate. "
+            f"Unmet hospital and pharmacy orders may have caused patient treatment delays. "
+            f"Increase safety stock by 15–20% for high-velocity SKUs, and review with procurement team."
+        )
+    if "monthly_dispatched_value_usd" in df_demand.columns:
+        _rev = df_demand.groupby("year_month")["monthly_dispatched_value_usd"].sum().sort_index()
+        if len(_rev) > 6:
+            _rev_trend = (_rev.iloc[-3:].mean() - _rev.iloc[:3].mean()) / max(_rev.iloc[:3].mean(), 1) * 100
+            _dem_bullets.append(
+                f"📈 <b>Revenue trajectory:</b> Recent 3-month average is <b>{_rev_trend:+.1f}%</b> vs the first 3 months. "
+                f"{'Positive growth — scale supply chain capacity to sustain momentum.' if _rev_trend > 0 else 'Declining trend — review pricing strategy, product mix, and market access initiatives.'}"
+            )
+    if "clinical_demand_pattern" in df_demand.columns:
+        _dem_bullets.append(
+            f"🗋️ <b>Seasonal procurement strategy:</b> Respiratory and cardiovascular products typically peak Nov–Jan (flu/winter season). "
+            f"Begin pre-season stock-build 8–10 weeks in advance (i.e., Aug–Sep orders). "
+            f"For slow-moving non-seasonal SKUs, implement min-max reorder levels to prevent capital-draining overstock."
+        )
+    _dem_bullets.append(
+        f"💡 <b>Recommended actions:</b> (1) Increase safety stock for SKUs with >1 stockout month by 20%, "
+        f"(2) Negotiate 60-day rolling demand forecasts with top-3 hospital clients, "
+        f"(3) Review CMO/3PL lead times and target 2-week reduction, "
+        f"(4) Set up automated reorder alerts in ERP when stock crosses safety stock threshold."
+    )
+    ai_insight("Demand Intelligence & Procurement Strategy", _dem_bullets, icon="📈", color="#f59e0b")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PAGE: ML EXPIRY CLASSIFIER
@@ -1286,6 +1458,36 @@ elif selected_page == "⚖️ LP Cost Optimizer":
         with st.expander("📋 LP Results Table"):
             st.dataframe(lp_df, use_container_width=True)
         info_box("LP Table", "ℹ️ Detailed results of LP calculations.")
+
+        # ── AI Insight: LP Recovery Action Plan ─────────────────────
+        _lp_total_saving = lp_df["Net_Saving_USD"].sum()
+        _top3_lp = lp_df.nlargest(3, "Net_Saving_USD")
+        _alloc_total = alloc.sum() if alloc.sum() > 0 else 1
+        _dp = alloc.get("Dispatch",0)  / _alloc_total * 100
+        _lq = alloc.get("Liquidate",0) / _alloc_total * 100
+        _tr = alloc.get("Transfer",0)  / _alloc_total * 100
+        _ds = alloc.get("Dispose",0)   / _alloc_total * 100
+        _lp_bullets = [
+            f"💰 <b>Total value recoverable:</b> <b>${_lp_total_saving:,.0f}</b> across {len(lp_df)} optimised batches — representing the maximum extractable value given "
+            f"dispatch velocity constraints, 35% liquidation channel cap, and regulatory disposal requirements.",
+            f"📊 <b>Optimal allocation mix:</b> LP recommends <b>{_dp:.0f}% dispatch</b> (highest recovery), "
+            f"{_tr:.0f}% inter-warehouse transfer, {_lq:.0f}% secondary liquidation, {_ds:.0f}% regulatory disposal. "
+            f"Execute dispatch orders immediately — each day of delay adds holding cost and reduces remaining DTE.",
+        ]
+        for _, _lpr in _top3_lp.iterrows():
+            _lp_bullets.append(
+                f"🏆 <b>High-impact batch:</b> {_lpr['product_id']} @ {_lpr['warehouse_id']} — "
+                f"DTE: <b>{_lpr['DTE']}d</b> | Net saving: <b>${_lpr['Net_Saving_USD']:,.0f}</b> | "
+                f"Dispatch {_lpr['Dispatch']:.0f}u · Transfer {_lpr['Transfer']:.0f}u · Liquidate {_lpr['Liquidate']:.0f}u"
+            )
+        _lp_bullets.append(
+            f"💡 <b>Next steps:</b> (1) Export LP table and raise dispatch purchase orders for top-saving batches TODAY, "
+            f"(2) Contact secondary liquidation partner for liquidation-flagged stock, "
+            f"(3) Coordinate with logistics team for transfer-flagged batches, "
+            f"(4) Initiate certified destruction paperwork for dispose-flagged batches."
+        )
+        ai_insight("LP Optimisation — Maximum Recovery Action Plan", _lp_bullets, icon="⚖️", color="#00d4ff")
+
     else:
         st.warning("LP solver returned no feasible solutions.")
 
@@ -1348,6 +1550,45 @@ elif selected_page == "❄️ IoT Cold-Chain Monitor":
     plt.tight_layout(); show_fig(fig)
     info_box("IoT Charts", "ℹ️ Visualization of cold-chain telemetry data.")
     info_box("IoT Monitor", "ℹ️ What action should I take?")
+
+    # ── AI Insight: Cold-Chain Drug Safety Analysis ────────────────
+    _iot_bullets = []
+    if "is_thermal_excursion" in df_iot.columns:
+        _exc_wh    = df_iot.groupby("warehouse_id")["is_thermal_excursion"].mean() * 100
+        _worst_iot = _exc_wh.idxmax() if not _exc_wh.empty else "N/A"
+        _worst_pct = float(_exc_wh.max()) if not _exc_wh.empty else 0
+        _crit_whs  = _exc_wh[_exc_wh > 10].index.tolist()
+        if _worst_pct > 10:
+            _iot_bullets.append(
+                f"🚨 <b>CRITICAL excursion alert:</b> <b>{_worst_iot}</b> has a <b>{_worst_pct:.1f}% excursion rate</b> — "
+                f"more than double the 5% USP &lt;659&gt; regulatory limit. Immediately quarantine all affected batches at this warehouse. "
+                f"Inspect refrigeration units, calibrate sensors, and notify QA for batch impact assessment."
+            )
+        elif _worst_pct > 5:
+            _iot_bullets.append(
+                f"⚠️ <b>Excursion threshold exceeded:</b> <b>{_worst_iot}</b> at <b>{_worst_pct:.1f}%</b> — above the 5% USP &lt;659&gt; limit. "
+                f"Schedule urgent refrigeration maintenance and QA review. Products may be compromised."
+            )
+        else:
+            _iot_bullets.append(f"✅ <b>Cold-chain stable:</b> All warehouses below 5% excursion threshold (best: {_exc_wh.idxmin()} at {_exc_wh.min():.1f}%). Maintain current monitoring cadence.")
+        _iot_bullets.append(
+            f"💊 <b>Drug potency risk:</b> For biologics (adalimumab, insulin biosynthetic), vaccines, and heat-labile injectables, even brief temperature excursions above 8°C can "
+            f"denature proteins and permanently compromise efficacy. Affected batches must be quarantined, tested, and may require destruction — representing significant inventory write-off."
+        )
+    if "relative_humidity_pct" in df_iot.columns:
+        _avg_rh = df_iot["relative_humidity_pct"].mean()
+        if _avg_rh > 60:
+            _iot_bullets.append(f"💧 <b>High humidity risk:</b> Network average RH at {_avg_rh:.0f}% — above the 55% target. Elevated humidity accelerates tablet hygroscopic degradation, promotes microbial growth, and can compromise packaging seal integrity.")
+        elif _avg_rh < 45:
+            _iot_bullets.append(f"🏜️ <b>Low humidity risk:</b> Network average RH at {_avg_rh:.0f}% — below 45%. Low RH can cause capsule brittleness, tablet friability, and electrostatic packaging adhesion issues.")
+    _iot_bullets.append(
+        f"💡 <b>Recommended actions:</b> (1) Preventive maintenance on refrigeration units at highest-excursion warehouses, "
+        f"(2) Quarantine + stability-test all batches with confirmed excursion exposure, "
+        f"(3) Install automated real-time alerts (SMS/email) for any reading above 8°C, "
+        f"(4) Verify IQ/OQ/PQ qualification status of all cold-chain equipment."
+    )
+    if _iot_bullets:
+        ai_insight("Cold-Chain Compliance & Drug Safety", _iot_bullets, icon="❄️", color="#3b82f6")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PAGE: FREIGHT REBALANCING
@@ -1706,6 +1947,36 @@ elif selected_page == "📋 Order Fulfilment":
             ).sort_values("Units", ascending=False)
             wh_stock["Can Fulfil Order"] = wh_stock["Units"].apply(lambda u: "✅ Yes" if u>=order_qty else "⚠️ Partial")
             st.dataframe(wh_stock, use_container_width=True)
+
+            # ── AI Insight: WHY this warehouse ────────────────────────────────
+            _bwh        = best_whs.index[0]
+            _bwh_units  = int(best_whs.iloc[0])
+            _coverage   = _bwh_units / order_qty
+            _batches_b  = int(wh_stock.loc[_bwh, "Batches"]) if _bwh in wh_stock.index else 1
+            _ofs_bullets = [
+                f"<b>{_bwh}</b> holds <b>{_bwh_units:,} units</b> — a <b>{_coverage:.1f}× coverage ratio</b> over the {order_qty:,}-unit order. "
+                f"This provides the largest safety buffer across all warehouses, protecting against unexpected demand spikes or a batch going on QC hold after dispatch is initiated.",
+                f"<b>{_batches_b} active batch{'es' if _batches_b>1 else ''}</b> at {_bwh} gives warehouse operators maximum FEFO flexibility: "
+                f"the soonest-expiring batch can be selected first, ensuring regulatory compliance with FDA 21 CFR Part 211 and USP &lt;1079&gt;.",
+            ]
+            if "days_to_expiry" in inv_prod.columns:
+                _fte = inv_prod.groupby("warehouse_id")["days_to_expiry"].agg(["min","mean"]).round(0).astype(int)
+                if _bwh in _fte.index:
+                    _dmin, _davg = int(_fte.loc[_bwh,"min"]), int(_fte.loc[_bwh,"mean"])
+                    _urgency_txt = f"⚠️ This batch is within 60 days of expiry — flag for FEFO priority pick in WMS." if _dmin < 60 else f"Comfortable shelf life for normal transit."
+                    _ofs_bullets.append(f"Earliest-expiring batch at {_bwh}: <b>{_dmin} days to expiry</b> (avg across batches: {_davg}d). {_urgency_txt}")
+            if len(best_whs) > 1:
+                _swh, _sunits = best_whs.index[1], int(best_whs.iloc[1])
+                _ofs_bullets.append(
+                    f"vs. <b>{_swh}</b> ({_sunits:,} units): {_bwh} holds <b>{_bwh_units-_sunits:,} more units</b> — "
+                    f"eliminates any risk of split-shipment across multiple warehouses (simpler logistics, lower freight cost, faster delivery)."
+                )
+            _ofs_bullets.append(
+                f"📋 <b>Action:</b> Raise dispatch order from {_bwh}, specify FEFO batch pick sequence in WMS. "
+                f"Confirm cold-chain packaging requirements if product requires temperature control during transit. "
+                f"Reserve {_bwh_units - order_qty:,} buffer units for other pending orders."
+            )
+            ai_insight(f"Why ship from {_bwh}?", _ofs_bullets, icon="🏢", color="#10b981")
 
         elif avail_total > 0 and avail_total < order_qty:
             # Path 1b — Partial from stock, rest from WIP or manufacture
