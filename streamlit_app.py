@@ -1122,9 +1122,86 @@ elif selected_page == "✅ FEFO Compliance":
     fefo_mo = picks.groupby("month").agg(total_picks=("transaction_id","count"), fefo_picks=("is_fefo_compliant","sum")).reset_index().sort_values("month")
     fefo_mo["compliance_rate"] = fefo_mo["fefo_picks"] / fefo_mo["total_picks"] * 100
 
+    _fefo_overall = picks["is_fefo_compliant"].mean() * 100
+    _total_picks_n = len(picks)
+    _nc_picks_n = len(picks[picks["is_fefo_compliant"]==False]) if False in picks["is_fefo_compliant"].values else len(picks[picks["is_fefo_compliant"]==0])
+    _fefo_status_txt = "🟢 FDA / USP Audit-Ready" if _fefo_overall >= 97 else ("🟡 Warning: Audit Gap" if _fefo_overall >= 90 else "🔴 Critical Non-Compliance")
+
+    # ── Executive Regulatory KPI Strip ──────────────────────────────────────
+    fk1, fk2, fk3, fk4 = st.columns(4)
+    fk1.metric("Network FEFO Rate", f"{_fefo_overall:.2f}%", delta=f"{_fefo_overall-97:.2f}% vs 97% target", help="Percentage of dispatches that strictly picked the earliest-expiring batch first")
+    fk2.metric("Total Picks Audited", f"{_total_picks_n:,}", help="Total warehouse outbound picking transactions tracked")
+    fk3.metric("FEFO Violations", f"{_nc_picks_n:,}", delta=f"{_nc_picks_n/_total_picks_n*100:.1f}% violation rate" if _total_picks_n>0 else "0%", delta_color="inverse", help="Non-compliant picks where a younger batch was selected ahead of an older lot")
+    fk4.metric("Regulatory Standing", _fefo_status_txt, help="Compliance status under FDA 21 CFR Part 211.150 and USP <1079>")
+    st.markdown("---")
+
+    # ── Interactive FEFO Dispatch Queue & Pick Slip Generator ───────────────
+    st.markdown('<div class="section-header">⚡ Live FEFO Pick Slip & Dispatch Queue Generator</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-desc">Select a product and enter the required order volume. The engine dynamically sequences available warehouse batches in strict First-Expiry-First-Out (FEFO) order, calculates batch allocations, and generates an FDA 21 CFR §211.150 audit-ready pick slip.</div>', unsafe_allow_html=True)
+
+    p_opts = sorted(products.product_id.unique().tolist()) if not products.empty else sorted(inventory.product_id.unique().tolist())
+    p_names = dict(zip(products.product_id, products.generic_name)) if not products.empty else {}
+
+    f_col1, f_col2, f_col3 = st.columns([2, 1, 1])
+    with f_col1:
+        sel_f_pid = st.selectbox("Select Product to Dispatch", p_opts, format_func=lambda x: f"{x} — {p_names.get(x, x)}", key="fefo_prod_sel")
+    with f_col2:
+        f_order_qty = st.number_input("Order Quantity (Units)", min_value=10, max_value=100000, value=800, step=50, key="fefo_qty_in")
+    with f_col3:
+        f_wh_filter = st.selectbox("Warehouse Filter", ["All Warehouses"] + sorted(inventory.warehouse_id.unique().tolist()), key="fefo_wh_sel")
+
+    prod_inv = inventory[inventory["product_id"] == sel_f_pid].copy()
+    if f_wh_filter != "All Warehouses":
+        prod_inv = prod_inv[prod_inv["warehouse_id"] == f_wh_filter]
+
+    if prod_inv.empty:
+        st.warning(f"No stock available for {sel_f_pid} ({p_names.get(sel_f_pid, sel_f_pid)}) in the selected warehouse.", icon="⚠️")
+    else:
+        prod_inv = prod_inv.sort_values(by=["days_to_expiry", "quantity_on_hand"], ascending=[True, False]).reset_index(drop=True)
+        rem_demand = f_order_qty
+        alloc_rows = []
+        for seq, (_, row) in enumerate(prod_inv.iterrows(), 1):
+            avail = int(row["quantity_on_hand"])
+            pick_qty = min(avail, rem_demand) if rem_demand > 0 else 0
+            rem_demand -= pick_qty
+            alloc_rows.append({
+                "FEFO Sequence": f"Priority Pick #{seq}" if pick_qty > 0 else "Reserve Stock",
+                "Batch ID": row.get("fp_batch_id", f"BATCH-{seq:03d}"),
+                "Warehouse": row["warehouse_id"],
+                "Expiry Date": str(pd.to_datetime(row["expiry_date"]).strftime("%Y-%m-%d")) if pd.notna(row.get("expiry_date")) else "N/A",
+                "Days to Expiry (DTE)": int(row["days_to_expiry"]) if pd.notna(row.get("days_to_expiry")) else 0,
+                "Risk Tier": row.get("expiry_risk", "Standard"),
+                "Available Stock": avail,
+                "Allocated to Pick": pick_qty,
+                "Remaining Stock": avail - pick_qty,
+                "Pick Instruction": "🟢 FULL PICK" if pick_qty == avail and pick_qty > 0 else ("🟡 PARTIAL PICK" if pick_qty > 0 else "⚪ DO NOT PICK (HOLD)"),
+            })
+        df_fefo_plan = pd.DataFrame(alloc_rows)
+        total_picked = df_fefo_plan["Allocated to Pick"].sum()
+
+        if total_picked >= f_order_qty:
+            st.success(f"✅ **FEFO Order Fully Allocated:** {total_picked:,} of {f_order_qty:,} units allocated across {len(df_fefo_plan[df_fefo_plan['Allocated to Pick']>0])} batch(es) in strict earliest-expiry order.", icon="✅")
+        else:
+            st.warning(f"⚠️ **Partial Stock Allocation:** Only {total_picked:,} of {f_order_qty:,} units available across active stock. Deficit: {f_order_qty - total_picked:,} units.", icon="⚠️")
+
+        st.dataframe(df_fefo_plan, use_container_width=True)
+
+        csv_slip = df_fefo_plan.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="📥 Download Official FEFO Dispatch Pick Slip (CSV)",
+            data=csv_slip,
+            file_name=f"FEFO_Pick_Slip_{sel_f_pid}_{datetime.now().strftime('%Y%m%d')}.csv",
+            mime="text/csv",
+            help="Export FEFO pick list for warehouse management and regulatory audit verification"
+        )
+
+    st.markdown("---")
+
+    # ── Section 2: Historical Compliance Analytics ─────────────────────────
+    st.markdown('<div class="section-header">📊 Historical FEFO Compliance Trends & Audit Inspection</div>', unsafe_allow_html=True)
     fig, axes = plt.subplots(1, 3, figsize=(22, 7))
     fig.patch.set_facecolor("#0f1117")
-    fig.suptitle("FEFO Compliance Rate Analysis", fontsize=14, color="#10b981", fontweight="bold", y=1.04)
+    fig.suptitle("FEFO Compliance Rate Analysis — Network Performance", fontsize=14, color="#10b981", fontweight="bold", y=1.04)
 
     ax = axes[0]
     colors_w = ["#10b981" if r>=97 else "#f59e0b" if r>=90 else "#ef4444" for r in fefo_wh["compliance_rate"]]
@@ -1155,17 +1232,17 @@ elif selected_page == "✅ FEFO Compliance":
     plt.tight_layout()
     show_fig(fig)
     info_box("FEFO Charts", "ℹ️ Visualize FEFO compliance trends.")
-    info_box("FEFO Analysis", "ℹ️ How to read these 3 charts")
-    st.metric("Overall Network FEFO Rate", f"{picks['is_fefo_compliant'].mean()*100:.2f}%",
-              delta=f"{picks['is_fefo_compliant'].mean()*100-97:.2f}% vs 97% target",
-              help="FEFO Compliance Rate = Compliant Picks / Total Picks × 100. Target ≥ 97%. Below this risks FDA regulatory action.")
-    info_box("FEFO Metric", "ℹ️ High-level network compliance overview.")
+
+    # ── Non-Compliant Pick Audit Ledger ────────────────────────────────────
+    if len(non_comp) > 0:
+        with st.expander(f"🔍 View Non-Compliant Pick Audit Ledger ({len(non_comp):,} violations)", expanded=False):
+            st.markdown("This ledger details picking events where operators breached First-Expiry-First-Out protocol. These transactions represent direct compliance audit risks.")
+            show_cols_nc = [c for c in ["transaction_id","timestamp","warehouse_id","product_id","quantity","is_fefo_compliant"] if c in non_comp.columns]
+            st.dataframe(non_comp[show_cols_nc].head(200), use_container_width=True)
 
     # ── AI Insight: FEFO Root-Cause Analysis ──────────────────────────
-    _fefo_overall = picks["is_fefo_compliant"].mean() * 100
     _worst_fefo   = fefo_wh.sort_values("compliance_rate").iloc[0] if not fefo_wh.empty else None
     _best_fefo    = fefo_wh.sort_values("compliance_rate").iloc[-1] if not fefo_wh.empty else None
-    _nc_count     = len(picks[picks["is_fefo_compliant"] == False]) if False in picks["is_fefo_compliant"].values else len(picks[picks["is_fefo_compliant"] == 0])
     _fefo_bullets = []
     if _worst_fefo is not None:
         _fefo_bullets.append(
