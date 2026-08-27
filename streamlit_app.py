@@ -509,7 +509,7 @@ with st.sidebar:
     is_india = "India" in jurisdiction
     USD_TO_INR = 83.50
 
-    def fmt_curr(val_usd, compact=True):
+    def fmt_curr(val_usd, compact=True, decimals=None):
         """Format currency dynamically for US (USD $) vs India (INR ₹ Lakhs/Crores)."""
         if pd.isna(val_usd): return "N/A"
         try:
@@ -527,6 +527,10 @@ with st.sidebar:
                     return f"₹{inr/1e3:.1f} K"
                 return f"₹{inr:,.0f}"
             else:
+                if decimals == 0:
+                    return f"₹{inr:,.0f}"
+                elif decimals is not None:
+                    return f"₹{inr:,.{decimals}f}"
                 return f"₹{inr:,.2f}"
         else:
             if compact:
@@ -536,6 +540,10 @@ with st.sidebar:
                     return f"${val/1e3:.1f}K"
                 return f"${val:,.0f}"
             else:
+                if decimals == 0:
+                    return f"${val:,.0f}"
+                elif decimals is not None:
+                    return f"${val:,.{decimals}f}"
                 return f"${val:,.2f}"
 
     curr_sym = "₹" if is_india else "$"
@@ -867,9 +875,9 @@ if selected_page == "🏠 Home & KPI Summary":
     expired = inventory[inventory["expiry_risk"]=="EXPIRED"]
     critical = inventory[inventory["expiry_risk"]=="CRITICAL (<30d)"]
     if not expired.empty:
-        alerts.append(("#7f1d1d", "🛑", f"**{len(expired)} batches EXPIRED** — ${expired['inventory_value_usd'].sum():,.0f} at risk of regulatory disposal"))
+        alerts.append(("#7f1d1d", "🛑", f"**{len(expired)} batches EXPIRED** — {fmt_curr(expired['inventory_value_usd'].sum(), compact=False, decimals=0)} at risk of regulatory disposal"))
     if not critical.empty:
-        alerts.append(("#ef4444", "🔴", f"**{len(critical)} batches CRITICAL** (<30 days) — ${critical['inventory_value_usd'].sum():,.0f} — dispatch or liquidate immediately"))
+        alerts.append(("#ef4444", "🔴", f"**{len(critical)} batches CRITICAL** (<30 days) — {fmt_curr(critical['inventory_value_usd'].sum(), compact=False, decimals=0)} — dispatch or liquidate immediately"))
     if supp_ok and fefo_rate < 97:
         alerts.append(("#f59e0b", "🟠", f"**FEFO Compliance {fefo_rate:.1f}%** — below 97% regulatory target. Review pick ledger."))
     if supp_ok and avg_fill_rate < 97:
@@ -900,13 +908,14 @@ if selected_page == "🏠 Home & KPI Summary":
     summary = inventory.groupby("warehouse_id").agg(
         Products    =("product_id","nunique"),
         Total_Units =("quantity_on_hand","sum"),
-        Value_USD   =("inventory_value_usd","sum"),
+        Value_Raw   =("inventory_value_usd","sum"),
         At_Risk     =("expiry_risk", lambda x: x.isin(["EXPIRED","CRITICAL (<30d)","HIGH (30-90d)"]).sum()),
     ).round(0)
     if "capacity_units" in warehouses.columns:
         wh_cap2 = warehouses.set_index("warehouse_id")["capacity_units"]
         summary["Util_%"] = (summary["Total_Units"] / wh_cap2 * 100).round(1)
-    summary["Value_USD"] = summary["Value_USD"].map("${:,.0f}".format)
+    summary[f"Value ({curr_code})"] = summary["Value_Raw"].apply(lambda v: fmt_curr(v, compact=False, decimals=0))
+    summary = summary.drop(columns=["Value_Raw"])
     st.dataframe(summary, use_container_width=True)
 
     st.markdown("---")
@@ -942,12 +951,12 @@ if selected_page == "🏠 Home & KPI Summary":
 
     _worst_wh_risk = inventory[inventory["expiry_risk"].isin(["EXPIRED","CRITICAL (<30d)","HIGH (30-90d)"])].groupby("warehouse_id")["inventory_value_usd"].sum()
     _worst_wh      = _worst_wh_risk.idxmax() if not _worst_wh_risk.empty else "N/A"
-    _recovery_est  = round(at_risk_value * 0.62 / 1e3)
+    _recovery_est  = at_risk_value * 0.62
 
     _exec_bullets = [
-        f"💰 <b>Capital exposure:</b> <b>${at_risk_value/1e3:.0f}K ({pct_at_risk:.1f}% of total inventory)</b> sits in EXPIRED, CRITICAL, or HIGH expiry tiers. "
+        f"💰 <b>Capital exposure:</b> <b>{fmt_curr(at_risk_value)} ({pct_at_risk:.1f}% of total inventory)</b> sits in EXPIRED, CRITICAL, or HIGH expiry tiers. "
         f"Largest exposure is concentrated at <b>{_worst_wh}</b>. Every day without action increases holding cost and reduces recovery potential.",
-        f"♻️ <b>Recovery potential:</b> LP optimisation estimates ∼<b>${_recovery_est}K</b> recoverable through immediate dispatch, secondary-channel liquidation, "
+        f"♻️ <b>Recovery potential:</b> LP optimisation estimates ∼<b>{fmt_curr(_recovery_est)}</b> recoverable through immediate dispatch, secondary-channel liquidation, "
         f"and inter-warehouse transfers. Use the LP Cost Optimizer page to generate specific batch-level action plans.",
     ]
     if supp_ok:
@@ -999,20 +1008,21 @@ elif selected_page == "📦 Inventory Overview":
     # Executive KPI summary strip
     kpi_inv1, kpi_inv2, kpi_inv3, kpi_inv4 = st.columns(4)
     kpi_inv1.metric("Filtered Records", f"{len(inv_f):,}", help="Number of active inventory batch records matching filter")
-    kpi_inv2.metric("Portfolio Value", f"${inv_f['inventory_value_usd'].sum()/1e3:,.0f}K", help="Total USD inventory valuation on hand")
+    kpi_inv2.metric("Portfolio Value", fmt_curr(inv_f['inventory_value_usd'].sum()), help=f"Total {curr_code} inventory valuation on hand")
     _cc_u = inv_f[inv_f['is_cold_chain']]['quantity_on_hand'].sum() if 'is_cold_chain' in inv_f.columns else 0
     kpi_inv3.metric("Cold-Chain Units", f"{_cc_u:,}", help="Biologics & cold-chain stock requiring continuous 2-8°C control")
     _at_risk_val = inv_f[inv_f['expiry_risk'].isin(['EXPIRED','CRITICAL (<30d)','HIGH (30-90d)'])]['inventory_value_usd'].sum()
-    kpi_inv4.metric("At-Risk Capital", f"${_at_risk_val/1e3:,.0f}K", delta=f"{_at_risk_val/max(inv_f['inventory_value_usd'].sum(),1)*100:.1f}% of total", delta_color="inverse", help="Value in Expired, Critical, or High risk tiers")
+    kpi_inv4.metric("At-Risk Capital", fmt_curr(_at_risk_val), delta=f"{_at_risk_val/max(inv_f['inventory_value_usd'].sum(),1)*100:.1f}% of total", delta_color="inverse", help="Value in Expired, Critical, or High risk tiers")
     st.markdown("---")
 
     fig, axes = plt.subplots(2, 4, figsize=(22, 10))
     fig.patch.set_facecolor("#0f1117")
     fig.suptitle("PharmaTrace AI — Inventory Overview Dashboard", fontsize=15, fontweight="bold", color="#00d4ff", y=1.02)
 
-    axes[0,0].barh(inv_f.groupby("warehouse_id")["inventory_value_usd"].sum().sort_values().index,
-                   inv_f.groupby("warehouse_id")["inventory_value_usd"].sum().sort_values().values/1e3, color="#00d4ff", alpha=0.85)
-    axes[0,0].set_title("Inventory Value by WH (USD K)"); axes[0,0].set_xlabel("USD K")
+    _wh_vals = inv_f.groupby("warehouse_id")["inventory_value_usd"].sum().sort_values()
+    _wh_plot_vals = _wh_vals.values/1e3 if not is_india else _wh_vals.values * USD_TO_INR / 1e5
+    axes[0,0].barh(_wh_vals.index, _wh_plot_vals, color="#00d4ff", alpha=0.85)
+    axes[0,0].set_title(f"Inventory Value by WH ({curr_code} {'Lakhs' if is_india else 'K'})"); axes[0,0].set_xlabel(f"{curr_code} {'Lakhs' if is_india else 'K'}")
 
     rc = inv_f["expiry_risk"].value_counts()
     axes[0,1].pie(rc.values, labels=rc.index, autopct="%1.0f%%", colors=[RISK_COLORS.get(r,"#888") for r in rc.index], wedgeprops={"edgecolor":"#0f1117","linewidth":1.5})
@@ -1036,8 +1046,9 @@ elif selected_page == "📦 Inventory Overview":
 
     if "dosage_form" in inv_f.columns:
         df_val = inv_f.groupby("dosage_form")["inventory_value_usd"].sum().nlargest(7).sort_values()
-        axes[1,1].barh(df_val.index.str[:18], df_val.values/1e3, color="#10b981", alpha=0.85)
-        axes[1,1].set_title("Value by Dosage Form (USD K)")
+        _df_plot_vals = df_val.values/1e3 if not is_india else df_val.values * USD_TO_INR / 1e5
+        axes[1,1].barh(df_val.index.str[:18], _df_plot_vals, color="#10b981", alpha=0.85)
+        axes[1,1].set_title(f"Value by Dosage Form ({curr_code} {'Lakhs' if is_india else 'K'})")
 
     cc = inv_f[inv_f["is_cold_chain"]].groupby("warehouse_id")["quantity_on_hand"].sum().sort_values()
     axes[1,2].barh(cc.index, cc.values/1e3, color="#3b82f6", alpha=0.85)
@@ -1054,7 +1065,11 @@ elif selected_page == "📦 Inventory Overview":
 
     with st.expander("📋 Raw Inventory Table"):
         cols_show = [c for c in ["product_id","generic_name","warehouse_id","quantity_on_hand","days_to_expiry","expiry_risk","inventory_value_usd","qc_status"] if c in inv_f.columns]
-        st.dataframe(inv_f[cols_show].head(500), use_container_width=True)
+        inv_f_display = inv_f[cols_show].copy()
+        if "inventory_value_usd" in inv_f_display.columns:
+            inv_f_display[f"inventory_value ({curr_code})"] = inv_f_display["inventory_value_usd"].apply(lambda v: fmt_curr(v, compact=False, decimals=0))
+            inv_f_display = inv_f_display.drop(columns=["inventory_value_usd"])
+        st.dataframe(inv_f_display.head(500), use_container_width=True)
 
     # ── AI Insight: Inventory Health & Capital Allocation ──────────────
     _inv_tot_val  = inv_f["inventory_value_usd"].sum()
@@ -1066,7 +1081,7 @@ elif selected_page == "📦 Inventory Overview":
     _qc_hold_cnt  = len(inv_f[inv_f["qc_status"]=="QUARANTINE / QC HOLD"]) if "qc_status" in inv_f.columns else 0
 
     _inv_bullets = [
-        f"💼 <b>Capital concentration:</b> <b>{_top_wh_name}</b> holds <b>{_top_wh_share:.1f}%</b> of total network inventory value (${_top_wh_val.max()/1e3:,.0f}K of ${_inv_tot_val/1e3:,.0f}K). High geographic concentration increases business vulnerability to facility disruptions.",
+        f"💼 <b>Capital concentration:</b> <b>{_top_wh_name}</b> holds <b>{_top_wh_share:.1f}%</b> of total network inventory value ({fmt_curr(_top_wh_val.max())} of {fmt_curr(_inv_tot_val)}). High geographic concentration increases business vulnerability to facility disruptions.",
         f"❄️ <b>Cold-Chain assets:</b> <b>{_cc_units:,.0f} units</b> require continuous 2–8°C thermal management (USP &lt;659&gt;). Cold storage capacity must be monitored to avoid thermal excursions and high-value biologic write-offs.",
     ]
     if _ctrl_units > 0:
@@ -1151,7 +1166,7 @@ elif selected_page == "🔶 ABC-FSN Segmentation":
         if not _a_slow.empty:
             _a_slow_val = _a_slow["total_value"].sum()
             _abc_bullets.append(
-                f"🚨 <b>Capital trap alert (Category A - Slow/Non-Moving):</b> <b>{len(_a_slow)} high-value SKU(s) (${_a_slow_val/1e3:,.0f}K total value)</b> have low dispatch velocity. "
+                f"🚨 <b>Capital trap alert (Category A - Slow/Non-Moving):</b> <b>{len(_a_slow)} high-value SKU(s) ({fmt_curr(_a_slow_val)} total value)</b> have low dispatch velocity. "
                 f"These represent significant working capital blockage and severe expiry risk. Negotiate return-to-vendor terms or reduce manufacturing batch sizes immediately."
             )
         _c_fast = prod_val[(prod_val["abc"]=="C") & (prod_val["fsn"]=="Fast")]
@@ -1319,11 +1334,12 @@ When an operator picks a newer batch, the older batch remains stranded on wareho
     if len(non_comp) > 0 and "warehouse_id" in non_comp.columns:
         nc_wh_val = non_comp.groupby("warehouse_id")["pick_val_usd"].sum().sort_values(ascending=True)
         nc_wh_cnt = non_comp.groupby("warehouse_id").size()
-        bars_nc = ax.barh(nc_wh_val.index, nc_wh_val.values/1e3, color="#ef4444", alpha=0.85)
-        ax.set_title("NC-VaR Exposure by Warehouse (USD K)", color="#ef4444", fontweight="bold"); ax.set_xlabel("Value at Risk (USD Thousands)")
+        _nc_plot_vals = nc_wh_val.values/1e3 if not is_india else nc_wh_val.values * USD_TO_INR / 1e5
+        bars_nc = ax.barh(nc_wh_val.index, _nc_plot_vals, color="#ef4444", alpha=0.85)
+        ax.set_title(f"NC-VaR Exposure by Warehouse ({curr_code} {'Lakhs' if is_india else 'K'})", color="#ef4444", fontweight="bold"); ax.set_xlabel(f"Value at Risk ({curr_code} {'Lakhs' if is_india else 'Thousands'})")
         for bar, (wh_id, val) in zip(bars_nc, nc_wh_val.items()):
             cnt = nc_wh_cnt.get(wh_id, 0)
-            ax.text(bar.get_width()+0.3, bar.get_y()+bar.get_height()/2, f"${val/1e3:.1f}K ({cnt} picks)", va="center", fontsize=8, color="#cbd5e1")
+            ax.text(bar.get_width()+0.3, bar.get_y()+bar.get_height()/2, f"{fmt_curr(val)} ({cnt} picks)", va="center", fontsize=8, color="#cbd5e1")
     else:
         ax.text(0.5, 0.5, "✅ Zero NC-VaR Exposure!", ha="center", va="center", transform=ax.transAxes, fontsize=13, color="#10b981")
 
@@ -1333,19 +1349,19 @@ When an operator picks a newer batch, the older batch remains stranded on wareho
 
     # ── Non-Compliant Pick Audit Ledger ────────────────────────────────────
     if len(non_comp) > 0:
-        with st.expander(f"🔍 View Non-Compliant Pick Audit Ledger ({len(non_comp):,} violations | ${_nc_val_total:,.0f} at risk)", expanded=False):
-            st.markdown(f"This audit ledger logs every outbound pick where operators bypassed older inventory. These **{len(non_comp):,} non-compliant transactions (${_nc_val_total:,.0f} total value)** represent direct regulatory audit findings and cause bypassed stock to decay into write-offs.")
+        with st.expander(f"🔍 View Non-Compliant Pick Audit Ledger ({len(non_comp):,} violations | {fmt_curr(_nc_val_total, compact=False, decimals=0)} at risk)", expanded=False):
+            st.markdown(f"This audit ledger logs every outbound pick where operators bypassed older inventory. These **{len(non_comp):,} non-compliant transactions ({fmt_curr(_nc_val_total, compact=False, decimals=0)} total value)** represent direct regulatory audit findings and cause bypassed stock to decay into write-offs.")
             nc_display = non_comp.copy()
             if "pick_val_usd" in nc_display.columns:
-                nc_display["Pick Value ($)"] = nc_display["pick_val_usd"].map("${:,.2f}".format)
-            show_cols_nc = [c for c in ["transaction_id","timestamp","warehouse_id","product_id","quantity","Pick Value ($)","batch_expiry_date","earliest_expiry_available","compliance_status"] if c in nc_display.columns]
+                nc_display[f"Pick Value ({curr_code})"] = nc_display["pick_val_usd"].apply(lambda v: fmt_curr(v, compact=False))
+            show_cols_nc = [c for c in ["transaction_id","timestamp","warehouse_id","product_id","quantity",f"Pick Value ({curr_code})","batch_expiry_date","earliest_expiry_available","compliance_status"] if c in nc_display.columns]
             st.dataframe(nc_display[show_cols_nc].head(200), use_container_width=True)
 
     # ── AI Insight: FEFO Root-Cause Analysis ──────────────────────────
     _worst_fefo   = fefo_wh.sort_values("compliance_rate").iloc[0] if not fefo_wh.empty else None
     _best_fefo    = fefo_wh.sort_values("compliance_rate").iloc[-1] if not fefo_wh.empty else None
     _fefo_bullets = [
-        f"💰 <b>Financial Value at Risk:</b> Non-compliant picks represent <b>${_nc_val_total:,.0f} in misallocated outbound volume</b>. "
+        f"💰 <b>Financial Value at Risk:</b> Non-compliant picks represent <b>{fmt_curr(_nc_val_total, compact=False, decimals=0)} in misallocated outbound volume</b>. "
         f"When younger batches are picked ahead of older stock, the bypassed lots remain stranded in storage until they cross into the &lt;30-day CRITICAL or EXPIRED tiers.",
     ]
     if _worst_fefo is not None:
@@ -1404,10 +1420,11 @@ elif selected_page == "🌡️ Expiry Risk Heatmap":
     ax = axes[1]
     at_risk = inventory[inventory["expiry_risk"].isin(["EXPIRED","CRITICAL (<30d)","HIGH (30-90d)"])]
     risk_val = at_risk.groupby("warehouse_id")["inventory_value_usd"].sum().sort_values(ascending=True)
-    ax.barh(risk_val.index, risk_val.values/1e3, color="#ef4444", alpha=0.85)
-    ax.set_title("At-Risk Inventory Value by Warehouse (USD K)"); ax.set_xlabel("USD K")
+    _rv_plot = risk_val.values/1e3 if not is_india else risk_val.values * USD_TO_INR / 1e5
+    ax.barh(risk_val.index, _rv_plot, color="#ef4444", alpha=0.85)
+    ax.set_title(f"At-Risk Inventory Value by Warehouse ({curr_code} {'Lakhs' if is_india else 'K'})"); ax.set_xlabel(f"{curr_code} {'Lakhs' if is_india else 'K'}")
     for bar, v in zip(ax.patches, risk_val.values):
-        ax.text(bar.get_width()+0.5, bar.get_y()+bar.get_height()/2, f"${v/1e3:.1f}K", va="center", fontsize=9)
+        ax.text(bar.get_width()+0.5, bar.get_y()+bar.get_height()/2, f"{fmt_curr(v)}", va="center", fontsize=9)
 
     ax = axes[2]
     sample = inventory.dropna(subset=["days_to_expiry"]).sample(min(2000, len(inventory)), random_state=42)
@@ -1434,9 +1451,9 @@ elif selected_page == "🌡️ Expiry Risk Heatmap":
     _exp_u     = inventory[inventory["expiry_risk"]=="EXPIRED"]["quantity_on_hand"].sum()
     _worst_r_wh= risk_val.idxmax() if not risk_val.empty else "N/A"
     _risk_bullets = [
-        f"🛑 <b>Immediate write-off risk:</b> <b>{_exp_u:,.0f} units (${_exp_val/1e3:.0f}K) already EXPIRED</b> — zero recovery possible. "
+        f"🛑 <b>Immediate write-off risk:</b> <b>{_exp_u:,.0f} units ({fmt_curr(_exp_val)}) already EXPIRED</b> — zero recovery possible. "
         f"Regulatory certified destruction must begin immediately. Notify QA, complete batch disposition records.",
-        f"🔴 <b>48-hour window — CRITICAL batches:</b> <b>{_crit_u:,.0f} units (${_crit_val/1e3:.0f}K)</b> expire in <30 days. "
+        f"🔴 <b>48-hour window — CRITICAL batches:</b> <b>{_crit_u:,.0f} units ({fmt_curr(_crit_val)})</b> expire in <30 days. "
         f"At current dispatch velocity, a significant portion will expire unsold without urgent action. "
         f"Run LP Cost Optimizer now for batch-by-batch allocation recommendations.",
         f"🏢 <b>Hotspot warehouse: {_worst_r_wh}</b> carries the highest at-risk USD exposure in the network. "
@@ -1444,7 +1461,7 @@ elif selected_page == "🌡️ Expiry Risk Heatmap":
     ]
     if _high_val > 0:
         _risk_bullets.append(
-            f"📅 <b>30-day cascade risk:</b> Without intervention, HIGH-tier stock (${_high_val/1e3:.0f}K) will move into CRITICAL next month. "
+            f"📅 <b>30-day cascade risk:</b> Without intervention, HIGH-tier stock ({fmt_curr(_high_val)}) will move into CRITICAL next month. "
             f"Begin proactive inter-warehouse transfers now — use Geo Sales Intelligence to identify which warehouses have high demand."
         )
     _risk_bullets.append(
@@ -1685,7 +1702,7 @@ elif selected_page == "🤖 ML Expiry Classifier":
     sim_c1, sim_c2, sim_c3, sim_c4 = st.columns(4)
     with sim_c1: sim_dte = st.slider("Days to Expiry (DTE)", 1, 365, 45, key="sim_dte_sl")
     with sim_c2: sim_qty = st.number_input("Batch Quantity (Units)", 50, 50000, 2500, step=100, key="sim_qty_in")
-    with sim_c3: sim_prc = st.number_input("Unit Price ($ USD)", 1.0, 5000.0, 45.0, step=5.0, key="sim_prc_in")
+    with sim_c3: sim_prc = st.number_input(f"Unit Price ({curr_sym} {curr_code})", 1.0, 500000.0, 45.0 if not is_india else 3750.0, step=5.0 if not is_india else 100.0, key="sim_prc_in")
     with sim_c4: sim_vel = st.number_input("Monthly Dispatch (Units/Mo)", 10, 10000, 400, step=50, key="sim_vel_in")
 
     sim_val = sim_qty * sim_prc
@@ -1719,9 +1736,9 @@ elif selected_page == "🤖 ML Expiry Classifier":
     <span style='font-size:13px; color:#cbd5e1;'>Confidence: <b>{sim_conf:.1f}%</b></span>
   </div>
   <div style='font-size:12px; color:#94a3b8; margin-top:6px;'>
-    Batch Value: <b>${sim_val:,.0f}</b> &nbsp;|&nbsp;
+    Batch Value: <b>{fmt_curr(sim_val, compact=False, decimals=0)}</b> &nbsp;|&nbsp;
     Stock Coverage: <b>{sim_cov:.0f} days</b> &nbsp;|&nbsp;
-    Daily Capital Exposure: <b>${sim_vpd:,.1f}/day</b>
+    Daily Capital Exposure: <b>{fmt_curr(sim_vpd, compact=False, decimals=1)}/day</b>
   </div>
   <div style='font-size:12px; color:#cbd5e1; margin-top:6px;'>
     <b>Recommended FEFO Action:</b> {'🚨 Critical risk: Expedite dispatch within 7 days or initiate inter-warehouse transfer via LP Optimizer.' if sim_color=='#ef4444' else ('⚠️ Moderate risk: Monitor weekly and prioritize in next picking cycle.' if sim_color=='#f59e0b' else '✅ Safe tier: Normal FEFO dispatch sequence. Stock levels and shelf life are balanced.')}
@@ -1802,8 +1819,8 @@ elif selected_page == "⚖️ LP Cost Optimizer":
         # ROI & Financial Impact Summary
         lp_k1, lp_k2, lp_k3, lp_k4 = st.columns(4)
         lp_k1.metric("Batches Optimised", f"{len(lp_df)}", help="Number of near-expiry inventory lots evaluated by the HiGHS simplex solver")
-        lp_k2.metric("Total Net Savings", f"${_tot_opt_saving:,.0f}", help="Total dollar value recovered vs default disposal write-off")
-        lp_k3.metric("Avg Saving / Batch", f"${lp_df['Net_Saving_USD'].mean():,.0f}", help="Average financial recovery per at-risk batch")
+        lp_k2.metric("Total Net Savings", fmt_curr(_tot_opt_saving, compact=False, decimals=0), help=f"Total {curr_code} value recovered vs default disposal write-off")
+        lp_k3.metric("Avg Saving / Batch", fmt_curr(lp_df['Net_Saving_USD'].mean(), compact=False, decimals=0), help=f"Average financial recovery per at-risk batch ({curr_code})")
         lp_k4.metric("Units Protected", f"{_tot_opt_qty:,}", help="Total pharmaceutical units allocated across optimal recovery channels")
         info_box("Optimization Metrics", "ℹ️ Performance metrics for LP optimization.")
         fig, axes = plt.subplots(1, 2, figsize=(18, 6)); fig.patch.set_facecolor("#0f1117")
@@ -1830,7 +1847,7 @@ elif selected_page == "⚖️ LP Cost Optimizer":
         _tr = alloc.get("Transfer",0)  / _alloc_total * 100
         _ds = alloc.get("Dispose",0)   / _alloc_total * 100
         _lp_bullets = [
-            f"💰 <b>Total value recoverable:</b> <b>${_lp_total_saving:,.0f}</b> across {len(lp_df)} optimised batches — representing the maximum extractable value given "
+            f"💰 <b>Total value recoverable:</b> <b>{fmt_curr(_lp_total_saving, compact=False, decimals=0)}</b> across {len(lp_df)} optimised batches — representing the maximum extractable value given "
             f"dispatch velocity constraints, 35% liquidation channel cap, and regulatory disposal requirements.",
             f"📊 <b>Optimal allocation mix:</b> LP recommends <b>{_dp:.0f}% dispatch</b> (highest recovery), "
             f"{_tr:.0f}% inter-warehouse transfer, {_lq:.0f}% secondary liquidation, {_ds:.0f}% regulatory disposal. "
@@ -1839,7 +1856,7 @@ elif selected_page == "⚖️ LP Cost Optimizer":
         for _, _lpr in _top3_lp.iterrows():
             _lp_bullets.append(
                 f"🏆 <b>High-impact batch:</b> {_lpr['product_id']} @ {_lpr['warehouse_id']} — "
-                f"DTE: <b>{_lpr['DTE']}d</b> | Net saving: <b>${_lpr['Net_Saving_USD']:,.0f}</b> | "
+                f"DTE: <b>{_lpr['DTE']}d</b> | Net saving: <b>{fmt_curr(_lpr['Net_Saving_USD'], compact=False, decimals=0)}</b> | "
                 f"Dispatch {_lpr['Dispatch']:.0f}u · Transfer {_lpr['Transfer']:.0f}u · Liquidate {_lpr['Liquidate']:.0f}u"
             )
         _lp_bullets.append(
@@ -2083,7 +2100,7 @@ elif selected_page == "🧪 Raw Materials & Pricing":
     k1.metric("Total Materials",      f"{len(df_rm)}",                   help="Total distinct raw material SKUs tracked")
     k2.metric("🔴 Critical / Order Now", f"{len(critical)}",              delta=None, help="Stock below restock threshold — PO required immediately")
     k3.metric("🟠 Low / Reorder Soon",  f"{len(low)}",                  delta=None, help="Stock within 40% of restock threshold — place order this week")
-    k4.metric("Total Stock Value",    f"${df_rm.stock_value_usd.sum()/1e3:.0f}K", help="USD value of all raw materials currently on hand")
+    k4.metric("Total Stock Value", fmt_curr(df_rm.stock_value_usd.sum()), help=f"{curr_code} value of all raw materials currently on hand")
 
     st.markdown("---")
 
@@ -2214,7 +2231,7 @@ elif selected_page == "🧪 Raw Materials & Pricing":
             f"Manufacturing lines cannot start new campaigns without full active ingredient availability. Issue purchase orders immediately."
         )
     _rm_bullets.append(
-        f"💎 <b>High-value material exposure:</b> <b>{_high_cost_rm['material_name']}</b> costs <b>${_high_cost_rm['unit_price_usd']:,.2f} per {_high_cost_rm['uom']}</b> (${_high_cost_rm['stock_value_usd']/1e3:,.0f}K total value). "
+        f"💎 <b>High-value material exposure:</b> <b>{_high_cost_rm['material_name']}</b> costs <b>{fmt_curr(_high_cost_rm['unit_price_usd'], compact=False, decimals=2)} per {_high_cost_rm['uom']}</b> ({fmt_curr(_high_cost_rm['stock_value_usd'])} total value). "
         f"Maintain lean, precise reorder quantities to minimize working capital blockage."
     )
     if _rising_rm:
@@ -2777,7 +2794,7 @@ elif selected_page == "🌐 Network Rebalancing & Transfers":
     nk1.metric("🔥 HOT Stockout Risks", len(hot), help="High demand + low stock (<25th percentile) — immediate stockout exposure")
     nk2.metric("❄️ COLD Capital Traps", len(cold), help="Low demand + surplus stock (>120 days of stock) — trapped working capital")
     nk3.metric("🚛 Transfers Recommended", len(transfer_recs), help="Locations where inter-warehouse stock transfer is cheaper than new manufacturing")
-    nk4.metric("💰 Transfer Net Savings", f"${tot_sav:,.0f}", help="Total dollars saved by rebalancing inventory across warehouses vs CMO manufacturing")
+    nk4.metric("💰 Transfer Net Savings", fmt_curr(tot_sav, compact=False, decimals=0), help=f"Total {curr_code} saved by rebalancing inventory across warehouses vs CMO manufacturing")
     st.markdown("---")
 
     # ── SECTION 1: GEOGRAPHIC DEMAND & INVENTORY HEATMAPS ────────────────────
@@ -2833,7 +2850,7 @@ elif selected_page == "🌐 Network Rebalancing & Transfers":
             is_trans = rec["Recommended"].startswith("🚛")
             b_col = "#10b981" if is_trans else "#7c3aed"
             icon_t = "🚛" if is_trans else "🏷️"
-            sav_txt = f"**Save ${rec['Est. Saving ($)']:,.0f}**" if rec["Est. Saving ($)"] > 0 else "Cost-optimised"
+            sav_txt = f"**Save {fmt_curr(rec['Est. Saving ($)'], compact=False, decimals=0)}**" if rec["Est. Saving ($)"] > 0 else "Cost-optimised"
             st.markdown(f"""
 <div style='background:#0f1a2a; border-left:5px solid {b_col}; border-radius:10px; padding:12px 18px; margin-bottom:8px;'>
   <div style='display:flex; justify-content:space-between; align-items:center;'>
@@ -2890,7 +2907,7 @@ elif selected_page == "🌐 Network Rebalancing & Transfers":
     _hot_cnt  = len(hot)
     _cold_cnt = len(cold)
     _net_bullets = [
-        f"🌐 <b>Network Arbitrage Opportunity:</b> <b>{_hot_cnt} demand hotspot(s)</b> face stockout risks while <b>{_cold_cnt} cold location(s)</b> hold surplus inventory (>120 days of stock). Rebalancing inventory between nodes captures <b>${tot_sav:,.0f} in net savings</b>.",
+        f"🌐 <b>Network Arbitrage Opportunity:</b> <b>{_hot_cnt} demand hotspot(s)</b> face stockout risks while <b>{_cold_cnt} cold location(s)</b> hold surplus inventory (>120 days of stock). Rebalancing inventory between nodes captures <b>{fmt_curr(tot_sav, compact=False, decimals=0)} in net savings</b>.",
         f"⚡ <b>Lead-Time Advantage:</b> Inter-warehouse truck freight arrives in <b>2–4 days</b> versus <b>3–6 weeks</b> for full CMO batch production, protecting critical hospital service levels and preventing patient medicine shortages.",
         f"🌿 <b>ESG & Waste Prevention:</b> Transferring existing stock prevents over-production and avoids future certified destruction costs on expiring surplus stock.",
         f"💡 <b>Logistics Manager Action Plan:</b> (1) Authorize recommended 🚛 Transfers with highest net $ savings immediately, (2) Consolidate regional shipments into full-truckload (FTL) movements to capture lower freight tariffs, (3) Trigger 🏷️ Manufacturing only where no surplus inventory exists across the network."
