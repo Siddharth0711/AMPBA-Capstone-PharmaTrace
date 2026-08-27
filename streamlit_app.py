@@ -1353,25 +1353,47 @@ elif selected_page == "📈 Demand & Seasonality":
     if not supp_ok:
         st.warning("Upload Monthly Demand data (via the template) to view this analysis.", icon="⚠️"); st.stop()
 
-    monthly_agg = df_demand.groupby("year_month").agg(demanded=("quantity_demanded_units","sum"), dispatched=("quantity_dispatched_units","sum")).reset_index().sort_values("year_month")
-    monthly_agg["fill_rate"] = monthly_agg["dispatched"] / monthly_agg["demanded"] * 100
+    # Product Filter Dropdown
+    p_names_dem = dict(zip(products.product_id, products.generic_name)) if not products.empty else {}
+    dem_p_opts = ["All Products (Macro Portfolio View)"] + sorted(df_demand["product_id"].unique().tolist()) if "product_id" in df_demand.columns else ["All Products (Macro Portfolio View)"]
+    
+    sel_dem_p = st.selectbox(
+        "Select Product to Analyze (or Macro View)",
+        dem_p_opts,
+        format_func=lambda x: f"{x} — {p_names_dem.get(x, x)}" if x != "All Products (Macro Portfolio View)" else x,
+        key="dem_p_sel"
+    )
+
+    df_dem_f = df_demand.copy()
+    if sel_dem_p != "All Products (Macro Portfolio View)":
+        df_dem_f = df_dem_f[df_dem_f["product_id"] == sel_dem_p]
+        p_label_chart = f"{sel_dem_p} ({p_names_dem.get(sel_dem_p, sel_dem_p)})"
+        u_scale = 1e3
+        u_unit = "Thousands"
+    else:
+        p_label_chart = "All Products Combined"
+        u_scale = 1e6
+        u_unit = "Millions"
+
+    monthly_agg = df_dem_f.groupby("year_month").agg(demanded=("quantity_demanded_units","sum"), dispatched=("quantity_dispatched_units","sum")).reset_index().sort_values("year_month")
+    monthly_agg["fill_rate"] = (monthly_agg["dispatched"] / monthly_agg["demanded"].replace(0,1) * 100).clip(0, 100)
 
     fig, axes = plt.subplots(2, 2, figsize=(20, 12))
     fig.patch.set_facecolor("#0f1117")
-    fig.suptitle("24-Month Demand Trend & Seasonality Analysis", fontsize=14, color="#00d4ff", fontweight="bold", y=1.03)
+    fig.suptitle(f"24-Month Demand Trend & Seasonality — {p_label_chart}", fontsize=14, color="#00d4ff", fontweight="bold", y=1.03)
     step = max(1, len(monthly_agg)//8)
     x = range(len(monthly_agg))
 
     ax = axes[0, 0]
-    ax.plot(x, monthly_agg["demanded"]/1e6,   label="Demanded",   color="#00d4ff", lw=2)
-    ax.plot(x, monthly_agg["dispatched"]/1e6, label="Dispatched", color="#10b981", lw=2, linestyle="--")
-    ax.fill_between(x, monthly_agg["demanded"]/1e6, monthly_agg["dispatched"]/1e6, alpha=0.2, color="#ef4444", label="Unfulfilled")
+    ax.plot(x, monthly_agg["demanded"]/u_scale,   label="Demanded",   color="#00d4ff", lw=2)
+    ax.plot(x, monthly_agg["dispatched"]/u_scale, label="Dispatched", color="#10b981", lw=2, linestyle="--")
+    ax.fill_between(x, monthly_agg["demanded"]/u_scale, monthly_agg["dispatched"]/u_scale, alpha=0.2, color="#ef4444", label="Unfulfilled")
     ax.set_xticks(list(x)[::step]); ax.set_xticklabels(monthly_agg["year_month"].tolist()[::step], rotation=30, ha="right", fontsize=8)
-    ax.set_title("Aggregate Monthly Demand vs Dispatch (M Units)"); ax.set_ylabel("Units (Millions)"); ax.legend(fontsize=9)
+    ax.set_title(f"Monthly Demand vs Dispatch ({u_unit} Units)"); ax.set_ylabel(f"Units ({u_unit})"); ax.legend(fontsize=9)
 
     ax = axes[0, 1]
     ax.bar(x, monthly_agg["fill_rate"], color=["#ef4444" if f<95 else "#10b981" for f in monthly_agg["fill_rate"]], alpha=0.85)
-    ax.axhline(97, color="#00d4ff", linestyle="--", lw=2, label="Target SL 97%"); ax.set_ylim(88, 101)
+    ax.axhline(97, color="#00d4ff", linestyle="--", lw=2, label="Target SL 97%"); ax.set_ylim(max(0, monthly_agg["fill_rate"].min() - 10), 101)
     ax.set_xticks(list(x)[::step]); ax.set_xticklabels(monthly_agg["year_month"].tolist()[::step], rotation=30, ha="right", fontsize=8)
     ax.set_title("Monthly Service Level / Fill Rate (%)"); ax.legend(fontsize=9)
 
@@ -1384,16 +1406,18 @@ elif selected_page == "📈 Demand & Seasonality":
             gs2 = grp.sort_values("month_num")
             ax.plot(gs2["month_num"], gs2["quantity_demanded_units"], label=pat[:30], lw=2, marker="o", markersize=4, color=PALETTE[i%len(PALETTE)])
         ax.set_xticks(range(1,13)); ax.set_xticklabels(month_labels, fontsize=9)
-        ax.set_title("Clinical Demand Seasonality by Product Category"); ax.legend(fontsize=7, framealpha=0)
+        ax.set_title("Clinical Demand Seasonality by Category"); ax.legend(fontsize=7, framealpha=0)
 
     ax = axes[1, 1]
-    if "monthly_dispatched_value_usd" in df_demand.columns:
-        rev = df_demand.groupby("year_month")["monthly_dispatched_value_usd"].sum().reset_index().sort_values("year_month")
+    if "monthly_dispatched_value_usd" in df_dem_f.columns:
+        rev = df_dem_f.groupby("year_month")["monthly_dispatched_value_usd"].sum().reset_index().sort_values("year_month")
         x2 = range(len(rev))
-        ax.fill_between(x2, rev["monthly_dispatched_value_usd"]/1e6, alpha=0.3, color="#7c3aed")
-        ax.plot(x2, rev["monthly_dispatched_value_usd"]/1e6, color="#7c3aed", lw=2.5)
+        rev_scale = 1e6 if sel_dem_p == "All Products (Macro Portfolio View)" else 1e3
+        rev_unit = "USD Millions" if sel_dem_p == "All Products (Macro Portfolio View)" else "USD Thousands"
+        ax.fill_between(x2, rev["monthly_dispatched_value_usd"]/rev_scale, alpha=0.3, color="#7c3aed")
+        ax.plot(x2, rev["monthly_dispatched_value_usd"]/rev_scale, color="#7c3aed", lw=2.5)
         ax.set_xticks(list(x2)[::step]); ax.set_xticklabels(rev["year_month"].tolist()[::step], rotation=30, ha="right", fontsize=8)
-        ax.set_title("Monthly Revenue from Dispatches (USD M)"); ax.set_ylabel("Revenue (USD Millions)")
+        ax.set_title(f"Monthly Revenue from Dispatches ({rev_unit})"); ax.set_ylabel(f"Revenue ({rev_unit})")
 
     plt.tight_layout()
     show_fig(fig)
