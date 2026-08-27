@@ -413,6 +413,7 @@ with st.sidebar:
         "⚖️ LP Cost Optimizer",
         "❄️ IoT Cold-Chain Monitor",
         "🚛 Freight Rebalancing",
+        "🧪 Raw Materials & Pricing",
     ]
     selected_page = st.radio("Navigate", PAGES, label_visibility="collapsed")
     st.markdown("---")
@@ -1296,6 +1297,211 @@ elif selected_page == "🚛 Freight Rebalancing":
     info_box("Freight Table", "ℹ️ List of economical freight routes.")
 
 # ─────────────────────────────────────────────────────────────────────────────
+# PAGE: RAW MATERIALS & PRICING  (Ideas 1 & 2)
+# ─────────────────────────────────────────────────────────────────────────────
+elif selected_page == "🧪 Raw Materials & Pricing":
+    st.markdown('<div class="section-header">🧪 Raw Material Inventory & Price Intelligence</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-desc">Stock levels vs. restock thresholds (Green/Orange/Red) | Price trend monitor | Buy-signal alerts for management</div>', unsafe_allow_html=True)
+
+    # ── Generate synthetic raw material data ──────────────────────────────────
+    @st.cache_data
+    def build_rm_data():
+        import numpy as np
+        rng2 = np.random.default_rng(99)
+        MATERIALS = [
+            ("RM001", "Amoxicillin API",           "Active Ingredient",  "kg",   420,  800,  300,  22.50),
+            ("RM002", "Insulin Biosynthetic",       "Biologics",          "vial", 180,  600,  200,  310.00),
+            ("RM003", "Metformin HCl",              "Active Ingredient",  "kg",   950, 2000,  700,   8.40),
+            ("RM004", "Atorvastatin Calcium",       "Active Ingredient",  "kg",   310,  900,  350,  38.20),
+            ("RM005", "Lisinopril USP",             "Active Ingredient",  "kg",   730, 1500,  400,  51.00),
+            ("RM006", "Amlodipine Besylate",        "Active Ingredient",  "kg",   520, 1200,  350,  29.80),
+            ("RM007", "Epinephrine Bitartrate",     "Active Ingredient",  "g",    85,   300,  150, 890.00),
+            ("RM008", "Warfarin Sodium",            "Active Ingredient",  "kg",   210,  700,  250,  62.50),
+            ("RM009", "Ondansetron HCl",            "Active Ingredient",  "kg",   440, 1100,  380,  74.00),
+            ("RM010", "Pantoprazole Sodium",        "Active Ingredient",  "kg",   680, 1400,  450,  42.00),
+            ("RM011", "Adalimumab Drug Substance",  "Biologics",          "mg",   55,   200,  100, 4200.00),
+            ("RM012", "Ceftriaxone Sodium",         "Active Ingredient",  "kg",   370,  850,  300,  95.00),
+            ("RM013", "Microcrystalline Cellulose", "Excipient",          "kg",  1800, 5000, 1200,   3.20),
+            ("RM014", "Lactose Monohydrate",        "Excipient",          "kg",  2100, 6000, 1500,   2.80),
+            ("RM015", "Magnesium Stearate",         "Excipient",          "kg",   640, 2000,  500,   5.60),
+            ("RM016", "HPMC (Coating)",             "Excipient",          "kg",   390, 1200,  400,  18.50),
+            ("RM017", "Vial Glass Type I",          "Packaging",          "unit",9800,30000, 8000,   0.45),
+            ("RM018", "Blister Foil Aluminium",     "Packaging",          "roll", 220,  600,  180,  12.40),
+            ("RM019", "Sodium Chloride 0.9%",       "Solvent",            "L",   1400, 4000, 1000,   1.90),
+            ("RM020", "Water for Injection (WFI)",  "Solvent",            "L",   3200, 8000, 2000,   0.30),
+        ]
+        col_rm = ["rm_id","material_name","material_type","uom","current_stock","max_capacity","restock_point","unit_price_usd"]
+        df_rm = pd.DataFrame(MATERIALS, columns=col_rm)
+
+        # Status
+        def rm_status(row):
+            pct = row.current_stock / row.restock_point
+            if row.current_stock <= 0:          return "OUT OF STOCK", "#7f1d1d", "🛑"
+            if pct < 1.0:                       return "CRITICAL — Order Now", "#ef4444", "🔴"
+            if pct < 1.4:                       return "LOW — Reorder Soon",  "#f59e0b", "🟠"
+            return "Sufficient",                                                "#10b981", "🟢"
+        df_rm[["status","status_color","status_icon"]] = df_rm.apply(rm_status, axis=1, result_type="expand")
+        df_rm["days_of_stock"] = (df_rm["current_stock"] / (df_rm["restock_point"] / 30)).round(0).astype(int)
+        df_rm["stock_value_usd"] = df_rm["current_stock"] * df_rm["unit_price_usd"]
+
+        # Price history — last 12 months with realistic trends
+        months = pd.date_range(end=TODAY, periods=12, freq="ME").strftime("%Y-%m").tolist()
+        price_hist = {}
+        for _, row in df_rm.iterrows():
+            base = row.unit_price_usd
+            trend = rng2.choice(["rising", "stable", "falling"], p=[0.35, 0.45, 0.20])
+            if trend == "rising":
+                prices = [round(base * (1 + 0.015*i + rng2.normal(0,0.01)), 2) for i in range(12)]
+            elif trend == "falling":
+                prices = [round(base * (1 - 0.008*i + rng2.normal(0,0.01)), 2) for i in range(12)]
+            else:
+                prices = [round(base * (1 + rng2.normal(0,0.012)), 2) for _ in range(12)]
+            prices = [max(p, base*0.5) for p in prices]
+            price_hist[row.rm_id] = dict(zip(months, prices))
+        df_price = pd.DataFrame(price_hist).T
+        df_price.index.name = "rm_id"
+        df_price = df_price.reset_index()
+        df_price = df_price.merge(df_rm[["rm_id","material_name"]], on="rm_id")
+
+        # Compute price trend signal
+        def price_trend(row):
+            vals = [row[m] for m in months]
+            slope = (vals[-1] - vals[0]) / vals[0] * 100
+            if slope > 8:   return "Rising ⬆️",   "🚨 Buy Now — price rising {:.1f}%".format(slope), "#ef4444"
+            if slope > 3:   return "Rising ⬆️",   "⚠️ Monitor — price up {:.1f}%".format(slope), "#f59e0b"
+            if slope < -3:  return "Falling ⬇️", "✅ Good time to buy — price down {:.1f}%".format(abs(slope)), "#10b981"
+            return "Stable ➡️", "Price stable ({:.1f}%)".format(slope), "#94a3b8"
+        df_price[["trend","recommendation","trend_color"]] = df_price.apply(price_trend, axis=1, result_type="expand")
+        return df_rm, df_price, months
+
+    df_rm, df_price, months = build_rm_data()
+
+    # ── SECTION 1: STOCK LEVEL KPIs ──────────────────────────────────────────────
+    critical = df_rm[df_rm["status"].str.startswith("CRITICAL")]
+    low      = df_rm[df_rm["status"].str.startswith("LOW")]
+    ok       = df_rm[df_rm["status"] == "Sufficient"]
+
+    if len(critical) > 0:
+        st.error(f"🛑 **{len(critical)} material(s) BELOW restock point — immediate purchase order required!** — {', '.join(critical.material_name.tolist())}", icon="🛑")
+    if len(low) > 0:
+        st.warning(f"🟠 **{len(low)} material(s) running low** — {', '.join(low.material_name.tolist())}", icon="⚠️")
+
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("Total Materials",      f"{len(df_rm)}",                   help="Total distinct raw material SKUs tracked")
+    k2.metric("🔴 Critical / Order Now", f"{len(critical)}",              delta=None, help="Stock below restock threshold — PO required immediately")
+    k3.metric("🟠 Low / Reorder Soon",  f"{len(low)}",                  delta=None, help="Stock within 40% of restock threshold — place order this week")
+    k4.metric("Total Stock Value",    f"${df_rm.stock_value_usd.sum()/1e3:.0f}K", help="USD value of all raw materials currently on hand")
+
+    st.markdown("---")
+
+    # ── SECTION 2: STOCK LEVEL CHART + TABLE ─────────────────────────────────
+    st.markdown('<div class="section-header">📊 Raw Material Stock Levels</div>', unsafe_allow_html=True)
+    info_box("Raw Material Stock", "ℹ️ How to read stock levels")
+
+    fig, axes = plt.subplots(1, 2, figsize=(22, 9))
+    fig.patch.set_facecolor("#0f1117")
+
+    # Bar chart — current vs restock point vs max
+    ax = axes[0]
+    sorted_rm = df_rm.sort_values("current_stock", ascending=True)
+    bar_colors = ["#ef4444" if s.startswith("CRITICAL") else ("#f59e0b" if s.startswith("LOW") else "#10b981") for s in sorted_rm.status]
+    bars = ax.barh(sorted_rm.material_name, sorted_rm.current_stock, color=bar_colors, alpha=0.85, height=0.6, label="Current Stock")
+    ax.barh(sorted_rm.material_name, sorted_rm.restock_point, color="#ffffff", alpha=0.15, height=0.6, label="Restock Point")
+    for i, (_, row) in enumerate(sorted_rm.iterrows()):
+        ax.axhline(i, color="#1e2a45", linewidth=0.5)
+        ax.text(row.current_stock + row.max_capacity*0.01, i, f" {row.status_icon}", va="center", fontsize=9)
+    ax.set_xlabel("Units On Hand", color="#ccc")
+    ax.set_title("Current Stock vs Restock Threshold", color="#00d4ff", fontweight="bold")
+    ax.axvline(0, color="#444", linewidth=0.5)
+    from matplotlib.patches import Patch
+    ax.legend(handles=[Patch(color="#10b981",label="🟢 Sufficient"),Patch(color="#f59e0b",label="🟠 Low"),Patch(color="#ef4444",label="🔴 Critical"),Patch(color="#ffffff",alpha=0.2,label="Restock Point")], loc="lower right", fontsize=8, framealpha=0.2)
+
+    # Stock utilisation % gauge-style bar
+    ax2 = axes[1]
+    df_rm_s = df_rm.sort_values("current_stock", ascending=True).copy()
+    df_rm_s["util_pct"] = (df_rm_s.current_stock / df_rm_s.max_capacity * 100).clip(0,100)
+    df_rm_s["restock_pct"] = (df_rm_s.restock_point / df_rm_s.max_capacity * 100)
+    bar_c2 = ["#ef4444" if s.startswith("CRITICAL") else ("#f59e0b" if s.startswith("LOW") else "#10b981") for s in df_rm_s.status]
+    ax2.barh(df_rm_s.material_name, df_rm_s.util_pct, color=bar_c2, alpha=0.85, height=0.6)
+    for _, row in df_rm_s.iterrows():
+        ax2.axvline(row.restock_pct, color="#ff6b6b", linewidth=1, linestyle="--", alpha=0.6)
+    ax2.set_xlim(0, 100)
+    ax2.set_xlabel("% of Max Capacity", color="#ccc")
+    ax2.set_title("Stock Utilisation (%) — red dashed line = Restock Point", color="#00d4ff", fontweight="bold")
+    ax2.axvline(100, color="#444", linewidth=0.5)
+
+    plt.tight_layout()
+    show_fig(fig)
+
+    # Detailed table
+    st.markdown("**📋 Full Raw Material Inventory**")
+    display_rm = df_rm[["rm_id","material_name","material_type","uom","current_stock","restock_point","max_capacity","days_of_stock","status_icon","status","unit_price_usd","stock_value_usd"]].copy()
+    display_rm.columns = ["ID","Material","Type","UoM","Stock","Restock Point","Capacity","Days of Stock","🚦","Status","Unit Price (USD)","Stock Value (USD)"]
+    st.dataframe(display_rm, use_container_width=True)
+
+    st.markdown("---")
+
+    # ── SECTION 3: PRICE MONITOR + BUY SIGNALS (Idea 2) ───────────────────────
+    st.markdown('<div class="section-header">📉 Raw Material Price Monitor & Buy Signals</div>', unsafe_allow_html=True)
+    info_box("Price Monitor", "ℹ️ How the price signals work")
+
+    # Filter selector
+    trend_filter = st.multiselect("Filter by Trend", ["Rising ⬆️","Stable ➡️","Falling ⬇️"], default=["Rising ⬆️","Stable ➡️","Falling ⬇️"])
+    df_price_f = df_price[df_price.trend.isin(trend_filter)] if trend_filter else df_price
+
+    # Alert cards for rising materials
+    rising = df_price[df_price.trend.str.startswith("Rising")]
+    if not rising.empty:
+        st.markdown("#### 🚨 Management Alerts — Price Action Required")
+        for _, row in rising.iterrows():
+            col_a, col_b = st.columns([3, 1])
+            with col_a:
+                st.markdown(f"""
+                <div style='background:#1e1a0a; border-left:4px solid {row.trend_color}; border-radius:8px; padding:12px 16px; margin-bottom:8px;'>
+                    <span style='font-weight:700; color:{row.trend_color}; font-size:14px;'>{row.trend} {row.material_name}</span><br/>
+                    <span style='color:#cbd5e1; font-size:12px;'>{row.recommendation}</span>
+                </div>""", unsafe_allow_html=True)
+            with col_b:
+                rm_row = df_rm[df_rm.rm_id == row.rm_id].iloc[0]
+                st.metric("Current Stock", f"{rm_row.current_stock:,} {rm_row.uom}",
+                          delta=f"{rm_row.days_of_stock}d left",
+                          help="Current on-hand stock and estimated days remaining at current consumption rate")
+
+    # Price trend chart — select materials to compare
+    st.markdown("#### 📈 Price Trend Lines (12 Months)")
+    selected_mats = st.multiselect(
+        "Select materials to compare",
+        options=df_price_f.material_name.tolist(),
+        default=df_price_f.material_name.head(6).tolist(),
+        key="mat_price_sel"
+    )
+    if selected_mats:
+        fig2, ax3 = plt.subplots(figsize=(20, 7))
+        fig2.patch.set_facecolor("#0f1117")
+        ax3.set_facecolor("#1a1d27")
+        for i, mat in enumerate(selected_mats):
+            row = df_price[df_price.material_name == mat].iloc[0]
+            vals = [row[m] for m in months]
+            color = row.trend_color
+            ax3.plot(months, vals, marker="o", markersize=4, linewidth=2, color=color, label=mat, alpha=0.9)
+        ax3.set_xlabel("Month", color="#ccc")
+        ax3.set_ylabel("Unit Price (USD)", color="#ccc")
+        ax3.set_title("Raw Material Price Trends — Last 12 Months", color="#00d4ff", fontweight="bold", fontsize=13)
+        ax3.tick_params(axis="x", rotation=45)
+        ax3.legend(fontsize=9, framealpha=0.15, loc="upper left")
+        ax3.grid(True, alpha=0.2)
+        plt.tight_layout()
+        show_fig(fig2)
+
+    # Price trend summary table
+    st.markdown("**Price Signal Summary**")
+    summary_cols = ["material_name","trend","recommendation"]
+    price_summary = df_price_f[summary_cols + [months[-1],months[-3],months[0]]].copy()
+    price_summary.columns = ["Material","Trend","Recommendation","Current Price","3M Ago","12M Ago"]
+    price_summary["12M Change %"] = ((price_summary["Current Price"] - price_summary["12M Ago"]) / price_summary["12M Ago"] * 100).round(1)
+    st.dataframe(price_summary, use_container_width=True)
+
+# ─────────────────────────────────────────────────────────────────────────────
 # FOOTER
 # ─────────────────────────────────────────────────────────────────────────────
 st.markdown("---")
@@ -1303,3 +1509,4 @@ st.markdown("""<div style='text-align:center; font-size:11px; color:#334155; pad
     🏥 PharmaTrace AI &nbsp;|&nbsp; ISB AMPBA Capstone &nbsp;|&nbsp; Sponsor: Innodatatics Inc.
     &nbsp;|&nbsp; Module 3: Warehouse &amp; FEFO Inventory Optimization &nbsp;|&nbsp; Built with Streamlit
 </div>""", unsafe_allow_html=True)
+
