@@ -215,6 +215,12 @@ GLOSSARY = {
         "✅ Target ≥ 97% (industry standard). Falling below this risks FDA/regulatory "
         "action and patient safety issues."
     ),
+    "Regulatory Standing": (
+        "**Regulatory Standing** classifies the warehouse network's audit-readiness based on FEFO compliance:\n\n"
+        "- **🟢 Audit-Ready (≥ 97%)**: Full compliance with FDA 21 CFR §211.150 / CDSCO Schedule M.\n"
+        "- **🟡 Gap (90%–96.9%)**: Out-of-sequence picking detected; risk of Form 483 / Schedule M audit findings.\n"
+        "- **🔴 Critical Non-Compliance (< 90%)**: Severe stock rotation breakdown; risk of Warning Letter & forced write-offs."
+    ),
     "Avg Fill Rate": (
         "**Average Fill Rate (Service Level)** measures how much of customer demand was "
         "actually fulfilled on time.\n\n"
@@ -1218,15 +1224,27 @@ elif selected_page == "✅ FEFO Compliance":
     _nc_val_str = fmt_curr(_nc_val_total)
     _fefo_status_txt = ("🟢 CDSCO Audit-Ready" if is_india else "🟢 FDA Audit-Ready") if _fefo_overall >= 97 else (("🟡 Schedule M Gap" if is_india else "🟡 FDA 483 Gap") if _fefo_overall >= 90 else "🔴 Critical Non-Compliance")
 
+    _help_reg = (
+        f"Compliance classification under {fefo_statute}:\n\n"
+        "• 🟢 CDSCO Audit-Ready (≥97%): Strict adherence to Schedule M Sec 8.2; minimal inspection finding risk.\n"
+        "• 🟡 Schedule M Gap (90–96.9%): Out-of-sequence picking deviations; risk of GMP audit observation/notice.\n"
+        "• 🔴 Critical Non-Compliance (<90%): Severe rotation failure; risk of license suspension & regulatory disposal."
+    ) if is_india else (
+        f"Compliance classification under {fefo_statute}:\n\n"
+        "• 🟢 FDA Audit-Ready (≥97%): Strict adherence to 21 CFR §211.150; minimal inspection finding risk.\n"
+        "• 🟡 FDA 483 Gap (90–96.9%): Out-of-sequence picking deviations; triggers Form 483 inspectional observations.\n"
+        "• 🔴 Critical Non-Compliance (<90%): Severe rotation failure; triggers FDA Warning Letter & mandatory disposal."
+    )
+
     # ── Executive Regulatory & NC-VaR KPI Strip ─────────────────────────
     fk1, fk2, fk3, fk4, fk5 = st.columns(5)
     fk1.metric("Network FEFO Rate", f"{_fefo_overall:.2f}%", delta=f"{_fefo_overall-97:.2f}% vs 97%", help=f"Outbound picks adhering to earliest-expiry sequencing ({reg_agency} target ≥ 97%)")
     fk2.metric("Total Picks Audited", f"{_total_picks_n:,}", help="Total warehouse outbound picking transactions audited")
     fk3.metric("FEFO Violations", f"{_nc_picks_n:,}", delta=f"{_nc_picks_n/_total_picks_n*100:.1f}% error", delta_color="inverse", help="Picks where a fresher lot was dispatched ahead of an older lot")
     fk4.metric(f"NC-VaR ({curr_code} Risk)", _nc_val_str, delta=f"{_nc_var_intensity:.1f}% of dispatch", delta_color="inverse", help=f"Non-Compliance Value at Risk: {fmt_curr(_nc_val_total, compact=False)} total value dispatched out of sequence")
-    fk5.metric("Regulatory Standing", _fefo_status_txt, help=f"Compliance classification under {fefo_statute}")
+    fk5.metric("Regulatory Standing", _fefo_status_txt, help=_help_reg)
     
-    with st.expander(f"📐 NC-VaR Metric Definition & Regulatory Standard ({fefo_statute})", expanded=False):
+    with st.expander(f"📐 NC-VaR Formulation & Regulatory Standing Guide ({fefo_statute})", expanded=False):
         st.markdown(r"""
 ### 📐 Non-Compliance Value at Risk ($\text{NC-VaR}$) Formulation
 
@@ -1239,8 +1257,20 @@ Where:
 """ + f"""
 - **NC-VaR Intensity Rate:** $\\frac{{\\text{{NC-VaR}}}}{{\\text{{Total Audited Dispatch Value}}}} \\times 100 = \\mathbf{{{_nc_var_intensity:.2f}\\%}}$.
 
-**Regulatory Impact ({fefo_statute}):**
-When an operator picks a newer batch, the older batch remains stranded on warehouse racks. Under **{'CDSCO Schedule M (Rules 71-78)' if is_india else 'FDA 21 CFR §211.150'}**, out-of-sequence picking triggers non-conformance audit findings and leads to mandatory batch disposal.
+---
+
+### 🏛️ What Does "Regulatory Standing" Mean?
+
+The **Regulatory Standing** status badge categorizes the warehouse network's compliance health against mandatory pharmaceutical Good Distribution Practices (**{fefo_statute}**):
+
+| Status Level | FEFO Threshold | Regulatory & Operational Meaning | Mandated Compliance Action |
+| :--- | :--- | :--- | :--- |
+| **🟢 {'CDSCO Audit-Ready' if is_india else 'FDA Audit-Ready'}** | **≥ 97.0%** | **Compliant & Audit-Ready.** Outbound picks strictly honor earliest-expiry sequencing. Demonstrates robust WMS control and minimal risk of inspectional observations during regulatory audits. | Continue standard barcode verification and perform routine quarterly compliance sampling. |
+| **🟡 {'Schedule M Gap' if is_india else 'FDA 483 Gap'}** | **90.0% – 96.9%** | **Warning / Non-Conformance Risk.** Operators are bypassing older batches in 3%–10% of picks. Elevates risk of **{'CDSCO Schedule M inspectional non-conformance' if is_india else 'FDA Form 483 inspectional observations'}** for failure to follow written warehouse procedures. | Initiate internal CAPA (Corrective and Preventive Action), enforce barcode scan lockouts in WMS, and retrain picking teams. |
+| **🔴 Critical Non-Compliance** | **< 90.0%** | **Severe Regulatory & Expiry Violation.** Systemic breakdown in stock rotation. Younger stock is systematically picked ahead of older stock, stranding older batches to decay into write-offs. High risk of **{'CDSCO show-cause notice & manufacturing/distribution license risk' if is_india else 'FDA Warning Letter, Import Alert, and mandatory product write-offs'}**. | Issue immediate warehouse stop-ship SOP review, require supervisor dual-authorization for any out-of-sequence pick, and execute 100% physical batch reconciliation. |
+
+**Regulatory Standard ({fefo_statute}):**
+Under **{'CDSCO Revised Schedule M (Section 8.2 & Rules 71-78)' if is_india else 'FDA 21 CFR §211.150 (Distribution Procedures) & USP <1079>'}**, pharmaceutical manufacturers and distributors are legally required to maintain written procedures ensuring that the oldest approved stock is distributed first.
         """)
     st.markdown("---")
 
