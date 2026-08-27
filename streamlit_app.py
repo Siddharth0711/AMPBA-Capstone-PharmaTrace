@@ -107,11 +107,13 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 # ─────────────────────────────────────────────────────────────────────────────
 plt.rcParams.update({
     "figure.facecolor": "#0f1117", "axes.facecolor": "#1a1d27",
-    "axes.edgecolor": "#444", "axes.labelcolor": "#ccc",
-    "text.color": "#eee", "xtick.color": "#aaa", "ytick.color": "#aaa",
+    "axes.edgecolor": "#555", "axes.labelcolor": "#ddd",
+    "text.color": "#eee", "xtick.color": "#bbb", "ytick.color": "#bbb",
+    "xtick.labelsize": 10, "ytick.labelsize": 10,
     "grid.color": "#2a2d3a", "grid.linestyle": "--",
-    "font.family": "DejaVu Sans", "font.size": 11,
-    "axes.titlesize": 12, "axes.titleweight": "bold",
+    "font.family": "DejaVu Sans", "font.size": 12,
+    "axes.titlesize": 13, "axes.titleweight": "bold",
+    "axes.labelsize": 11, "legend.fontsize": 10,
 })
 PALETTE = ["#00d4ff","#7c3aed","#f59e0b","#10b981","#ef4444",
            "#3b82f6","#ec4899","#14b8a6","#f97316","#84cc16"]
@@ -122,7 +124,7 @@ TODAY = pd.Timestamp("2026-08-23")
 # ─────────────────────────────────────────────────────────────────────────────
 def show_fig(fig):
     buf = io.BytesIO()
-    fig.savefig(buf, format="png", dpi=130, bbox_inches="tight", facecolor=fig.get_facecolor())
+    fig.savefig(buf, format="png", dpi=150, bbox_inches="tight", facecolor=fig.get_facecolor())
     st.image(buf.getvalue(), use_container_width=True)
     plt.close(fig)
 
@@ -470,7 +472,7 @@ with st.sidebar:
             current_group = group
         page_radio_options.append(page)
 
-    selected_page = st.radio("Navigate", PAGES, label_visibility="collapsed")
+    selected_page = st.radio("Navigate", PAGES, key="page_nav", label_visibility="collapsed")
     st.markdown("---")
 
     # ── Template Download ──────────────────────────────────────────────────
@@ -817,24 +819,29 @@ if selected_page == "🏠 Home & KPI Summary":
 
     # ── Quick Navigation ──────────────────────────────────────────────────
     st.markdown('<div class="section-header">🧭 Quick Navigation</div>', unsafe_allow_html=True)
+    # Nav items: (icon, exact_page_name_from_ALL_PAGES, short_label, description)
     nav_items = [
-        ("📦", "Inventory & Stock",     "Stock levels, expiry risk, and multi-warehouse grid"),
-        ("✅", "FEFO Compliance",        "Regulatory compliance rate by warehouse & month"),
-        ("🌡️", "Expiry Risk Heatmap",   "Near-expiry batches mapped by warehouse & USD value"),
-        ("📋", "Order Fulfilment",       "Simulate a sales order — check stock, WIP & raw materials"),
-        ("🗺️", "Geo Sales Intelligence", "Identify HOT & COLD demand locations across warehouses"),
-        ("💡", "Smart Transfer Recommender", "Find cheapest restock option: transfer vs manufacture"),
+        ("📦", "📦 Inventory Overview",         "Inventory Overview",       "Stock levels, expiry risk, and multi-warehouse grid"),
+        ("✅", "✅ FEFO Compliance",             "FEFO Compliance",          "Regulatory compliance rate by warehouse & month"),
+        ("🌡️", "🌡️ Expiry Risk Heatmap",       "Expiry Risk Heatmap",      "Near-expiry batches mapped by warehouse & USD value"),
+        ("📋", "📋 Order Fulfilment",           "Order Fulfilment",         "Simulate a sales order — check stock, WIP & raw materials"),
+        ("🗺️", "🗺️ Geo Sales Intelligence",    "Geo Sales Intelligence",   "Identify HOT & COLD demand locations across warehouses"),
+        ("💡", "💡 Smart Transfer Recommender", "Smart Transfer Recommender","Find cheapest restock option: transfer vs manufacture"),
     ]
     nav_cols = st.columns(3)
-    for i, (icon, title, desc) in enumerate(nav_items):
-        nav_cols[i % 3].markdown(f"""
+    for i, (icon, page_key, label, desc) in enumerate(nav_items):
+        with nav_cols[i % 3]:
+            st.markdown(f"""
 <div class='nav-card'>
   <div class='nav-card-icon'>{icon}</div>
-  <div class='nav-card-title'>{title}</div>
+  <div class='nav-card-title'>{label}</div>
   <div class='nav-card-desc'>{desc}</div>
 </div>""", unsafe_allow_html=True)
+            if st.button(f"Open {label} →", key=f"nav_btn_{i}", use_container_width=True):
+                st.session_state["page_nav"] = page_key
+                st.rerun()
 
-    st.caption("→ Use the sidebar to navigate between all 14 pages of the dashboard.")
+    st.caption("→ Click any button above or use the sidebar to navigate between all 14 pages.")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PAGE: INVENTORY OVERVIEW
@@ -1156,8 +1163,26 @@ elif selected_page == "🤖 ML Expiry Classifier":
     features = [f for f in ["days_to_expiry","quantity_on_hand","unit_price","avg_monthly_dispatch","cover_days","risk_score","value_per_day","pct_life_remaining"] if f in ml_df.columns]
     X = ml_df[features].fillna(0)
     y = ml_df["expiry_risk"]
+    binary_fallback = False
     if y.nunique() < 2:
-        st.error("Insufficient class variety for classification."); st.stop()
+        # Fallback: binary At-Risk vs Safe classification
+        ml_df["expiry_risk_bin"] = ml_df["expiry_risk"].apply(
+            lambda r: "At-Risk" if r in ["EXPIRED", "CRITICAL (<30d)", "HIGH (30-90d)"] else "Safe"
+        )
+        y = ml_df["expiry_risk_bin"]
+        binary_fallback = True
+        if y.nunique() < 2:
+            st.warning(
+                "⚠️ All inventory batches fall into the same risk tier. "
+                "Upload data with a wider range of expiry dates to enable ML classification.",
+                icon="⚠️"
+            )
+            st.stop()
+        st.info(
+            "ℹ️ Using binary (At-Risk / Safe) classification — sample data has limited class variety. "
+            "Upload your full dataset for multi-tier predictions.",
+            icon="ℹ️"
+        )
 
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=42, stratify=y)
     rf = RandomForestClassifier(n_estimators=120, max_depth=8, random_state=42, n_jobs=-1)
@@ -2367,8 +2392,12 @@ elif selected_page == "💡 Smart Transfer Recommender":
                 cost_col_r = next((c for c in df_freight.columns if "cost" in c.lower()), None)
                 amb_col_r  = "ambient_transfer_cost_per_unit_usd" if "ambient_transfer_cost_per_unit_usd" in df_freight.columns else cost_col_r
                 if cost_col_r:
-                    show_cols_r = [c for c in ["from_warehouse_id","to_warehouse_id","logistics_tier",amb_col_r,cost_col_r] if c in df_freight.columns]
-                    st.dataframe(df_freight[show_cols_r].sort_values(amb_col_r).reset_index(drop=True), use_container_width=True)
+                    # deduplicate columns (amb_col_r and cost_col_r may be the same)
+                    show_cols_r = list(dict.fromkeys(
+                        c for c in ["from_warehouse_id","to_warehouse_id","logistics_tier",amb_col_r,cost_col_r]
+                        if c in df_freight.columns
+                    ))
+                    st.dataframe(df_freight[show_cols_r].sort_values(by=amb_col_r).reset_index(drop=True), use_container_width=True)
             else:
                 st.info("Upload freight matrix data to view routes.")
 
