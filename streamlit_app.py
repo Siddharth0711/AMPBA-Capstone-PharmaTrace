@@ -980,6 +980,30 @@ elif selected_page == "📦 Inventory Overview":
         cols_show = [c for c in ["product_id","generic_name","warehouse_id","quantity_on_hand","days_to_expiry","expiry_risk","inventory_value_usd","qc_status"] if c in inv_f.columns]
         st.dataframe(inv_f[cols_show].head(500), use_container_width=True)
 
+    # ── AI Insight: Inventory Health & Capital Allocation ──────────────
+    _inv_tot_val  = inv_f["inventory_value_usd"].sum()
+    _top_wh_val   = inv_f.groupby("warehouse_id")["inventory_value_usd"].sum()
+    _top_wh_name  = _top_wh_val.idxmax() if not _top_wh_val.empty else "N/A"
+    _top_wh_share = (_top_wh_val.max() / _inv_tot_val * 100) if _inv_tot_val > 0 else 0
+    _cc_units     = inv_f[inv_f["is_cold_chain"]]["quantity_on_hand"].sum() if "is_cold_chain" in inv_f.columns else 0
+    _ctrl_units   = inv_f[inv_f["is_controlled"]]["quantity_on_hand"].sum() if "is_controlled" in inv_f.columns else 0
+    _qc_hold_cnt  = len(inv_f[inv_f["qc_status"]=="QUARANTINE / QC HOLD"]) if "qc_status" in inv_f.columns else 0
+
+    _inv_bullets = [
+        f"💼 <b>Capital concentration:</b> <b>{_top_wh_name}</b> holds <b>{_top_wh_share:.1f}%</b> of total network inventory value (${_top_wh_val.max()/1e3:,.0f}K of ${_inv_tot_val/1e3:,.0f}K). High geographic concentration increases business vulnerability to facility disruptions.",
+        f"❄️ <b>Cold-Chain assets:</b> <b>{_cc_units:,.0f} units</b> require continuous 2–8°C thermal management (USP &lt;659&gt;). Cold storage capacity must be monitored to avoid thermal excursions and high-value biologic write-offs.",
+    ]
+    if _ctrl_units > 0:
+        _inv_bullets.append(f"🔒 <b>DEA Controlled substances:</b> <b>{_ctrl_units:,.0f} units</b> under Schedule II–IV control. Requires strict perpetual inventory logs, dual-signoff vault access, and automated discrepancy reporting under DEA 21 CFR Part 1304.")
+    if _qc_hold_cnt > 0:
+        _inv_bullets.append(f"🔬 <b>QC Quarantine backlog:</b> <b>{_qc_hold_cnt} batch(es)</b> currently on QC hold. Expediting analytical release testing will unlock finished goods inventory for immediate dispatch.")
+    _inv_bullets.append(
+        f"💡 <b>Managerial recommendations:</b> (1) Conduct weekly ABC-based cycle counts on top 10% highest-value SKUs, "
+        f"(2) Rebalance stock from {_top_wh_name} to secondary distribution centers to mitigate regional risk, "
+        f"(3) Prioritize release testing for quarantined batches with earliest expiry dates."
+    )
+    ai_insight("Inventory Health & Capital Allocation", _inv_bullets, icon="📦", color="#00d4ff")
+
 # ─────────────────────────────────────────────────────────────────────────────
 # PAGE: ABC-FSN SEGMENTATION
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1035,6 +1059,34 @@ elif selected_page == "🔶 ABC-FSN Segmentation":
     plt.tight_layout()
     show_fig(fig)
     info_box("ABC-FSN Charts", "ℹ️ Segmentation insights based on value and velocity.")
+
+    # ── AI Insight: ABC-FSN Inventory Policy ──────────────────────────
+    _a_skus  = len(prod_val[prod_val["abc"]=="A"])
+    _a_val_p = (prod_val[prod_val["abc"]=="A"]["total_value"].sum() / prod_val["total_value"].sum() * 100) if prod_val["total_value"].sum()>0 else 0
+    _c_skus  = len(prod_val[prod_val["abc"]=="C"])
+
+    _abc_bullets = [
+        f"🎯 <b>Pareto principle in action (Class A):</b> <b>{_a_skus} SKUs ({_a_skus/len(prod_val)*100:.0f}% of portfolio)</b> account for <b>{_a_val_p:.1f}% of total inventory value</b>. "
+        f"Tight managerial control, daily cycle counting, and Vendor Managed Inventory (VMI) partnerships should be strictly applied to Class A drugs.",
+        f"📦 <b>Low-value long-tail (Class C):</b> <b>{_c_skus} SKUs</b> represent the bottom 5% of value. Apply visual two-bin or periodic min-max reordering to minimize administrative procurement costs.",
+    ]
+    if "fsn" in prod_val.columns and prod_val["fsn"].nunique() > 1:
+        _a_slow = prod_val[(prod_val["abc"]=="A") & (prod_val["fsn"].isin(["Slow","Non-Moving"]))]
+        if not _a_slow.empty:
+            _a_slow_val = _a_slow["total_value"].sum()
+            _abc_bullets.append(
+                f"🚨 <b>Capital trap alert (Category A - Slow/Non-Moving):</b> <b>{len(_a_slow)} high-value SKU(s) (${_a_slow_val/1e3:,.0f}K total value)</b> have low dispatch velocity. "
+                f"These represent significant working capital blockage and severe expiry risk. Negotiate return-to-vendor terms or reduce manufacturing batch sizes immediately."
+            )
+        _c_fast = prod_val[(prod_val["abc"]=="C") & (prod_val["fsn"]=="Fast")]
+        if not _c_fast.empty:
+            _abc_bullets.append(f"⚡ <b>High turnover utility (Category C - Fast):</b> <b>{len(_c_fast)} SKU(s)</b> move rapidly with minimal dollar risk. Maintain generous safety buffers to avoid zero-margin stockout disruptions.")
+    _abc_bullets.append(
+        f"💡 <b>Executive inventory policy:</b> (1) Enforce daily stock audits on Class A drugs, "
+        f"(2) Implement 60-day shelf-life review on all Category A-Slow items, "
+        f"(3) Consolidate procurement POs for Class C consumables to capture bulk volume discounts."
+    )
+    ai_insight("ABC-FSN Matrix & Working Capital Strategy", _abc_bullets, icon="🔶", color="#f59e0b")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PAGE: FEFO COMPLIANCE
@@ -1394,6 +1446,19 @@ elif selected_page == "🤖 ML Expiry Classifier":
         st.text(classification_report(y_test, y_pred, zero_division=0))
     info_box("Classification Report", "ℹ️ Detailed report of ML accuracy.")
 
+    # ── AI Insight: ML Governance & Predictive Signals ────────────────
+    _top_feat = imp.idxmax() if not imp.empty else "days_to_expiry"
+    _top_imp_val = imp.max() * 100 if not imp.empty else 0
+    _rf_bullets = [
+        f"🤖 <b>Multi-variable risk intelligence:</b> The Random Forest model captures non-linear interactions between <b>Days-to-Expiry (DTE)</b>, <b>Dispatch Velocity</b>, and <b>Shelf-Life Consumption</b> that static calendar thresholds overlook.",
+        f"📊 <b>Primary risk driver:</b> <b>{_top_feat}</b> is the single most influential feature (<b>{_top_imp_val:.1f}% relative importance</b>). Batches with high stock relative to monthly velocity are flagged early, even when nominal DTE appears safe.",
+        f"🎯 <b>Accuracy validation:</b> Model achieved <b>{acc:.1f}% accuracy</b> on held-out test batches. High classification precision on critical tiers prevents false negatives that could lead to dispatching expired pharmaceuticals to clinical partners.",
+        f"💡 <b>Operational deployment:</b> (1) Integrate ML risk scores directly into WMS pick-list generation to prioritize at-risk batches automatically, "
+        f"(2) Retrain model monthly as seasonal demand shifts, "
+        f"(3) Set automated early-warning alerts for batches whose predicted risk tier worsens over consecutive weekly runs."
+    ]
+    ai_insight("ML Expiry Classifier — Model Governance & Predictive Strategy", _rf_bullets, icon="🤖", color="#7c3aed")
+
 # ─────────────────────────────────────────────────────────────────────────────
 # PAGE: LP COST OPTIMIZER
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1747,19 +1812,24 @@ elif selected_page == "🧪 Raw Materials & Pricing":
     from matplotlib.patches import Patch
     ax.legend(handles=[Patch(color="#10b981",label="🟢 Sufficient"),Patch(color="#f59e0b",label="🟠 Low"),Patch(color="#ef4444",label="🔴 Critical"),Patch(color="#ffffff",alpha=0.2,label="Restock Point")], loc="lower right", fontsize=8, framealpha=0.2)
 
-    # Stock utilisation % gauge-style bar
+    # Stock utilisation % gauge-style bar (Fixed: no confusing multi-line grid)
     ax2 = axes[1]
     df_rm_s = df_rm.sort_values("current_stock", ascending=True).copy()
     df_rm_s["util_pct"] = (df_rm_s.current_stock / df_rm_s.max_capacity * 100).clip(0,100)
     df_rm_s["restock_pct"] = (df_rm_s.restock_point / df_rm_s.max_capacity * 100)
     bar_c2 = ["#ef4444" if s.startswith("CRITICAL") else ("#f59e0b" if s.startswith("LOW") else "#10b981") for s in df_rm_s.status]
-    ax2.barh(df_rm_s.material_name, df_rm_s.util_pct, color=bar_c2, alpha=0.85, height=0.6)
-    for _, row in df_rm_s.iterrows():
-        ax2.axvline(row.restock_pct, color="#ff6b6b", linewidth=1, linestyle="--", alpha=0.6)
-    ax2.set_xlim(0, 100)
+    ax2.barh(df_rm_s.material_name, df_rm_s.util_pct, color=bar_c2, alpha=0.85, height=0.6, label="Current Stock (% Capacity)")
+
+    # Plot specific restock point marker on each material bar row (clean per-item indicator)
+    ax2.scatter(df_rm_s.restock_pct, range(len(df_rm_s)), color="#ffffff", marker="|", s=180, linewidths=2.5, zorder=5, label="Restock Trigger Point (%)")
+    for i, (_, r) in enumerate(df_rm_s.iterrows()):
+        ax2.text(min(r.util_pct + 1.5, 92), i, f"{r.util_pct:.0f}%", va="center", fontsize=8, color="#cbd5e1")
+
+    ax2.set_xlim(0, 105)
     ax2.set_xlabel("% of Max Capacity", color="#ccc")
-    ax2.set_title("Stock Utilisation (%) — red dashed line = Restock Point", color="#00d4ff", fontweight="bold")
-    ax2.axvline(100, color="#444", linewidth=0.5)
+    ax2.set_title("Stock Utilisation (%) vs Specific Restock Thresholds (| Marker)", color="#00d4ff", fontweight="bold")
+    ax2.legend(loc="lower right", fontsize=8, framealpha=0.2)
+    ax2.grid(True, axis="x", alpha=0.15)
 
     plt.tight_layout()
     show_fig(fig)
@@ -1831,6 +1901,35 @@ elif selected_page == "🧪 Raw Materials & Pricing":
     price_summary.columns = ["Material","Trend","Recommendation","Current Price","3M Ago","12M Ago"]
     price_summary["12M Change %"] = ((price_summary["Current Price"] - price_summary["12M Ago"]) / price_summary["12M Ago"] * 100).round(1)
     st.dataframe(price_summary, use_container_width=True)
+
+    # ── AI Insight: Raw Material Procurement & Pricing Strategy ───────
+    _crit_rm_list = critical.material_name.tolist() if not critical.empty else []
+    _high_cost_rm = df_rm.sort_values("unit_price_usd", ascending=False).iloc[0]
+    _rising_rm    = df_price[df_price.trend.str.startswith("Rising")].material_name.tolist()
+    _falling_rm   = df_price[df_price.trend.str.startswith("Falling")].material_name.tolist()
+
+    _rm_bullets = [
+        f"⚖️ <b>Tailored Restock Levels:</b> Every raw material has a unique restock point and safety threshold based on vendor lead times (e.g. 60–90 days for imported APIs), batch consumption requirements, and cold-chain constraints.",
+    ]
+    if _crit_rm_list:
+        _rm_bullets.append(
+            f"🛑 <b>Production continuity bottleneck:</b> <b>{len(_crit_rm_list)} material(s) ({', '.join(_crit_rm_list[:3])}{'...' if len(_crit_rm_list)>3 else ''})</b> are below their restock threshold. "
+            f"Manufacturing lines cannot start new campaigns without full active ingredient availability. Issue purchase orders immediately."
+        )
+    _rm_bullets.append(
+        f"💎 <b>High-value material exposure:</b> <b>{_high_cost_rm['material_name']}</b> costs <b>${_high_cost_rm['unit_price_usd']:,.2f} per {_high_cost_rm['uom']}</b> (${_high_cost_rm['stock_value_usd']/1e3:,.0f}K total value). "
+        f"Maintain lean, precise reorder quantities to minimize working capital blockage."
+    )
+    if _rising_rm:
+        _rm_bullets.append(f"📈 <b>Price inflation alert:</b> <b>{len(_rising_rm)} material(s) ({', '.join(_rising_rm[:3])})</b> show sustained price increases. Contract 6-month forward supply agreements to protect manufacturing gross margins.")
+    if _falling_rm:
+        _rm_bullets.append(f"📉 <b>Opportunistic procurement:</b> <b>{len(_falling_rm)} material(s) ({', '.join(_falling_rm[:3])})</b> have declining market prices. Increase purchase order volume to lock in favorable unit costs.")
+    _rm_bullets.append(
+        f"💡 <b>Procurement recommendations:</b> (1) Issue emergency POs for all 🔴 CRITICAL materials today, "
+        f"(2) Lock in blanket purchase agreements for rising commodities, "
+        f"(3) Establish dual-sourcing for all single-origin active pharmaceutical ingredients."
+    )
+    ai_insight("Raw Material Procurement & Supply Continuity", _rm_bullets, icon="🧪", color="#10b981")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PAGE: ORDER FULFILMENT SIMULATOR  (Idea 3 + 4 + 6)
@@ -2197,6 +2296,29 @@ elif selected_page == "🏷️ WIP & Manufacturing":
                fontsize=9, framealpha=0.2)
     plt.tight_layout()
     show_fig(fig3)
+
+    # ── AI Insight: WIP & Manufacturing Execution ─────────────────────
+    _wip_tot_u   = df_wip_full["WIP Units"].sum()
+    _in_prog_u   = in_prog["WIP Units"].sum() if not in_prog.empty else 0
+    _qc_hold_mos = qc_hold["MO ID"].tolist() if not qc_hold.empty else []
+    _top_wip_p   = df_wip_full.groupby("Product")["WIP Units"].sum().idxmax()
+
+    _wip_bullets = [
+        f"🏭 <b>Shopfloor pipeline:</b> <b>{_wip_tot_u:,} total units</b> currently in the manufacturing pipeline across {len(df_wip_full)} MOs. <b>{_in_prog_u:,} units</b> are actively in granulation, compression, coating, or filling.",
+        f"📦 <b>Highest volume campaign:</b> <b>{_top_wip_p}</b> dominates active production volume. Packaging lines and QC analytical teams should be pre-scheduled to handle upcoming lot completions without release delays.",
+    ]
+    if _qc_hold_mos:
+        _wip_bullets.append(
+            f"🔬 <b>QC Quarantine impact:</b> <b>{len(_qc_hold_mos)} order(s) ({', '.join(_qc_hold_mos)})</b> are paused on QC Hold. "
+            f"Expedite out-of-specification (OOS) investigations and microbial release assays to prevent production scheduling bottlenecks."
+        )
+    _wip_bullets.append(
+        f"💡 <b>Plant manager action plan:</b> (1) Accelerate QA batch record review for orders reaching &gt;80% completion, "
+        f"(2) Synchronize raw material kitting with scheduled MO start dates to eliminate shopfloor downtime, "
+        f"(3) Implement daily line-clearance and OEE monitoring to maximize tablet press throughput."
+    )
+    ai_insight("WIP Throughput & Shopfloor Execution", _wip_bullets, icon="🏷️", color="#00d4ff")
+
     st.caption("→ Next: 🗺️ Geo Sales Intelligence — find which locations have HOT demand & surplus stock")
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2421,6 +2543,22 @@ elif selected_page == "🗺️ Geo Sales Intelligence":
     display_geo["Avg Monthly Demand"] = display_geo["Avg Monthly Demand"].round(0)
     display_geo["Days of Stock"] = display_geo["Days of Stock"].clip(upper=999).round(0)
     st.dataframe(display_geo, use_container_width=True, height=420)
+
+    # ── AI Insight: Geo Sales & Network Balancing ─────────────────────
+    _hot_cnt  = len(hot)
+    _cold_cnt = len(cold)
+    _hot_pairs = [f"{r.product_name} @ {r.warehouse_id}" for _, r in hot.head(3).iterrows()]
+
+    _geo_bullets = [
+        f"🔥 <b>Demand hotspot risk:</b> <b>{_hot_cnt} location-product pair(s)</b> exhibit high demand with critical stock shortages ({', '.join(_hot_pairs)}{'...' if len(hot)>3 else ''}). These represent immediate stockout risks and lost hospital revenue.",
+        f"❄️ <b>Cold location capital traps:</b> <b>{_cold_cnt} location(s)</b> carry surplus stock exceeding 120 days of forward demand. Trapped inventory incurs daily holding costs and increases expiry exposure.",
+        f"🌐 <b>Network balancing opportunity:</b> Rather than triggering expensive rush manufacturing at CMOs, execute inter-warehouse transfers from COLD to HOT nodes to satisfy demand in 2–4 days.",
+        f"💡 <b>Regional distribution strategy:</b> (1) Reallocate safety stock from COLD warehouses to high-velocity metropolitan distribution centers, "
+        f"(2) Align warehouse stocking thresholds with localized seasonal epidemiology (e.g. respiratory surge in winter), "
+        f"(3) Use the Smart Transfer Recommender to execute cost-optimal rebalancing."
+    ]
+    ai_insight("Geographic Sales Intelligence & Network Balancing", _geo_bullets, icon="🗺️", color="#ef4444")
+
     st.caption("→ Next: 💡 Smart Transfer Recommender — get cost-optimal rebalancing decisions based on this analysis")
 
 
@@ -2671,6 +2809,21 @@ elif selected_page == "💡 Smart Transfer Recommender":
                     st.dataframe(df_freight[show_cols_r].sort_values(by=amb_col_r).reset_index(drop=True), use_container_width=True)
             else:
                 st.info("Upload freight matrix data to view routes.")
+
+        # ── AI Insight: Supply Chain Rebalancing Economics ────────────
+        _tot_sav = total_savings if 'total_savings' in locals() and total_savings > 0 else 0
+        _n_trans = len(transfer_recs) if 'transfer_recs' in locals() else 0
+        _n_mfg   = len(mfg_recs) if 'mfg_recs' in locals() else 0
+
+        _recs_bullets = [
+            f"💰 <b>Net financial benefit:</b> Choosing inter-warehouse transfers over new manufacturing saves an estimated <b>${_tot_sav:,.0f} across {_n_trans} transfer recommendation(s)</b>.",
+            f"⚡ <b>Lead-time acceleration:</b> Inter-warehouse freight transfers arrive in <b>2–4 days</b> compared to <b>3–6 weeks</b> for full CMO batch production, protecting vital hospital service levels.",
+            f"🌿 <b>ESG & inventory optimization:</b> Transferring existing stock prevents over-production, avoids future certified destruction costs, and lowers the overall carbon footprint of pharmaceutical supply.",
+            f"💡 <b>Logistics manager actions:</b> (1) Authorize recommended 🚛 Transfers with highest net $ savings first, "
+            f"(2) Consolidate regional shipments into full-truckload (FTL) movements to capture lower ambient/cold-chain freight tariffs, "
+            f"(3) Authorize 🏷️ Manufacturing orders only for products with no surplus stock across the entire warehouse network."
+        ]
+        ai_insight("Smart Transfer & Manufacturing Rebalancing Economics", _recs_bullets, icon="💡", color="#10b981")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # FOOTER
