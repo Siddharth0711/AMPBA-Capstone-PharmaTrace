@@ -73,12 +73,31 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
     border-left: 3px solid #00d4ff;
     padding: 10px 16px;
     border-radius: 0 8px 8px 0;
-    margin: 24px 0 12px 0;
-    font-size: 18px;
+    margin: 20px 0 10px 0;
+    font-size: 17px;
     font-weight: 600;
     color: #e2e8f0;
 }
 .section-desc { font-size: 12px; color: #64748b; font-style: italic; margin-bottom: 16px; padding-left: 4px; }
+.nav-group-label {
+    font-size: 9px; font-weight: 700; letter-spacing: 0.12em;
+    color: #475569; text-transform: uppercase; padding: 14px 0 4px 4px;
+}
+.alert-card {
+    border-radius: 10px; padding: 12px 16px; margin-bottom: 8px;
+    border-left: 4px solid;
+    font-size: 13px;
+}
+.nav-card {
+    background: linear-gradient(135deg,#131929,#1a2540);
+    border:1px solid #1e3a5f; border-radius:12px;
+    padding:16px 14px; text-align:center; cursor:pointer;
+    transition: transform .2s, border-color .2s;
+}
+.nav-card:hover { transform:translateY(-3px); border-color:#00d4ff55; }
+.nav-card-icon { font-size:24px; margin-bottom:6px; }
+.nav-card-title { font-size:12px; font-weight:600; color:#00d4ff; }
+.nav-card-desc  { font-size:10px; color:#64748b; margin-top:4px; }
 #MainMenu {visibility: hidden;} footer {visibility: hidden;}
 </style>
 """, unsafe_allow_html=True)
@@ -357,6 +376,26 @@ GLOSSARY = {
         "A good model has large diagonal numbers and small off-diagonal numbers. "
         "Misclassifying CRITICAL as LOW would be dangerous — check those cells specifically."
     ),
+    # ── Raw Materials / Pricing keys ────────────────────────────────────────
+    "Raw Material Stock": (
+        "**Raw Material Stock Levels** shows how much of each API, excipient, solvent and packaging "
+        "material is currently on hand versus the defined restock point and maximum capacity.\n\n"
+        "🟢 **Sufficient** = stock well above restock point.\n"
+        "🟠 **Low / Reorder Soon** = stock is within 40% of the restock threshold — place a PO this week.\n"
+        "🔴 **Critical / Order Now** = stock is *below* the restock point — manufacturing may be constrained.\n\n"
+        "📌 *Days of Stock* = how many days current stock lasts at the current consumption rate."
+    ),
+    "Price Monitor": (
+        "**Raw Material Price Monitor** tracks the 12-month price trend for each material and generates "
+        "actionable buy signals.\n\n"
+        "📈 **Rising ⬆️** — price has increased more than 3% over 12 months. If above 8%, a '🚨 Buy Now' "
+        "alert is raised — procure before further increases erode margins.\n"
+        "➡️ **Stable** — price is flat (±3%). No immediate action needed.\n"
+        "📉 **Falling ⬇️** — price has dropped more than 3%. Good opportunity to buy in bulk and lock in "
+        "lower costs.\n\n"
+        "💡 Cross-reference the price signal with the stock level status — a 'Critical' stock + 'Rising' price "
+        "is the most urgent combination."
+    ),
     # ── Fallback / supplementary keys ──────────────────────────────────────
     "FEFO Header":          "See 'FEFO Compliance' — FEFO = First Expiry First Out, the regulatory rule that soonest-expiring stock must always be dispatched first.",
     "Demand Charts":        "These 4 charts together tell the story of 24-month demand: **how much was ordered** (Demanded), **how much was fulfilled** (Dispatched), **service level trend** (Fill Rate %), **seasonal patterns** by therapy area, and **revenue trajectory** over time.",
@@ -395,45 +434,58 @@ def info_box(key, label="ℹ️ What does this mean?"):
 # SIDEBAR
 # ─────────────────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.markdown("""<div style='text-align:center; padding: 12px 0 20px;'>
+    st.markdown("""<div style='text-align:center; padding: 12px 0 16px;'>
         <div style='font-size:28px;'>🏥</div>
         <div style='font-size:16px; font-weight:700; color:#00d4ff;'>PharmaTrace AI</div>
-        <div style='font-size:10px; color:#475569; margin-top:4px;'>Warehouse & FEFO Optimization</div>
+        <div style='font-size:10px; color:#475569; margin-top:4px;'>Warehouse &amp; FEFO Optimization</div>
         <div style='font-size:9px; color:#334155; margin-top:2px;'>ISB AMPBA Capstone | Innodatatics</div>
     </div>""", unsafe_allow_html=True)
     st.markdown("---")
-    PAGES = [
-        "🏠 Home & KPI Summary",
-        "📦 Inventory Overview",
-        "🔶 ABC-FSN Segmentation",
-        "✅ FEFO Compliance",
-        "🌡️ Expiry Risk Heatmap",
-        "📈 Demand & Seasonality",
-        "🤖 ML Expiry Classifier",
-        "⚖️ LP Cost Optimizer",
-        "❄️ IoT Cold-Chain Monitor",
-        "🚛 Freight Rebalancing",
-        "🧪 Raw Materials & Pricing",
-        "📋 Order Fulfilment Simulator",
-        "🏷️ WIP & Manufacturing Tracker",
-        "🗺️ Geo Sales Intelligence",
-        "💡 Smart Transfer Recommender",
+
+    # ── Grouped Navigation ─────────────────────────────────────────────────
+    ALL_PAGES = [
+        # group, page_name
+        ("OPERATIONS",         "🏠 Home & KPI Summary"),
+        ("OPERATIONS",         "📦 Inventory Overview"),
+        ("OPERATIONS",         "🧪 Raw Materials & Pricing"),
+        ("COMPLIANCE",         "✅ FEFO Compliance"),
+        ("COMPLIANCE",         "❄️ IoT Cold-Chain Monitor"),
+        ("EXPIRY MANAGEMENT",  "🌡️ Expiry Risk Heatmap"),
+        ("EXPIRY MANAGEMENT",  "⚖️ LP Cost Optimizer"),
+        ("DEMAND & ANALYTICS", "📈 Demand & Seasonality"),
+        ("DEMAND & ANALYTICS", "🔶 ABC-FSN Segmentation"),
+        ("DEMAND & ANALYTICS", "🤖 ML Expiry Classifier"),
+        ("SUPPLY CHAIN",       "📋 Order Fulfilment"),
+        ("SUPPLY CHAIN",       "🏷️ WIP & Manufacturing"),
+        ("SUPPLY CHAIN",       "🗺️ Geo Sales Intelligence"),
+        ("SUPPLY CHAIN",       "💡 Smart Transfer Recommender"),
     ]
+    PAGES = [p for _, p in ALL_PAGES]
+
+    current_group = None
+    page_radio_options = []
+    for group, page in ALL_PAGES:
+        if group != current_group:
+            st.markdown(f"<div class='nav-group-label'>{group}</div>", unsafe_allow_html=True)
+            current_group = group
+        page_radio_options.append(page)
+
     selected_page = st.radio("Navigate", PAGES, label_visibility="collapsed")
     st.markdown("---")
+
     # ── Template Download ──────────────────────────────────────────────────
     st.markdown("<div style='font-size:12px; font-weight:600; color:#94a3b8; margin-bottom:6px;'>📥 Step 1 — Download Template</div>", unsafe_allow_html=True)
     TEMPLATE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "PharmaTrace_Data_Template.xlsx")
     if os.path.exists(TEMPLATE_PATH):
         with open(TEMPLATE_PATH, "rb") as f:
             st.download_button(
-                label="⬇️ Download Data Template",
+                label="⬇️ Download Template",
                 data=f,
                 file_name="PharmaTrace_Data_Template.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True,
             )
-    st.markdown("<div style='font-size:10px; color:#475569; margin:4px 0 12px; line-height:1.5;'>Fill in all 9 sheets with your data, then upload below.</div>", unsafe_allow_html=True)
+    st.markdown("<div style='font-size:10px; color:#475569; margin:4px 0 12px; line-height:1.5;'>Fill in all 9 sheets, then upload below.</div>", unsafe_allow_html=True)
 
     # ── Single File Upload ─────────────────────────────────────────────────
     st.markdown("<div style='font-size:12px; font-weight:600; color:#94a3b8; margin-bottom:6px;'>📂 Step 2 — Upload Your Data</div>", unsafe_allow_html=True)
@@ -441,9 +493,10 @@ with st.sidebar:
         "Upload filled template (.xlsx)",
         type=["xlsx"],
         key="unified_upload",
-        help="Upload the PharmaTrace_Data_Template.xlsx after filling in your data across all sheets."
+        help="Upload the PharmaTrace_Data_Template.xlsx after filling in your data."
     )
     st.markdown("---")
+
     # Auto-detect local data (developer mode)
     LOCAL_MASTER = r"/Users/babitakironvedantam/Desktop/CAPSTONE FINAL/PharmaTrace AI - DATA/master_dataset/PharmaTrace_Master_Dataset.xlsx"
     LOCAL_ADD    = r"/Users/babitakironvedantam/Desktop/CAPSTONE FINAL/AI Modules/additional data"
@@ -453,11 +506,11 @@ with st.sidebar:
     if use_local:
         st.success("✅ Local data auto-detected", icon="💾")
     elif uploaded_file:
-        st.success("✅ File uploaded successfully", icon="📊")
+        st.success("✅ File uploaded", icon="📊")
     elif use_sample:
-        st.info("📊 Demo data loaded — upload your own file above to analyse your data", icon="🔬")
+        st.info("📊 Demo data — upload your file to analyse your own data", icon="🔬")
     else:
-        st.info("Download the template, fill it in, then upload", icon="📤")
+        st.info("Download template → fill → upload", icon="📤")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # DATA LOADING  — single unified Excel file with 9 sheets
@@ -662,9 +715,8 @@ RISK_ORDER   = ["EXPIRED","CRITICAL (<30d)","HIGH (30-90d)","MEDIUM (90-180d)","
 # PAGE: HOME & KPI SUMMARY
 # ─────────────────────────────────────────────────────────────────────────────
 if selected_page == "🏠 Home & KPI Summary":
-    st.markdown('<div class="section-header">📊 Executive KPI Summary</div>', unsafe_allow_html=True)
-    info_box("Risk Tiers", "ℹ️ Understanding risk tiers")
 
+    # ── KPI Row 1: Financial & Operational ───────────────────────────────────
     total_inv_value = inventory["inventory_value_usd"].sum()
     at_risk_value   = inventory[inventory["expiry_risk"].isin(["EXPIRED","CRITICAL (<30d)","HIGH (30-90d)"])]["inventory_value_usd"].sum()
     pct_at_risk     = at_risk_value / total_inv_value * 100 if total_inv_value else 0
@@ -674,13 +726,18 @@ if selected_page == "🏠 Home & KPI Summary":
     total_units     = inventory["quantity_on_hand"].sum()
 
     picks = df_txns[df_txns["transaction_type"]=="OUTBOUND_DISPATCH_PICK"].copy() if (supp_ok and "transaction_type" in df_txns.columns) else (df_txns.copy() if supp_ok else None)
-    fefo_rate       = picks["is_fefo_compliant"].mean() * 100 if (picks is not None and "is_fefo_compliant" in picks.columns) else 0
-    excursion_rate  = df_iot["is_thermal_excursion"].mean() * 100 if (supp_ok and "is_thermal_excursion" in df_iot.columns) else 0
-    avg_fill_rate   = 0
+    fefo_rate      = picks["is_fefo_compliant"].mean() * 100 if (picks is not None and "is_fefo_compliant" in picks.columns) else 0
+    excursion_rate = df_iot["is_thermal_excursion"].mean() * 100 if (supp_ok and "is_thermal_excursion" in df_iot.columns) else 0
+    avg_fill_rate  = 0
     if supp_ok:
         monthly_agg = df_demand.groupby("year_month").agg(demanded=("quantity_demanded_units","sum"), dispatched=("quantity_dispatched_units","sum")).reset_index()
         monthly_agg["fill_rate"] = monthly_agg["dispatched"] / monthly_agg["demanded"] * 100
         avg_fill_rate = monthly_agg["fill_rate"].mean()
+
+    # ── Top KPI strip ─────────────────────────────────────────────────────
+    st.markdown('<div class="section-header">📊 Executive KPI Summary</div>', unsafe_allow_html=True)
+    with st.expander("ℹ️ What do these KPIs mean?", expanded=False):
+        st.markdown(GLOSSARY["Total Inventory Value"] + "\n\n---\n\n" + GLOSSARY["FEFO Compliance"] + "\n\n---\n\n" + GLOSSARY["IoT Excursion Rate"])
 
     cols = st.columns(5)
     kpis = [
@@ -692,90 +749,92 @@ if selected_page == "🏠 Home & KPI Summary":
     ]
     for col, (label, value, color, sub) in zip(cols, kpis):
         col.markdown(kpi_card(label, value, color, sub), unsafe_allow_html=True)
-    # KPI row 1 info popovers
-    info_cols = st.columns(5)
-    for icol, key in zip(info_cols, ["Total Inventory Value","At-Risk Value","FEFO Compliance","Avg Fill Rate","IoT Excursion Rate"]):
-        with icol:
-            info_box(key)
 
     st.markdown("<br/>", unsafe_allow_html=True)
     cols2 = st.columns(4)
     kpis2 = [
-        ("Active Products",   f"{n_products:,}",         "#7c3aed", "Unique SKUs across network"),
+        ("Active Products",   f"{n_products:,}",         "#7c3aed", "Unique SKUs tracked"),
         ("Warehouses",        f"{n_warehouses}",          "#f59e0b", "Distribution centres"),
         ("Total Stock Units", f"{total_units/1e3:.1f}K",  "#14b8a6", "Units on hand"),
         ("Cold-Chain Value",  f"{cold_chain_pct:.1f}%",  "#3b82f6", "Of total inventory value"),
     ]
     for col, (label, value, color, sub) in zip(cols2, kpis2):
         col.markdown(kpi_card(label, value, color, sub), unsafe_allow_html=True)
-    # KPI row 2 info popovers
-    info_cols2 = st.columns(4)
-    for icol, key in zip(info_cols2, ["Active Products","Warehouses","Total Stock Units","Cold-Chain Value"]):
-        with icol:
-            info_box(key)
 
-    st.markdown('<div class="section-header">🏆 Executive Scorecard</div>', unsafe_allow_html=True)
-    info_box("Inventory Overview", "ℹ️ What do these 6 charts show?")
-    fig = plt.figure(figsize=(20, 10))
-    fig.patch.set_facecolor("#0f1117")
-    fig.text(0.5, 0.97, "PharmaTrace AI — Executive Warehouse KPI Dashboard", ha="center", fontsize=17, fontweight="bold", color="#00d4ff")
-    fig.text(0.5, 0.925, f"Module 3: Warehouse & FEFO Inventory Optimization  |  As of: {TODAY.date()}", ha="center", fontsize=11, color="#aaa")
-    gs = gridspec.GridSpec(2, 3, figure=fig, hspace=0.55, wspace=0.4, left=0.07, right=0.95, top=0.88, bottom=0.08)
+    st.markdown("---")
 
-    ax1 = fig.add_subplot(gs[0, 0])
-    wh_val = inventory.groupby("warehouse_id")["inventory_value_usd"].sum().sort_values()
-    bars = ax1.barh(wh_val.index, wh_val.values/1e3, color=PALETTE[:len(wh_val)], alpha=0.9)
-    ax1.set_title("Inventory Value by Warehouse (USD K)")
-    ax1.set_xlabel("USD K")
-    for bar in bars:
-        ax1.text(bar.get_width()+0.5, bar.get_y()+bar.get_height()/2, f"${bar.get_width():.0f}K", va="center", fontsize=8)
+    # ── Live Alert Feed ────────────────────────────────────────────────────
+    st.markdown('<div class="section-header">🚨 Live Alert Feed</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-desc">Actionable alerts — items that need management attention right now</div>', unsafe_allow_html=True)
 
-    ax2 = fig.add_subplot(gs[0, 1])
-    rc = inventory["expiry_risk"].value_counts().reindex([r for r in RISK_ORDER if r in inventory["expiry_risk"].unique()])
-    ax2.pie(rc.values, labels=rc.index, autopct="%1.1f%%", colors=[RISK_COLORS.get(r,"#888") for r in rc.index], wedgeprops={"edgecolor":"#0f1117","linewidth":2})
-    ax2.set_title("Expiry Risk Distribution")
-
-    ax3 = fig.add_subplot(gs[0, 2])
-    if "dosage_form" in inventory.columns:
-        df_form = inventory.groupby("dosage_form")["inventory_value_usd"].sum().nlargest(8).sort_values()
-        ax3.barh(df_form.index, df_form.values/1e3, color="#7c3aed", alpha=0.85)
-        ax3.set_title("Stock Value by Dosage Form (USD K)")
-
-    ax4 = fig.add_subplot(gs[1, 0])
+    alerts = []
+    expired = inventory[inventory["expiry_risk"]=="EXPIRED"]
+    critical = inventory[inventory["expiry_risk"]=="CRITICAL (<30d)"]
+    if not expired.empty:
+        alerts.append(("#7f1d1d", "🛑", f"**{len(expired)} batches EXPIRED** — ${expired['inventory_value_usd'].sum():,.0f} at risk of regulatory disposal"))
+    if not critical.empty:
+        alerts.append(("#ef4444", "🔴", f"**{len(critical)} batches CRITICAL** (<30 days) — ${critical['inventory_value_usd'].sum():,.0f} — dispatch or liquidate immediately"))
+    if supp_ok and fefo_rate < 97:
+        alerts.append(("#f59e0b", "🟠", f"**FEFO Compliance {fefo_rate:.1f}%** — below 97% regulatory target. Review pick ledger."))
+    if supp_ok and avg_fill_rate < 97:
+        alerts.append(("#f59e0b", "🟠", f"**Fill Rate {avg_fill_rate:.1f}%** — below 97% target. Potential stockouts affecting patients."))
+    if supp_ok and excursion_rate > 5:
+        alerts.append(("#ef4444", "❄️", f"**Cold-chain Excursion Rate {excursion_rate:.1f}%** — above 5% threshold. Investigate IoT logs."))
     if "capacity_units" in warehouses.columns:
         wh_units = inventory.groupby("warehouse_id")["quantity_on_hand"].sum()
         wh_cap   = warehouses.set_index("warehouse_id")["capacity_units"]
         util     = (wh_units / wh_cap).dropna() * 100
-        colors_u = ["#ef4444" if u>90 else "#f59e0b" if u>75 else "#10b981" for u in util.values]
-        ax4.bar(util.index, util.values, color=colors_u, alpha=0.9)
-        ax4.axhline(90, color="#ef4444", linestyle="--", lw=1.5, label="90% Warning")
-        ax4.set_title("Warehouse Capacity Utilisation (%)")
-        ax4.set_ylabel("Utilisation %")
-        ax4.legend(fontsize=8, framealpha=0)
-        ax4.tick_params(axis="x", rotation=30)
+        over_cap = util[util > 90]
+        if not over_cap.empty:
+            alerts.append(("#7c3aed", "🏢", f"**{len(over_cap)} warehouse(s) over 90% capacity** — {', '.join(over_cap.index.tolist())} — transfer or expedite stock"))
 
-    ax5 = fig.add_subplot(gs[1, 1])
-    if "qc_status" in inventory.columns:
-        qc = inventory["qc_status"].value_counts()
-        ax5.pie(qc.values, labels=qc.index, autopct="%1.1f%%", colors=["#10b981","#f59e0b","#ef4444","#6b7280"][:len(qc)], wedgeprops={"edgecolor":"#0f1117","linewidth":2})
-        ax5.set_title("QC Status Distribution")
+    if not alerts:
+        st.success("✅ **All systems healthy** — no urgent alerts at this time.", icon="✅")
+    else:
+        for color, icon, msg in alerts:
+            st.markdown(
+                f"<div class='alert-card' style='background:{color}18; border-color:{color};'>{icon} {msg}</div>",
+                unsafe_allow_html=True
+            )
 
-    ax6 = fig.add_subplot(gs[1, 2])
-    cold_val = inventory[inventory["is_cold_chain"]]["inventory_value_usd"].sum()
-    ax6.pie([cold_val, total_inv_value-cold_val], labels=["Cold-Chain","Ambient"], colors=["#3b82f6","#f59e0b"], autopct="%1.1f%%", wedgeprops={"edgecolor":"#0f1117","linewidth":2})
-    ax6.set_title("Cold-Chain vs Ambient Stock Value")
+    st.markdown("---")
 
-    show_fig(fig)
-
-    st.markdown('<div class="section-header">📋 Inventory Summary by Warehouse</div>', unsafe_allow_html=True)
-    info_box("Capacity Utilisation", "ℹ️ What do these columns mean?")
+    # ── Network Snapshot ──────────────────────────────────────────────────
+    st.markdown('<div class="section-header">🏭 Warehouse Network Snapshot</div>', unsafe_allow_html=True)
     summary = inventory.groupby("warehouse_id").agg(
-        Products=("product_id","nunique"), Total_Units=("quantity_on_hand","sum"),
-        Inventory_Value_USD=("inventory_value_usd","sum"),
-        At_Risk_Units=("expiry_risk", lambda x: x.isin(["EXPIRED","CRITICAL (<30d)","HIGH (30-90d)"]).sum()),
+        Products    =("product_id","nunique"),
+        Total_Units =("quantity_on_hand","sum"),
+        Value_USD   =("inventory_value_usd","sum"),
+        At_Risk     =("expiry_risk", lambda x: x.isin(["EXPIRED","CRITICAL (<30d)","HIGH (30-90d)"]).sum()),
     ).round(0)
-    summary["Inventory_Value_USD"] = summary["Inventory_Value_USD"].map("${:,.0f}".format)
+    if "capacity_units" in warehouses.columns:
+        wh_cap2 = warehouses.set_index("warehouse_id")["capacity_units"]
+        summary["Util_%"] = (summary["Total_Units"] / wh_cap2 * 100).round(1)
+    summary["Value_USD"] = summary["Value_USD"].map("${:,.0f}".format)
     st.dataframe(summary, use_container_width=True)
+
+    st.markdown("---")
+
+    # ── Quick Navigation ──────────────────────────────────────────────────
+    st.markdown('<div class="section-header">🧭 Quick Navigation</div>', unsafe_allow_html=True)
+    nav_items = [
+        ("📦", "Inventory & Stock",     "Stock levels, expiry risk, and multi-warehouse grid"),
+        ("✅", "FEFO Compliance",        "Regulatory compliance rate by warehouse & month"),
+        ("🌡️", "Expiry Risk Heatmap",   "Near-expiry batches mapped by warehouse & USD value"),
+        ("📋", "Order Fulfilment",       "Simulate a sales order — check stock, WIP & raw materials"),
+        ("🗺️", "Geo Sales Intelligence", "Identify HOT & COLD demand locations across warehouses"),
+        ("💡", "Smart Transfer Recommender", "Find cheapest restock option: transfer vs manufacture"),
+    ]
+    nav_cols = st.columns(3)
+    for i, (icon, title, desc) in enumerate(nav_items):
+        nav_cols[i % 3].markdown(f"""
+<div class='nav-card'>
+  <div class='nav-card-icon'>{icon}</div>
+  <div class='nav-card-title'>{title}</div>
+  <div class='nav-card-desc'>{desc}</div>
+</div>""", unsafe_allow_html=True)
+
+    st.caption("→ Use the sidebar to navigate between all 14 pages of the dashboard.")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PAGE: INVENTORY OVERVIEW
@@ -1018,9 +1077,11 @@ elif selected_page == "🌡️ Expiry Risk Heatmap":
 # ─────────────────────────────────────────────────────────────────────────────
 elif selected_page == "📈 Demand & Seasonality":
     st.markdown('<div class="section-header">📈 24-Month Demand Trend & Seasonality</div>', unsafe_allow_html=True)
-    info_box("Demand Header", "ℹ️ Analyzing demand trends and seasonality patterns.")
+    st.markdown('<div class="section-desc">Monthly demand vs dispatch | Service level (fill rate) | Seasonal patterns by therapy area | Revenue trajectory</div>', unsafe_allow_html=True)
+    with st.expander("ℹ️ What these 4 charts show", expanded=False):
+        st.markdown(GLOSSARY["Demand Trend"])
     if not supp_ok:
-        st.warning("Upload Monthly Demand file (file 01) to view this analysis.", icon="⚠️"); st.stop()
+        st.warning("Upload Monthly Demand data (via the template) to view this analysis.", icon="⚠️"); st.stop()
 
     monthly_agg = df_demand.groupby("year_month").agg(demanded=("quantity_demanded_units","sum"), dispatched=("quantity_dispatched_units","sum")).reset_index().sort_values("year_month")
     monthly_agg["fill_rate"] = monthly_agg["dispatched"] / monthly_agg["demanded"] * 100
@@ -1161,23 +1222,23 @@ elif selected_page == "⚖️ LP Cost Optimizer":
         df_econ[["product_id","daily_holding_cost_per_unit_usd","stockout_penalty_cost_per_unit_usd","certified_destruction_cost_per_unit_usd","secondary_liquidation_recovery_pct"]],
         on="product_id", how="left").dropna(subset=["daily_holding_cost_per_unit_usd"])
 
-    st.info(f"Running LP on **{min(50,len(at_risk_inv))}** at-risk records…", icon="⚙️")
-    lp_results = []
-    for _, row in at_risk_inv.head(50).iterrows():
-        Q, dte = float(row["quantity_on_hand"]), max(float(row["days_to_expiry"]), 1)
-        h, d_c = float(row["daily_holding_cost_per_unit_usd"]), float(row["certified_destruction_cost_per_unit_usd"])
-        p, rec = float(row["unit_price"]), float(row["secondary_liquidation_recovery_pct"])/100.0
-        vel = max(float(row.get("avg_monthly_dispatch",30))/30.0, 0.1)
-        max_dispatch = min(Q*0.9, vel*dte); max_transfer = min(Q*0.5, Q-max_dispatch)
-        max_liquidate = Q*0.35; min_dispose = Q*0.05 if dte<2 else 0
-        c = [-(p-h*dte), -(p*0.6-h*dte*0.5), -(p*rec), d_c+h*dte]
-        A_ub = [[1,1,1,1],[1,0,0,0],[0,1,0,0],[0,0,1,0]]
-        b_ub = [Q, max_dispatch, max_transfer, max_liquidate]
-        bounds = [(0,max_dispatch),(0,max_transfer),(0,max_liquidate),(min_dispose,Q)]
-        res = linprog(c, A_ub=A_ub, b_ub=b_ub, bounds=bounds, method="highs")
-        if res.success:
-            x1,x2,x3,x4 = res.x
-            lp_results.append({"product_id":row["product_id"],"warehouse_id":row.get("warehouse_id",""),"DTE":int(dte),"Qty":int(Q),"Dispatch":round(x1),"Transfer":round(x2),"Liquidate":round(x3),"Dispose":round(x4),"Net_Saving_USD":round(-res.fun,2)})
+    with st.spinner(f"Running LP optimisation on {min(50,len(at_risk_inv))} at-risk records…"):
+        lp_results = []
+        for _, row in at_risk_inv.head(50).iterrows():
+            Q, dte = float(row["quantity_on_hand"]), max(float(row["days_to_expiry"]), 1)
+            h, d_c = float(row["daily_holding_cost_per_unit_usd"]), float(row["certified_destruction_cost_per_unit_usd"])
+            p, rec = float(row["unit_price"]), float(row["secondary_liquidation_recovery_pct"])/100.0
+            vel = max(float(row.get("avg_monthly_dispatch",30))/30.0, 0.1)
+            max_dispatch = min(Q*0.9, vel*dte); max_transfer = min(Q*0.5, Q-max_dispatch)
+            max_liquidate = Q*0.35; min_dispose = Q*0.05 if dte<2 else 0
+            c = [-(p-h*dte), -(p*0.6-h*dte*0.5), -(p*rec), d_c+h*dte]
+            A_ub = [[1,1,1,1],[1,0,0,0],[0,1,0,0],[0,0,1,0]]
+            b_ub = [Q, max_dispatch, max_transfer, max_liquidate]
+            bounds = [(0,max_dispatch),(0,max_transfer),(0,max_liquidate),(min_dispose,Q)]
+            res = linprog(c, A_ub=A_ub, b_ub=b_ub, bounds=bounds, method="highs")
+            if res.success:
+                x1,x2,x3,x4 = res.x
+                lp_results.append({"product_id":row["product_id"],"warehouse_id":row.get("warehouse_id",""),"DTE":int(dte),"Qty":int(Q),"Dispatch":round(x1),"Transfer":round(x2),"Liquidate":round(x3),"Dispose":round(x4),"Net_Saving_USD":round(-res.fun,2)})
 
     if lp_results:
         lp_df = pd.DataFrame(lp_results)
@@ -1508,9 +1569,11 @@ elif selected_page == "🧪 Raw Materials & Pricing":
 # ─────────────────────────────────────────────────────────────────────────────
 # PAGE: ORDER FULFILMENT SIMULATOR  (Idea 3 + 4 + 6)
 # ─────────────────────────────────────────────────────────────────────────────
-elif selected_page == "📋 Order Fulfilment Simulator":
+elif selected_page == "📋 Order Fulfilment":
     st.markdown('<div class="section-header">📋 Order Fulfilment Simulator</div>', unsafe_allow_html=True)
-    st.markdown('<div class="section-desc">Simulate an incoming sales order — check finished goods, WIP status, and raw material availability to determine fulfilment path.</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-desc">Simulate an incoming sales order — 3-path decision engine: Ship from Stock | Fulfil from WIP | Trigger Manufacturing + BOM raw material check</div>', unsafe_allow_html=True)
+    with st.expander("ℹ️ How the 3-path decision engine works", expanded=False):
+        st.markdown("**Path 1 ✅ SHIP FROM STOCK** — Enough finished goods in warehouse → dispatch directly.\n\n**Path 2 ⏳ FULFIL FROM WIP** — Not enough stock, but manufacturing order in progress → expected ready date.\n\n**Path 3 🚨 MANUFACTURE** — Neither stock nor WIP → raise new MO, check if all raw materials are available.")
 
     # ── Synthetic BOM + WIP data ───────────────────────────────────────────────
     @st.cache_data
@@ -1559,27 +1622,9 @@ elif selected_page == "📋 Order Fulfilment Simulator":
 
     BOM, RM_STOCK, RM_NAMES, df_wip = build_fulfilment_data()
 
-    # ── SECTION A: Live Finished-Goods Stock Snapshot (Idea 4) ─────────────────
-    st.markdown('<div class="section-header">📦 Live Finished-Goods Snapshot</div>', unsafe_allow_html=True)
-    st.caption(f"🕒 Last updated: {TODAY.strftime('%d %b %Y')} | Source: Inventory ledger")
-
-    # Product × Warehouse pivot (Idea 6 — multi-warehouse grid)
-    if not inventory.empty:
-        fg_pivot = inventory.groupby(["product_id","warehouse_id"])["quantity_on_hand"].sum().unstack(fill_value=0)
-        fg_pivot.index = fg_pivot.index.map(
-            lambda pid: products[products.product_id==pid]["generic_name"].values[0]
-            if len(products[products.product_id==pid]) > 0 else pid
-        )
-        fg_pivot["TOTAL"] = fg_pivot.sum(axis=1)
-        fg_pivot = fg_pivot.sort_values("TOTAL", ascending=False)
-        st.markdown("**Product × Warehouse Stock Grid** (units on hand — RELEASED batches)")
-        st.dataframe(fg_pivot.style.background_gradient(cmap="Blues", axis=None).format("{:,.0f}"),
-                     use_container_width=True)
-    st.markdown("---")
-
-    # ── SECTION B: ORDER ENTRY SIMULATOR ──────────────────────────────────────────
-    st.markdown('<div class="section-header">📧 Simulate Incoming Sales Order</div>', unsafe_allow_html=True)
-    st.markdown("Enter an order as if it arrived via email or EDI — the system checks fulfilment options automatically.")
+    # ── ORDER ENTRY SIMULATOR ──────────────────────────────────────────────────
+    st.markdown('<div class="section-header">📧 Simulate a Sales Order</div>', unsafe_allow_html=True)
+    st.markdown("Enter a product and quantity — the system automatically checks stock, WIP, and raw material availability.")
 
     prod_options = products[["product_id","generic_name","dosage_form"]].copy()
     prod_options["label"] = prod_options["product_id"] + " — " + prod_options["generic_name"] + " (" + prod_options["dosage_form"] + ")"
@@ -1712,13 +1757,14 @@ elif selected_page == "📋 Order Fulfilment Simulator":
                 st.dataframe(df_bom, use_container_width=True)
             else:
                 st.info("BOM not configured for this product in the simulator.")
+    st.caption("→ Next: 🏷️ WIP & Manufacturing — see all active manufacturing orders and their completion status")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PAGE: WIP & MANUFACTURING TRACKER  (Idea 5)
 # ─────────────────────────────────────────────────────────────────────────────
-elif selected_page == "🏷️ WIP & Manufacturing Tracker":
-    st.markdown('<div class="section-header">🏷️ Work-In-Progress & Manufacturing Tracker</div>', unsafe_allow_html=True)
-    st.markdown('<div class="section-desc">Real-time view of all active manufacturing orders — status, completion %, expected finish date, and WIP unit count per product.</div>', unsafe_allow_html=True)
+elif selected_page == "🏷️ WIP & Manufacturing":
+    st.markdown('<div class="section-header">🏷️ WIP & Manufacturing Tracker</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-desc">All active manufacturing orders — status, completion %, expected finish date, production stage, and WIP unit count per product</div>', unsafe_allow_html=True)
 
     @st.cache_data
     def build_wip_full():
@@ -1855,6 +1901,7 @@ elif selected_page == "🏷️ WIP & Manufacturing Tracker":
                fontsize=9, framealpha=0.2)
     plt.tight_layout()
     show_fig(fig3)
+    st.caption("→ Next: 🗺️ Geo Sales Intelligence — find which locations have HOT demand & surplus stock")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PAGE: GEO SALES INTELLIGENCE  (Idea 7)
@@ -2078,15 +2125,15 @@ elif selected_page == "🗺️ Geo Sales Intelligence":
     display_geo["Avg Monthly Demand"] = display_geo["Avg Monthly Demand"].round(0)
     display_geo["Days of Stock"] = display_geo["Days of Stock"].clip(upper=999).round(0)
     st.dataframe(display_geo, use_container_width=True, height=420)
-    st.caption("→ Go to 💡 Smart Transfer Recommender to see cost-optimal rebalancing suggestions based on this analysis.")
+    st.caption("→ Next: 💡 Smart Transfer Recommender — get cost-optimal rebalancing decisions based on this analysis")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PAGE: SMART TRANSFER RECOMMENDER  (Idea 8)
 # ─────────────────────────────────────────────────────────────────────────────
 elif selected_page == "💡 Smart Transfer Recommender":
-    st.markdown('<div class="section-header">💡 Smart Stock Transfer Recommendation Engine</div>', unsafe_allow_html=True)
-    st.markdown('<div class="section-desc">For every 🔥 HOT location, compare <b>Transfer cost</b> (move surplus from ❄️ COLD warehouse) vs <b>Manufacturing cost</b> (make fresh units) — and recommend the cheaper option with $ savings.</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-header">💡 Smart Stock Transfer Recommender</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-desc">For every 🔥 HOT location: compares Transfer cost (move surplus from ❄️ COLD warehouse) vs Manufacturing cost — recommends the cheaper option with exact $ savings</div>', unsafe_allow_html=True)
 
     if not supp_ok:
         st.warning("⚠️ Upload data via the template to enable this analysis.", icon="⚠️")
@@ -2313,6 +2360,17 @@ elif selected_page == "💡 Smart Transfer Recommender":
             .sort_values("Est. Saving ($)", ascending=False).reset_index(drop=True),
             use_container_width=True
         )
+
+        # ── Freight Matrix Reference (merged from removed Freight page) ───
+        with st.expander("📦 View Raw Freight Cost Matrix", expanded=False):
+            if not df_freight.empty:
+                cost_col_r = next((c for c in df_freight.columns if "cost" in c.lower()), None)
+                amb_col_r  = "ambient_transfer_cost_per_unit_usd" if "ambient_transfer_cost_per_unit_usd" in df_freight.columns else cost_col_r
+                if cost_col_r:
+                    show_cols_r = [c for c in ["from_warehouse_id","to_warehouse_id","logistics_tier",amb_col_r,cost_col_r] if c in df_freight.columns]
+                    st.dataframe(df_freight[show_cols_r].sort_values(amb_col_r).reset_index(drop=True), use_container_width=True)
+            else:
+                st.info("Upload freight matrix data to view routes.")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # FOOTER
