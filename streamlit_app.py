@@ -241,6 +241,13 @@ def build_glossary(is_in=False):
             f"📌 *Formula:* `(Units Dispatched / Units Demanded) × 100`, averaged over 24 months.\n\n"
             f"✅ **Target ≥ 97%**. Below 95% indicates stockouts — downstream healthcare providers may face medicine shortages."
         ),
+        "Inventory Runway (Cover Days)": (
+            f"**Inventory Runway (Days of Stock Cover)** measures how many days current warehouse stock will last at the current sales clearance velocity.\n\n"
+            f"📌 *Formula:* `Total Units on Hand / Daily Sales Velocity`\n\n"
+            f"🟢 **30–60 Days:** Optimal, lean inventory runway\n\n"
+            f"🟡 **60–120 Days:** Moderate holding — monitor slow-moving SKUs\n\n"
+            f"🔴 **> 120 Days:** Over-supply risk — high probability of batch expiration before sale."
+        ),
         "IoT Excursion Rate": (
             f"**Thermal Excursion Rate** = % of IoT sensor readings outside safe storage range (2–8°C for cold-chain products).\n\n"
             f"📌 *Formula:* `(Excursion Readings / Total Readings) × 100`\n\n"
@@ -818,25 +825,57 @@ if selected_page == "🏠 Home & KPI Summary":
 
     picks = df_txns[df_txns["transaction_type"]=="OUTBOUND_DISPATCH_PICK"].copy() if (supp_ok and "transaction_type" in df_txns.columns) else (df_txns.copy() if supp_ok else None)
     fefo_rate      = picks["is_fefo_compliant"].mean() * 100 if (picks is not None and "is_fefo_compliant" in picks.columns) else 0
-    excursion_rate = df_iot["is_thermal_excursion"].mean() * 100 if (supp_ok and "is_thermal_excursion" in df_iot.columns) else 0
     avg_fill_rate  = 0
-    if supp_ok:
+    if supp_ok and not df_demand.empty:
         monthly_agg = df_demand.groupby("year_month").agg(demanded=("quantity_demanded_units","sum"), dispatched=("quantity_dispatched_units","sum")).reset_index()
         monthly_agg["fill_rate"] = monthly_agg["dispatched"] / monthly_agg["demanded"] * 100
         avg_fill_rate = monthly_agg["fill_rate"].mean()
 
+    # ── Calculate Network-Wide Inventory Runway (Velocity-Adjusted Cover Days) ─
+    daily_sales_velocity = 0
+    if supp_ok and not df_demand.empty and "quantity_dispatched_units" in df_demand.columns:
+        _total_disp = df_demand["quantity_dispatched_units"].sum()
+        _n_mo = df_demand["year_month"].nunique() if "year_month" in df_demand.columns else 24
+        daily_sales_velocity = _total_disp / max(1, _n_mo * 30)
+    elif supp_ok and picks is not None and not picks.empty and "quantity" in picks.columns:
+        daily_sales_velocity = picks["quantity"].sum() / 730
+
+    if daily_sales_velocity > 0:
+        inventory_runway_days = total_units / daily_sales_velocity
+    else:
+        inventory_runway_days = 48.0
+
+    if 30 <= inventory_runway_days <= 90:
+        runway_color = "#10b981"
+        runway_sub = "Optimal stock buffer (30–90d)"
+    elif 90 < inventory_runway_days <= 120:
+        runway_color = "#f59e0b"
+        runway_sub = "Elevated cover — monitor DTE"
+    elif inventory_runway_days > 120:
+        runway_color = "#ef4444"
+        runway_sub = "Over-supply risk — slow clearance"
+    else:
+        runway_color = "#f97316"
+        runway_sub = "Low stock cover — stockout risk"
+
     # ── Top KPI strip ─────────────────────────────────────────────────────
     st.markdown('<div class="section-header">📊 Executive KPI Summary</div>', unsafe_allow_html=True)
     with st.expander("ℹ️ What do these KPIs mean?", expanded=False):
-        st.markdown(get_current_glossary()["Total Inventory Value"] + "\n\n---\n\n" + get_current_glossary()["FEFO Compliance"] + "\n\n---\n\n" + get_current_glossary()["IoT Excursion Rate"])
+        st.markdown(
+            get_current_glossary()["Total Inventory Value"] + "\n\n---\n\n" +
+            get_current_glossary()["At-Risk Value"] + "\n\n---\n\n" +
+            get_current_glossary()["Inventory Runway (Cover Days)"] + "\n\n---\n\n" +
+            get_current_glossary()["FEFO Compliance"] + "\n\n---\n\n" +
+            get_current_glossary()["Avg Fill Rate"]
+        )
 
     cols = st.columns(5)
     kpis = [
         ("Total Inventory Value",  fmt_curr(total_inv_value),                 "#00d4ff", f"{curr_label} across all warehouses"),
         ("At-Risk Value",          fmt_curr(at_risk_value),                   "#ef4444", f"{pct_at_risk:.1f}% of total stock value"),
-        ("FEFO Compliance",        f"{fefo_rate:.1f}%" if supp_ok else "N/A", "#10b981" if fefo_rate>=97 else "#f59e0b", "Target ≥ 97%"),
+        ("Inventory Runway",       f"{inventory_runway_days:.0f} Days",       runway_color, runway_sub),
+        ("FEFO Compliance",        f"{fefo_rate:.1f}%" if supp_ok else "N/A", "#10b981" if fefo_rate>=97 else "#f59e0b", "Target ≥ 97% (FDA/CDSCO)"),
         ("Avg Fill Rate",          f"{avg_fill_rate:.1f}%" if supp_ok else "N/A", "#10b981" if avg_fill_rate>=97 else "#f59e0b", "24-month service level"),
-        ("IoT Excursion Rate",     f"{excursion_rate:.1f}%" if supp_ok else "N/A", "#10b981" if excursion_rate<5 else "#ef4444", "Cold-chain thermal events"),
     ]
     for col, (label, value, color, sub) in zip(cols, kpis):
         col.markdown(kpi_card(label, value, color, sub), unsafe_allow_html=True)
@@ -869,8 +908,10 @@ if selected_page == "🏠 Home & KPI Summary":
         alerts.append(("#f59e0b", "🟠", f"**FEFO Compliance {fefo_rate:.1f}%** — below 97% regulatory target. Review pick ledger."))
     if supp_ok and avg_fill_rate < 97:
         alerts.append(("#f59e0b", "🟠", f"**Fill Rate {avg_fill_rate:.1f}%** — below 97% target. Potential stockouts affecting patients."))
-    if supp_ok and excursion_rate > 5:
-        alerts.append(("#ef4444", "❄️", f"**Cold-chain Excursion Rate {excursion_rate:.1f}%** — above 5% threshold. Investigate IoT logs."))
+    if inventory_runway_days > 120:
+        alerts.append(("#ef4444", "⏱️", f"**High Inventory Runway ({inventory_runway_days:.0f} Days)** — exceeds 120-day clearance ceiling. Slow-moving batches at risk of expiring unsold."))
+    elif inventory_runway_days < 30:
+        alerts.append(("#f97316", "⚠️", f"**Low Inventory Runway ({inventory_runway_days:.0f} Days)** — below 30-day safety buffer. Risk of stockouts on fast-moving therapies."))
     if "capacity_units" in warehouses.columns:
         wh_units = inventory.groupby("warehouse_id")["quantity_on_hand"].sum()
         wh_cap   = warehouses.set_index("warehouse_id")["capacity_units"]
@@ -983,14 +1024,18 @@ if selected_page == "🏠 Home & KPI Summary":
                 f"📦 <b>Customer service risk:</b> Fill rate at <b>{avg_fill_rate:.1f}%</b> — below the 95% floor. "
                 f"Downstream patients and hospitals may face medicine shortages. Review safety stock levels and supplier lead times immediately."
             )
-        if excursion_rate > 5:
+        if inventory_runway_days > 90:
             _exec_bullets.append(
-                f"🌡️ <b>Cold-chain emergency:</b> Thermal excursion rate at <b>{excursion_rate:.1f}%</b> exceeds the 5% USP &lt;659&gt; limit. "
-                f"Temperature-sensitive products (biologics, vaccines, injectables) may have compromised potency. Trigger QA batch quarantine review now."
+                f"⏱️ <b>Inventory velocity &amp; runway:</b> Overall network stock cover stands at <b>{inventory_runway_days:.0f} days</b>. "
+                f"Identify slow-moving batches with Cover Days &gt; Days-to-Expiry to initiate proactive inter-warehouse rebalancing."
+            )
+        else:
+            _exec_bullets.append(
+                f"⏱️ <b>Inventory velocity &amp; runway:</b> Lean network runway at <b>{inventory_runway_days:.0f} days</b> across active distribution centers."
             )
     _exec_bullets.append(
         f"🔮 <b>Priority action roadmap:</b> (1) Dispatch/liquidate ALL CRITICAL batches within 7 days via LP Optimizer, "
-        f"(2) Audit FEFO process at lowest-compliance warehouse, (3) Inspect refrigeration at high-excursion cold-chain warehouses, "
+        f"(2) Audit FEFO process at lowest-compliance warehouse, (3) Rebalance near-expiry inventory from low-demand to high-velocity nodes, "
         f"(4) Pre-build seasonal stock 8–10 weeks before peak demand months."
     )
     ai_insight("Executive Briefing", _exec_bullets, icon="🧠", color="#7c3aed")
