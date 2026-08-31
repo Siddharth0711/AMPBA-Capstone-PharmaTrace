@@ -241,6 +241,11 @@ def build_glossary(is_in=False):
             f"📌 *Formula:* `(Units Dispatched / Units Demanded) × 100`, averaged over 24 months.\n\n"
             f"✅ **Target ≥ 97%**. Below 95% indicates stockouts — downstream healthcare providers may face medicine shortages."
         ),
+        "Velocity Deficit Risk": (
+            f"**Velocity Deficit Risk (Unclearable Surplus Capital)** measures the exact financial value of stock that current sales clearance velocity *cannot clear before expiration*.\n\n"
+            f"📌 *Formula:* `∑ max(0, Quantity on Hand - (Daily Velocity × Days to Expiry)) × Unit Price`\n\n"
+            f"💡 Evaluates every batch individually without the flaw of averages. Even if a product has 1 year of expiry remaining, if sales velocity is too slow to absorb the units on hand, the unclearable portion registers as immediate financial risk."
+        ),
         "Inventory Runway (Cover Days)": (
             f"**Inventory Runway (Days of Stock Cover)** measures how many days current warehouse stock will last at the current sales clearance velocity.\n\n"
             f"📌 *Formula:* `Total Units on Hand / Daily Sales Velocity`\n\n"
@@ -831,32 +836,25 @@ if selected_page == "🏠 Home & KPI Summary":
         monthly_agg["fill_rate"] = monthly_agg["dispatched"] / monthly_agg["demanded"] * 100
         avg_fill_rate = monthly_agg["fill_rate"].mean()
 
-    # ── Calculate Network-Wide Inventory Runway (Velocity-Adjusted Cover Days) ─
-    daily_sales_velocity = 0
+    # ── SKU-Level Daily Sales Velocity & Exact Unclearable Deficit ───────────
     if supp_ok and not df_demand.empty and "quantity_dispatched_units" in df_demand.columns:
-        _total_disp = df_demand["quantity_dispatched_units"].sum()
         _n_mo = df_demand["year_month"].nunique() if "year_month" in df_demand.columns else 24
-        daily_sales_velocity = _total_disp / max(1, _n_mo * 30)
+        sku_velocity = df_demand.groupby("product_id")["quantity_dispatched_units"].sum() / max(1, _n_mo * 30)
     elif supp_ok and picks is not None and not picks.empty and "quantity" in picks.columns:
-        daily_sales_velocity = picks["quantity"].sum() / 730
-
-    if daily_sales_velocity > 0:
-        inventory_runway_days = total_units / daily_sales_velocity
+        sku_velocity = picks.groupby("product_id")["quantity"].sum() / 730
     else:
-        inventory_runway_days = 48.0
+        sku_velocity = inventory.groupby("product_id")["quantity_on_hand"].sum() / 180
 
-    if 30 <= inventory_runway_days <= 90:
-        runway_color = "#10b981"
-        runway_sub = "Optimal stock buffer (30–90d)"
-    elif 90 < inventory_runway_days <= 120:
-        runway_color = "#f59e0b"
-        runway_sub = "Elevated cover — monitor DTE"
-    elif inventory_runway_days > 120:
-        runway_color = "#ef4444"
-        runway_sub = "Over-supply risk — slow clearance"
-    else:
-        runway_color = "#f97316"
-        runway_sub = "Low stock cover — stockout risk"
+    inventory["sku_daily_velocity"] = inventory["product_id"].map(sku_velocity).fillna(inventory["quantity_on_hand"] / 180)
+    inventory["clearable_units"] = np.maximum(0, inventory["sku_daily_velocity"] * np.maximum(0, inventory["days_to_expiry"]))
+    inventory["unclearable_units"] = np.maximum(0, inventory["quantity_on_hand"] - inventory["clearable_units"])
+    inventory["velocity_deficit_usd"] = inventory["unclearable_units"] * inventory["unit_price"]
+    
+    total_velocity_deficit = inventory["velocity_deficit_usd"].sum()
+    unclearable_skus_count = inventory[inventory["unclearable_units"] > 0]["product_id"].nunique()
+
+    deficit_color = "#ef4444" if total_velocity_deficit > 0 else "#10b981"
+    deficit_sub = f"{unclearable_skus_count} SKUs exceed sales clearance rate" if unclearable_skus_count > 0 else "All batches clearable before expiry"
 
     # ── Top KPI strip ─────────────────────────────────────────────────────
     st.markdown('<div class="section-header">📊 Executive KPI Summary</div>', unsafe_allow_html=True)
@@ -864,18 +862,18 @@ if selected_page == "🏠 Home & KPI Summary":
         st.markdown(
             get_current_glossary()["Total Inventory Value"] + "\n\n---\n\n" +
             get_current_glossary()["At-Risk Value"] + "\n\n---\n\n" +
-            get_current_glossary()["Inventory Runway (Cover Days)"] + "\n\n---\n\n" +
+            get_current_glossary()["Velocity Deficit Risk"] + "\n\n---\n\n" +
             get_current_glossary()["FEFO Compliance"] + "\n\n---\n\n" +
             get_current_glossary()["Avg Fill Rate"]
         )
 
     cols = st.columns(5)
     kpis = [
-        ("Total Inventory Value",  fmt_curr(total_inv_value),                 "#00d4ff", f"{curr_label} across all warehouses"),
-        ("At-Risk Value",          fmt_curr(at_risk_value),                   "#ef4444", f"{pct_at_risk:.1f}% of total stock value"),
-        ("Inventory Runway",       f"{inventory_runway_days:.0f} Days",       runway_color, runway_sub),
-        ("FEFO Compliance",        f"{fefo_rate:.1f}%" if supp_ok else "N/A", "#10b981" if fefo_rate>=97 else "#f59e0b", "Target ≥ 97% (FDA/CDSCO)"),
-        ("Avg Fill Rate",          f"{avg_fill_rate:.1f}%" if supp_ok else "N/A", "#10b981" if avg_fill_rate>=97 else "#f59e0b", "24-month service level"),
+        ("Total Inventory Value",    fmt_curr(total_inv_value),                 "#00d4ff", f"{curr_label} across all warehouses"),
+        ("At-Risk Value",            fmt_curr(at_risk_value),                   "#ef4444", f"{pct_at_risk:.1f}% of total stock value"),
+        ("Velocity Deficit Risk",    fmt_curr(total_velocity_deficit),          deficit_color, deficit_sub),
+        ("FEFO Compliance",          f"{fefo_rate:.1f}%" if supp_ok else "N/A", "#10b981" if fefo_rate>=97 else "#f59e0b", "Target ≥ 97% (FDA/CDSCO)"),
+        ("Avg Fill Rate",            f"{avg_fill_rate:.1f}%" if supp_ok else "N/A", "#10b981" if avg_fill_rate>=97 else "#f59e0b", "24-month service level"),
     ]
     for col, (label, value, color, sub) in zip(cols, kpis):
         col.markdown(kpi_card(label, value, color, sub), unsafe_allow_html=True)
@@ -908,10 +906,8 @@ if selected_page == "🏠 Home & KPI Summary":
         alerts.append(("#f59e0b", "🟠", f"**FEFO Compliance {fefo_rate:.1f}%** — below 97% regulatory target. Review pick ledger."))
     if supp_ok and avg_fill_rate < 97:
         alerts.append(("#f59e0b", "🟠", f"**Fill Rate {avg_fill_rate:.1f}%** — below 97% target. Potential stockouts affecting patients."))
-    if inventory_runway_days > 120:
-        alerts.append(("#ef4444", "⏱️", f"**High Inventory Runway ({inventory_runway_days:.0f} Days)** — exceeds 120-day clearance ceiling. Slow-moving batches at risk of expiring unsold."))
-    elif inventory_runway_days < 30:
-        alerts.append(("#f97316", "⚠️", f"**Low Inventory Runway ({inventory_runway_days:.0f} Days)** — below 30-day safety buffer. Risk of stockouts on fast-moving therapies."))
+    if total_velocity_deficit > 0:
+        alerts.append(("#ef4444", "⏱️", f"**Velocity Deficit Risk {fmt_curr(total_velocity_deficit, compact=False, decimals=0)}** — {unclearable_skus_count} SKU(s) carry surplus stock that current sales velocity cannot clear before expiration."))
     if "capacity_units" in warehouses.columns:
         wh_units = inventory.groupby("warehouse_id")["quantity_on_hand"].sum()
         wh_cap   = warehouses.set_index("warehouse_id")["capacity_units"]
@@ -1024,14 +1020,14 @@ if selected_page == "🏠 Home & KPI Summary":
                 f"📦 <b>Customer service risk:</b> Fill rate at <b>{avg_fill_rate:.1f}%</b> — below the 95% floor. "
                 f"Downstream patients and hospitals may face medicine shortages. Review safety stock levels and supplier lead times immediately."
             )
-        if inventory_runway_days > 90:
+        if total_velocity_deficit > 0:
             _exec_bullets.append(
-                f"⏱️ <b>Inventory velocity &amp; runway:</b> Overall network stock cover stands at <b>{inventory_runway_days:.0f} days</b>. "
-                f"Identify slow-moving batches with Cover Days &gt; Days-to-Expiry to initiate proactive inter-warehouse rebalancing."
+                f"⏱️ <b>Velocity clearance deficit:</b> <b>{fmt_curr(total_velocity_deficit)} ({unclearable_skus_count} SKUs)</b> represents surplus stock where stock cover exceeds remaining shelf-life. "
+                f"Market demand velocity is insufficient to clear these units before expiration without proactive inter-warehouse rebalancing or secondary liquidation."
             )
         else:
             _exec_bullets.append(
-                f"⏱️ <b>Inventory velocity &amp; runway:</b> Lean network runway at <b>{inventory_runway_days:.0f} days</b> across active distribution centers."
+                f"⏱️ <b>Velocity clearance balance:</b> All active inventory batches have sufficient sales clearance velocity to fully sell through before expiration."
             )
     _exec_bullets.append(
         f"🔮 <b>Priority action roadmap:</b> (1) Dispatch/liquidate ALL CRITICAL batches within 7 days via LP Optimizer, "
