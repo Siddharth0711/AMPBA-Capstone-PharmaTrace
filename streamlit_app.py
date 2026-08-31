@@ -1987,7 +1987,21 @@ elif selected_page == "⚖️ LP Cost Optimizer":
     # ── ACTION ENGINE ─────────────────────────────────────────────────────────
     candidates   = skuwh[(skuwh["at_risk_qty"] > 10) | (skuwh["min_dte"] <= 60)].copy()
     wh_avg_vel   = skuwh.groupby("warehouse_id")["daily_velocity"].mean().to_dict()
-    total_atrisk = skuwh["at_risk_value"].sum()
+
+    # ── AT-RISK VALUE: SAME DEFINITION AS HOME SCREEN ────────────────────────
+    # "At expiry risk" = inventory that will ACTUALLY EXPIRE within 6 months.
+    # Formula: for each batch, residual after selling at current velocity until DTE.
+    # Only count batches with DTE ≤ 180 days (consistent with Executive Dashboard KPI).
+    _inv_near = inv_lp[(inv_lp["days_to_expiry"] > 0) & (inv_lp["days_to_expiry"] <= 180)].copy()
+    _inv_near["true_wo_qty"] = np.maximum(
+        0, _inv_near["quantity_on_hand"] - _inv_near["daily_velocity"] * _inv_near["days_to_expiry"])
+    _inv_near["true_wo_val"] = _inv_near["true_wo_qty"] * _inv_near["unit_price"]
+    # Total at-risk = what genuinely cannot be cleared before expiry (DTE ≤ 180 window)
+    total_atrisk = _inv_near["true_wo_val"].sum()
+    # Fallback: if no near-expiry stock, use 6-month write-off forecast
+    if total_atrisk == 0:
+        total_atrisk = df_fc_no["WriteOff"].sum()
+
     actions = []
 
     with st.spinner("Analysing recovery options across all SKU-Warehouse combinations…"):
@@ -2088,7 +2102,8 @@ elif selected_page == "⚖️ LP Cost Optimizer":
 
         _p1 = int((road["priority_score"] >= 0.80).sum())
         _p2 = int(((road["priority_score"] >= 0.60) & (road["priority_score"] < 0.80)).sum())
-        _resc = road[road["value_usd"] >= 0]["value_usd"].sum()
+        # Cap rescue at the at-risk pool — cannot rescue more than what's at risk
+        _resc = min(road[road["value_usd"] >= 0]["value_usd"].sum(), total_atrisk)
 
         # ── STATUS BANNER ─────────────────────────────────────────────────────
         if _p1 > 0:
@@ -2116,7 +2131,7 @@ elif selected_page == "⚖️ LP Cost Optimizer":
                 Inventory at Expiry Risk</div>
               <div style="color:#fca5a5;font-size:2rem;font-weight:bold;margin:0.4rem 0;">
                 {fmt_curr(total_atrisk, compact=False, decimals=0)}</div>
-              <div style="color:#64748b;font-size:0.78rem;">Value of stock that may expire in ≤6 months</div>
+              <div style="color:#64748b;font-size:0.78rem;">Stock that cannot clear before batch expiry (DTE ≤180d)</div>
             </div>""", unsafe_allow_html=True)
         with _k2:
             st.markdown(f"""
