@@ -144,7 +144,7 @@ plt.rcParams.update({
 })
 PALETTE = ["#00d4ff","#7c3aed","#f59e0b","#10b981","#ef4444",
            "#3b82f6","#ec4899","#14b8a6","#f97316","#84cc16"]
-TODAY = pd.Timestamp("2026-08-23")
+TODAY = pd.Timestamp.now().normalize()   # Live current date — recalculated on every app load
 
 # ─────────────────────────────────────────────────────────────────────────────
 # HELPERS
