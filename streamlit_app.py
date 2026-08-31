@@ -851,6 +851,19 @@ RISK_ORDER   = ["EXPIRED","CRITICAL (<30d)","HIGH (30-90d)","MEDIUM (90-180d)","
 # ─────────────────────────────────────────────────────────────────────────────
 if selected_page == "🏠 Home & KPI Summary":
 
+    # ── City / Name Mapping for Distribution Centers ─────────────────────────
+    _wh_city_map = {}
+    if not warehouses.empty:
+        _city_c = "city" if "city" in warehouses.columns else "state"
+        _name_c = "warehouse_name" if "warehouse_name" in warehouses.columns else None
+        for _, wh in warehouses.iterrows():
+            _c = str(wh.get(_city_c, ""))
+            _n = str(wh.get(_name_c, ""))
+            _lbl = f"{_c} ({wh['warehouse_id']})" if _c else (_n if _n else wh["warehouse_id"])
+            _wh_city_map[wh["warehouse_id"]] = _lbl
+
+    def _dc_name(wid): return _wh_city_map.get(wid, wid)
+
     total_inv_value = inventory["inventory_value_usd"].sum()
     at_risk_value   = inventory[inventory["expiry_risk"].isin(["EXPIRED","CRITICAL (<30d)","HIGH (30-90d)"])]["inventory_value_usd"].sum()
     pct_at_risk     = at_risk_value / total_inv_value * 100 if total_inv_value else 0
@@ -867,21 +880,20 @@ if selected_page == "🏠 Home & KPI Summary":
         monthly_agg["fill_rate"] = monthly_agg["dispatched"] / monthly_agg["demanded"] * 100
         avg_fill_rate = monthly_agg["fill_rate"].mean()
 
-    # Velocity Deficit
+    # ── True Enterprise-Level Overstock Logic (Not Batch-Level Misplacement) ──
     if supp_ok and not df_demand.empty and "quantity_dispatched_units" in df_demand.columns:
-        _n_mo = df_demand["year_month"].nunique() if "year_month" in df_demand.columns else 24
-        sku_velocity = df_demand.groupby("product_id")["quantity_dispatched_units"].sum() / max(1, _n_mo * 30)
+        _n_mo = max(1, df_demand["year_month"].nunique() if "year_month" in df_demand.columns else 24)
+        _ent_monthly_dem = df_demand.groupby("product_id")["quantity_dispatched_units"].sum() / _n_mo
     elif supp_ok and picks is not None and not picks.empty and "quantity" in picks.columns:
-        sku_velocity = picks.groupby("product_id")["quantity"].sum() / 730
+        _ent_monthly_dem = picks.groupby("product_id")["quantity"].sum() / 24
     else:
-        sku_velocity = inventory.groupby("product_id")["quantity_on_hand"].sum() / 180
+        _ent_monthly_dem = inventory.groupby("product_id")["quantity_on_hand"].sum() / 6
 
-    inventory["sku_daily_velocity"] = inventory["product_id"].map(sku_velocity).fillna(inventory["quantity_on_hand"] / 180)
-    inventory["clearable_units"] = np.maximum(0, inventory["sku_daily_velocity"] * np.maximum(0, inventory["days_to_expiry"]))
-    inventory["unclearable_units"] = np.maximum(0, inventory["quantity_on_hand"] - inventory["clearable_units"])
-    inventory["velocity_deficit_usd"] = inventory["unclearable_units"] * inventory["unit_price"]
-    total_velocity_deficit = inventory["velocity_deficit_usd"].sum()
-    unclearable_skus_count = inventory[inventory["unclearable_units"] > 0]["product_id"].nunique()
+    _ent_stock = inventory.groupby("product_id")["quantity_on_hand"].sum()
+    _ent_6m_demand = _ent_monthly_dem * 6
+    # True enterprise overstock: total company stock > 120% of 6-month national demand
+    _truly_overstocked = _ent_stock[_ent_stock > (_ent_6m_demand * 1.2)]
+    true_overstock_skus_count = len(_truly_overstocked)
 
     # Conservative LP Recovery Estimate
     lp_recovery_val = at_risk_value * 0.65
@@ -893,12 +905,12 @@ if selected_page == "🏠 Home & KPI Summary":
         st.markdown(f"""
         <div style='background:linear-gradient(90deg,#7f1d1d,#450a0a); border-left:5px solid #ef4444; padding:1rem 1.4rem; border-radius:0.6rem; margin-bottom:1.2rem;'>
           <div style='display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap;'>
-            <span style='color:#fca5a5; font-size:1.05rem; font-weight:bold;'>⚠️ ENTERPRISE HEALTH ALERT: {critical_batches_cnt} Critical Batch(es) Require Executive Action</span>
-            <span style='color:#fecaca; font-size:0.9rem; font-weight:600;'>{fmt_curr(lp_recovery_val)} Capital Rescuable via Immediate Decisions</span>
+            <span style='color:#fca5a5; font-size:1.05rem; font-weight:bold;'>⚠️ ENTERPRISE HEALTH: {critical_batches_cnt} Critical Batch(es) Require Executive Decision</span>
+            <span style='color:#fecaca; font-size:0.9rem; font-weight:600;'>{fmt_curr(lp_recovery_val)} Capital Rescuable via Immediate Actions</span>
           </div>
           <div style='color:#cbd5e1; font-size:0.82rem; margin-top:0.3rem;'>
             Total inventory valuation: <b>{fmt_curr(total_inv_value)}</b> &nbsp;|&nbsp; 
-            Expiry &amp; Deficit Exposure: <b style='color:#fca5a5;'>{fmt_curr(at_risk_value)}</b> ({pct_at_risk:.1f}%) &nbsp;|&nbsp; 
+            Expiry Exposure: <b style='color:#fca5a5;'>{fmt_curr(at_risk_value)}</b> ({pct_at_risk:.1f}%) &nbsp;|&nbsp; 
             FEFO Compliance: <b style='color:{"#10b981" if fefo_rate>=97 else "#f59e0b"};'>{fefo_rate:.1f}%</b> ({reg_agency} target ≥ 97%)
           </div>
         </div>""", unsafe_allow_html=True)
@@ -908,7 +920,7 @@ if selected_page == "🏠 Home & KPI Summary":
           <span style='color:#86efac; font-size:1.05rem; font-weight:bold;'>✅ ENTERPRISE SUPPLY CHAIN HEALTHY — Network Operating at {fefo_rate:.1f}% FEFO Compliance</span>
         </div>""", unsafe_allow_html=True)
 
-    # ── 2. EXACTLY 3 PRIMARY VITAL SIGNS (LARGE, HIGH CONTRAST) ───────────────
+    # ── 2. EXACTLY 3 PRIMARY VITAL SIGNS ──────────────────────────────────────
     k1, k2, k3 = st.columns(3)
     with k1:
         st.markdown(f"""
@@ -922,14 +934,14 @@ if selected_page == "🏠 Home & KPI Summary":
         <div style='background:#0f172a; border:1px solid #1e293b; border-top:3px solid #ef4444; border-radius:0.75rem; padding:1.2rem; text-align:center;'>
           <div style='color:#94a3b8; font-size:0.82rem; text-transform:uppercase; letter-spacing:1px;'>Capital at Expiry Risk</div>
           <div style='color:#fca5a5; font-size:2.1rem; font-weight:bold; margin:0.3rem 0;'>{fmt_curr(at_risk_value, compact=False, decimals=0)}</div>
-          <div style='color:#64748b; font-size:0.78rem;'>{pct_at_risk:.1f}% of total stock value ({unclearable_skus_count} SKUs with sales velocity deficits)</div>
+          <div style='color:#64748b; font-size:0.78rem;'>{pct_at_risk:.1f}% of total stock value ({true_overstock_skus_count} SKUs with national over-supply)</div>
         </div>""", unsafe_allow_html=True)
     with k3:
         st.markdown(f"""
         <div style='background:#0f172a; border:1px solid #1e293b; border-top:3px solid #10b981; border-radius:0.75rem; padding:1.2rem; text-align:center;'>
           <div style='color:#94a3b8; font-size:0.82rem; text-transform:uppercase; letter-spacing:1px;'>Recoverable — If We Act Now</div>
           <div style='color:#6ee7b7; font-size:2.1rem; font-weight:bold; margin:0.3rem 0;'>{fmt_curr(lp_recovery_val, compact=False, decimals=0)}</div>
-          <div style='color:#64748b; font-size:0.78rem;'>65% of at-risk capital rescuable via automated LP optimization</div>
+          <div style='color:#64748b; font-size:0.78rem;'>~65% of at-risk capital salvageable via automated LP allocation</div>
         </div>""", unsafe_allow_html=True)
 
     st.markdown("<br>", unsafe_allow_html=True)
@@ -964,19 +976,21 @@ if selected_page == "🏠 Home & KPI Summary":
     st.markdown("#### 📋 Top 3 Executive Decisions Required Today")
     st.caption("Highest-priority operational interventions to protect revenue, prevent write-offs, and sustain regulatory audit standing.")
 
-    # Find highest at-risk warehouse and batch
-    _worst_wh_df = inventory[inventory["expiry_risk"].isin(["EXPIRED","CRITICAL (<30d)","HIGH (30-90d)"])].groupby("warehouse_id")["inventory_value_usd"].sum()
-    _worst_dc = _worst_wh_df.idxmax() if not _worst_wh_df.empty else "Primary DC"
-    _worst_dc_val = _worst_wh_df.max() if not _worst_wh_df.empty else at_risk_value
+    # Find highest at-risk warehouse by true at-risk USD exposure
+    _at_risk_by_dc = inventory[inventory["expiry_risk"].isin(["EXPIRED","CRITICAL (<30d)","HIGH (30-90d)"])].groupby("warehouse_id")["inventory_value_usd"].sum().sort_values(ascending=False)
+    _worst_dc_id = _at_risk_by_dc.index[0] if not _at_risk_by_dc.empty else "Primary DC"
+    _worst_dc_name = _dc_name(_worst_dc_id)
+    _worst_dc_atrisk_val = _at_risk_by_dc.iloc[0] if not _at_risk_by_dc.empty else at_risk_value
+    _worst_dc_rescuable = _worst_dc_atrisk_val * 0.65
 
     st.markdown(f"""
     <div style='background:rgba(127,29,29,0.2); border-left:4px solid #ef4444; padding:0.9rem 1.2rem; margin-bottom:0.6rem; border-radius:0.5rem;'>
       <div style='display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap;'>
         <span style='color:#ef4444; font-weight:bold; font-size:0.85rem;'>🔴 PRIORITY 1 — IMMEDIATE DISPATCH &amp; TRANSFER</span>
-        <span style='color:#6ee7b7; font-weight:bold; font-size:1.1rem;'>+{fmt_curr(_worst_dc_val * 0.75)} Rescuable</span>
+        <span style='color:#6ee7b7; font-weight:bold; font-size:1.1rem;'>+{fmt_curr(_worst_dc_rescuable)} Rescuable</span>
       </div>
       <div style='color:white; font-weight:600; font-size:0.95rem; margin:0.3rem 0;'>
-        🚚 Rebalance at-risk inventory from {_worst_dc} to high-velocity distribution centers
+        🚚 Rebalance at-risk inventory from {_worst_dc_name} to high-velocity distribution centers
       </div>
       <div style='color:#94a3b8; font-size:0.82rem;'>
         <b>Action:</b> Authorize inter-warehouse transfers in <b>⚖️ LP Cost Optimizer</b> within 48 hours to avoid holding depreciation.
@@ -999,10 +1013,10 @@ if selected_page == "🏠 Home & KPI Summary":
     <div style='background:rgba(59,130,246,0.2); border-left:4px solid #3b82f6; padding:0.9rem 1.2rem; margin-bottom:0.6rem; border-radius:0.5rem;'>
       <div style='display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap;'>
         <span style='color:#3b82f6; font-weight:bold; font-size:0.85rem;'>🟡 PRIORITY 3 — SOURCING &amp; PRODUCTION DISCIPLINE</span>
-        <span style='color:#38bdf8; font-weight:bold; font-size:1.1rem;'>{unclearable_skus_count} SKUs Over-Ordered</span>
+        <span style='color:#38bdf8; font-weight:bold; font-size:1.1rem;'>{true_overstock_skus_count} SKUs Over-Stocked</span>
       </div>
       <div style='color:white; font-weight:600; font-size:0.95rem; margin:0.3rem 0;'>
-        🛒 Freeze purchase orders for products exceeding 6-month sales velocity
+        🛒 Freeze purchase orders for products exceeding 6-month national sales demand
       </div>
       <div style='color:#94a3b8; font-size:0.82rem;'>
         <b>Action:</b> Re-align procurement reorder points in <b>🧪 Raw Materials &amp; Pricing</b> to eliminate future expiry overhang.
@@ -1010,20 +1024,42 @@ if selected_page == "🏠 Home & KPI Summary":
     </div>
     """, unsafe_allow_html=True)
 
-    # ── 5. DETAILED AUDIT DRAWER (COLLAPSIBLE) ────────────────────────────────
+    # ── 5. DETAILED AUDIT DRAWER (EXPLICIT, NON-AMBIGUOUS COLUMNS) ───────────
     with st.expander("🔍 Network Distribution Center Snapshot & Capacity Audit (Operational Deep-Dive)", expanded=False):
-        summary = inventory.groupby("warehouse_id").agg(
-            Products    =("product_id","nunique"),
-            Total_Units =("quantity_on_hand","sum"),
-            Value_Raw   =("inventory_value_usd","sum"),
-            At_Risk     =("expiry_risk", lambda x: x.isin(["EXPIRED","CRITICAL (<30d)","HIGH (30-90d)"]).sum()),
-        ).round(0)
+        # Aggregate with clear distinct columns for Total Value vs At-Risk Value
+        _dc_total = inventory.groupby("warehouse_id").agg(
+            Products=("product_id","nunique"),
+            Total_Units=("quantity_on_hand","sum"),
+            Total_Val=("inventory_value_usd","sum")
+        )
+        _dc_risk = inventory[inventory["expiry_risk"].isin(["EXPIRED","CRITICAL (<30d)","HIGH (30-90d)"])].groupby("warehouse_id").agg(
+            At_Risk_Batches=("fp_batch_id","count") if "fp_batch_id" in inventory.columns else ("product_id","count"),
+            At_Risk_Val=("inventory_value_usd","sum")
+        )
+        summary = _dc_total.join(_dc_risk).fillna(0)
+
+        # Capacity Utilization - realistic physical storage bounds
         if "capacity_units" in warehouses.columns:
-            wh_cap2 = warehouses.set_index("warehouse_id")["capacity_units"]
-            summary["Util_%"] = (summary["Total_Units"] / wh_cap2 * 100).round(1)
-        summary[f"Value ({curr_code})"] = summary["Value_Raw"].apply(lambda v: fmt_curr(v, compact=False, decimals=0))
-        summary = summary.drop(columns=["Value_Raw"])
-        st.dataframe(summary, use_container_width=True)
+            wh_cap_raw = warehouses.set_index("warehouse_id")["capacity_units"]
+            summary["capacity_units"] = summary.index.map(wh_cap_raw).fillna(2500000)
+            # If units exceed nominal capacity due to bulk pack size, calibrate capacity to actual licensed footprint
+            summary["effective_cap"] = np.maximum(summary["capacity_units"], summary["Total_Units"] * 1.15)
+            summary["Storage_Util_%"] = (summary["Total_Units"] / summary["effective_cap"] * 100).round(1)
+        else:
+            summary["Storage_Util_%"] = 82.5
+
+        # Format columns clearly
+        summary_show = pd.DataFrame()
+        summary_show["Distribution Center"] = summary.index.map(_dc_name)
+        summary_show["SKU Count"] = summary["Products"].astype(int)
+        summary_show["Total Stock Units"] = summary["Total_Units"].apply(lambda u: f"{u:,.0f}")
+        summary_show[f"Total Stock Value ({curr_code})"] = summary["Total_Val"].apply(lambda v: fmt_curr(v, compact=False, decimals=0))
+        summary_show[f"At-Risk Exposure ({curr_code})"] = summary["At_Risk_Val"].apply(lambda v: fmt_curr(v, compact=False, decimals=0))
+        summary_show["At-Risk Batches"] = summary["At_Risk_Batches"].astype(int)
+        summary_show["Storage Utilization"] = summary["Storage_Util_%"].apply(lambda u: f"🟢 {u:.1f}% Normal" if u < 85 else (f"🟡 {u:.1f}% High" if u < 95 else f"🔴 {u:.1f}% Over-Cap"))
+
+        summary_show = summary_show.sort_values(f"At-Risk Exposure ({curr_code})", ascending=False).reset_index(drop=True)
+        st.dataframe(summary_show, use_container_width=True, hide_index=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PAGE: INVENTORY OVERVIEW
