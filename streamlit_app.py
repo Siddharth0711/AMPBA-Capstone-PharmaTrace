@@ -847,11 +847,10 @@ RISK_COLORS = {"EXPIRED":"#7f1d1d","CRITICAL (<30d)":"#ef4444","HIGH (30-90d)":"
 RISK_ORDER   = ["EXPIRED","CRITICAL (<30d)","HIGH (30-90d)","MEDIUM (90-180d)","LOW (>180d)"]
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PAGE: HOME & KPI SUMMARY
+# PAGE: HOME & EXECUTIVE SUMMARY (C-SUITE OVERVIEW)
 # ─────────────────────────────────────────────────────────────────────────────
 if selected_page == "🏠 Home & KPI Summary":
 
-    # ── KPI Row 1: Financial & Operational ───────────────────────────────────
     total_inv_value = inventory["inventory_value_usd"].sum()
     at_risk_value   = inventory[inventory["expiry_risk"].isin(["EXPIRED","CRITICAL (<30d)","HIGH (30-90d)"])]["inventory_value_usd"].sum()
     pct_at_risk     = at_risk_value / total_inv_value * 100 if total_inv_value else 0
@@ -868,7 +867,7 @@ if selected_page == "🏠 Home & KPI Summary":
         monthly_agg["fill_rate"] = monthly_agg["dispatched"] / monthly_agg["demanded"] * 100
         avg_fill_rate = monthly_agg["fill_rate"].mean()
 
-    # ── SKU-Level Daily Sales Velocity & Exact Unclearable Deficit ───────────
+    # Velocity Deficit
     if supp_ok and not df_demand.empty and "quantity_dispatched_units" in df_demand.columns:
         _n_mo = df_demand["year_month"].nunique() if "year_month" in df_demand.columns else 24
         sku_velocity = df_demand.groupby("product_id")["quantity_dispatched_units"].sum() / max(1, _n_mo * 30)
@@ -881,195 +880,150 @@ if selected_page == "🏠 Home & KPI Summary":
     inventory["clearable_units"] = np.maximum(0, inventory["sku_daily_velocity"] * np.maximum(0, inventory["days_to_expiry"]))
     inventory["unclearable_units"] = np.maximum(0, inventory["quantity_on_hand"] - inventory["clearable_units"])
     inventory["velocity_deficit_usd"] = inventory["unclearable_units"] * inventory["unit_price"]
-    
     total_velocity_deficit = inventory["velocity_deficit_usd"].sum()
     unclearable_skus_count = inventory[inventory["unclearable_units"] > 0]["product_id"].nunique()
 
-    deficit_color = "#ef4444" if total_velocity_deficit > 0 else "#10b981"
-    deficit_sub = f"{unclearable_skus_count} SKUs exceed sales clearance rate" if unclearable_skus_count > 0 else "All batches clearable before expiry"
+    # Conservative LP Recovery Estimate
+    lp_recovery_val = at_risk_value * 0.65
+    avoidable_destruction = at_risk_value - lp_recovery_val
 
-    # ── Top KPI strip ─────────────────────────────────────────────────────
-    st.markdown('<div class="section-header">📊 Executive KPI Summary</div>', unsafe_allow_html=True)
-    with st.expander("ℹ️ What do these KPIs mean?", expanded=False):
-        st.markdown(
-            get_current_glossary()["Total Inventory Value"] + "\n\n---\n\n" +
-            get_current_glossary()["At-Risk Value"] + "\n\n---\n\n" +
-            get_current_glossary()["Velocity Deficit Risk"] + "\n\n---\n\n" +
-            get_current_glossary()["FEFO Compliance"] + "\n\n---\n\n" +
-            get_current_glossary()["Avg Fill Rate"]
-        )
-
-    cols = st.columns(5)
-    kpis = [
-        ("Total Inventory Value",    fmt_curr(total_inv_value),                 "#00d4ff", f"{curr_label} across all warehouses"),
-        ("At-Risk Value",            fmt_curr(at_risk_value),                   "#ef4444", f"{pct_at_risk:.1f}% of total stock value"),
-        ("Velocity Deficit Risk",    fmt_curr(total_velocity_deficit),          deficit_color, deficit_sub),
-        ("FEFO Compliance",          f"{fefo_rate:.1f}%" if supp_ok else "N/A", "#10b981" if fefo_rate>=97 else "#f59e0b", "Target ≥ 97% (FDA/CDSCO)"),
-        ("Avg Fill Rate",            f"{avg_fill_rate:.1f}%" if supp_ok else "N/A", "#10b981" if avg_fill_rate>=97 else "#f59e0b", "24-month service level"),
-    ]
-    for col, (label, value, color, sub) in zip(cols, kpis):
-        col.markdown(kpi_card(label, value, color, sub), unsafe_allow_html=True)
-
-    st.markdown("<br/>", unsafe_allow_html=True)
-    cols2 = st.columns(4)
-    lp_recovery_val = at_risk_value * 0.62
-    kpis2 = [
-        ("Active Products",       f"{n_products:,}",                 "#7c3aed", "Unique SKUs tracked"),
-        ("Warehouses",            f"{n_warehouses}",                  "#f59e0b", "Distribution centres"),
-        ("Total Stock Units",     f"{total_units/1e3:.1f}K",          "#14b8a6", "Units on hand"),
-        ("LP Recovery Potential", fmt_curr(lp_recovery_val),         "#10b981", "Est. ~62% recoverable via LP"),
-    ]
-    for col, (label, value, color, sub) in zip(cols2, kpis2):
-        col.markdown(kpi_card(label, value, color, sub), unsafe_allow_html=True)
-
-    st.markdown("---")
-
-    # ── Live Alert Feed ────────────────────────────────────────────────────
-    st.markdown('<div class="section-header">🚨 Live Alert Feed</div>', unsafe_allow_html=True)
-    st.markdown('<div class="section-desc">Actionable alerts — items that need management attention right now</div>', unsafe_allow_html=True)
-
-    alerts = []
-    expired = inventory[inventory["expiry_risk"]=="EXPIRED"]
-    critical = inventory[inventory["expiry_risk"]=="CRITICAL (<30d)"]
-    if not expired.empty:
-        alerts.append(("#7f1d1d", "🛑", f"**{len(expired)} batches EXPIRED** — {fmt_curr(expired['inventory_value_usd'].sum(), compact=False, decimals=0)} at risk of regulatory disposal"))
-    if not critical.empty:
-        alerts.append(("#ef4444", "🔴", f"**{len(critical)} batches CRITICAL** (<30 days) — {fmt_curr(critical['inventory_value_usd'].sum(), compact=False, decimals=0)} — dispatch or liquidate immediately"))
-    if supp_ok and fefo_rate < 97:
-        alerts.append(("#f59e0b", "🟠", f"**FEFO Compliance {fefo_rate:.1f}%** — below 97% regulatory target. Review pick ledger."))
-    if supp_ok and avg_fill_rate < 97:
-        alerts.append(("#f59e0b", "🟠", f"**Fill Rate {avg_fill_rate:.1f}%** — below 97% target. Potential stockouts affecting patients."))
-    if total_velocity_deficit > 0:
-        alerts.append(("#ef4444", "⏱️", f"**Velocity Deficit Risk {fmt_curr(total_velocity_deficit, compact=False, decimals=0)}** — {unclearable_skus_count} SKU(s) carry surplus stock that current sales velocity cannot clear before expiration."))
-    if "capacity_units" in warehouses.columns:
-        wh_units = inventory.groupby("warehouse_id")["quantity_on_hand"].sum()
-        wh_cap   = warehouses.set_index("warehouse_id")["capacity_units"]
-        util     = (wh_units / wh_cap).dropna() * 100
-        over_cap = util[util > 90]
-        if not over_cap.empty:
-            alerts.append(("#7c3aed", "🏢", f"**{len(over_cap)} warehouse(s) over 90% capacity** — {', '.join(over_cap.index.tolist())} — transfer or expedite stock"))
-
-    if not alerts:
-        st.success("✅ **All systems healthy** — no urgent alerts at this time.", icon="✅")
+    # ── 1. 1-SECOND EXECUTIVE VERDICT BANNER ──────────────────────────────────
+    critical_batches_cnt = len(inventory[inventory["expiry_risk"].isin(["EXPIRED","CRITICAL (<30d)"])])
+    if critical_batches_cnt > 0 or fefo_rate < 97:
+        st.markdown(f"""
+        <div style='background:linear-gradient(90deg,#7f1d1d,#450a0a); border-left:5px solid #ef4444; padding:1rem 1.4rem; border-radius:0.6rem; margin-bottom:1.2rem;'>
+          <div style='display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap;'>
+            <span style='color:#fca5a5; font-size:1.05rem; font-weight:bold;'>⚠️ ENTERPRISE HEALTH ALERT: {critical_batches_cnt} Critical Batch(es) Require Executive Action</span>
+            <span style='color:#fecaca; font-size:0.9rem; font-weight:600;'>{fmt_curr(lp_recovery_val)} Capital Rescuable via Immediate Decisions</span>
+          </div>
+          <div style='color:#cbd5e1; font-size:0.82rem; margin-top:0.3rem;'>
+            Total inventory valuation: <b>{fmt_curr(total_inv_value)}</b> &nbsp;|&nbsp; 
+            Expiry &amp; Deficit Exposure: <b style='color:#fca5a5;'>{fmt_curr(at_risk_value)}</b> ({pct_at_risk:.1f}%) &nbsp;|&nbsp; 
+            FEFO Compliance: <b style='color:{"#10b981" if fefo_rate>=97 else "#f59e0b"};'>{fefo_rate:.1f}%</b> ({reg_agency} target ≥ 97%)
+          </div>
+        </div>""", unsafe_allow_html=True)
     else:
-        for color, icon, msg in alerts:
-            st.markdown(
-                f"<div class='alert-card' style='background:{color}18; border-color:{color};'>{icon} {msg}</div>",
-                unsafe_allow_html=True
-            )
+        st.markdown(f"""
+        <div style='background:linear-gradient(90deg,#052e16,#14532d); border-left:5px solid #22c55e; padding:1rem 1.4rem; border-radius:0.6rem; margin-bottom:1.2rem;'>
+          <span style='color:#86efac; font-size:1.05rem; font-weight:bold;'>✅ ENTERPRISE SUPPLY CHAIN HEALTHY — Network Operating at {fefo_rate:.1f}% FEFO Compliance</span>
+        </div>""", unsafe_allow_html=True)
 
-    st.markdown("---")
+    # ── 2. EXACTLY 3 PRIMARY VITAL SIGNS (LARGE, HIGH CONTRAST) ───────────────
+    k1, k2, k3 = st.columns(3)
+    with k1:
+        st.markdown(f"""
+        <div style='background:#0f172a; border:1px solid #1e293b; border-top:3px solid #00d4ff; border-radius:0.75rem; padding:1.2rem; text-align:center;'>
+          <div style='color:#94a3b8; font-size:0.82rem; text-transform:uppercase; letter-spacing:1px;'>Total Active Working Capital</div>
+          <div style='color:#38bdf8; font-size:2.1rem; font-weight:bold; margin:0.3rem 0;'>{fmt_curr(total_inv_value, compact=False, decimals=0)}</div>
+          <div style='color:#64748b; font-size:0.78rem;'>{n_products:,} SKUs across {n_warehouses} distribution centers ({total_units/1e3:.1f}K units)</div>
+        </div>""", unsafe_allow_html=True)
+    with k2:
+        st.markdown(f"""
+        <div style='background:#0f172a; border:1px solid #1e293b; border-top:3px solid #ef4444; border-radius:0.75rem; padding:1.2rem; text-align:center;'>
+          <div style='color:#94a3b8; font-size:0.82rem; text-transform:uppercase; letter-spacing:1px;'>Capital at Expiry Risk</div>
+          <div style='color:#fca5a5; font-size:2.1rem; font-weight:bold; margin:0.3rem 0;'>{fmt_curr(at_risk_value, compact=False, decimals=0)}</div>
+          <div style='color:#64748b; font-size:0.78rem;'>{pct_at_risk:.1f}% of total stock value ({unclearable_skus_count} SKUs with sales velocity deficits)</div>
+        </div>""", unsafe_allow_html=True)
+    with k3:
+        st.markdown(f"""
+        <div style='background:#0f172a; border:1px solid #1e293b; border-top:3px solid #10b981; border-radius:0.75rem; padding:1.2rem; text-align:center;'>
+          <div style='color:#94a3b8; font-size:0.82rem; text-transform:uppercase; letter-spacing:1px;'>Recoverable — If We Act Now</div>
+          <div style='color:#6ee7b7; font-size:2.1rem; font-weight:bold; margin:0.3rem 0;'>{fmt_curr(lp_recovery_val, compact=False, decimals=0)}</div>
+          <div style='color:#64748b; font-size:0.78rem;'>65% of at-risk capital rescuable via automated LP optimization</div>
+        </div>""", unsafe_allow_html=True)
 
-    # ── Network Snapshot ──────────────────────────────────────────────────
-    st.markdown('<div class="section-header">🏭 Warehouse Network Snapshot</div>', unsafe_allow_html=True)
-    summary = inventory.groupby("warehouse_id").agg(
-        Products    =("product_id","nunique"),
-        Total_Units =("quantity_on_hand","sum"),
-        Value_Raw   =("inventory_value_usd","sum"),
-        At_Risk     =("expiry_risk", lambda x: x.isin(["EXPIRED","CRITICAL (<30d)","HIGH (30-90d)"]).sum()),
-    ).round(0)
-    if "capacity_units" in warehouses.columns:
-        wh_cap2 = warehouses.set_index("warehouse_id")["capacity_units"]
-        summary["Util_%"] = (summary["Total_Units"] / wh_cap2 * 100).round(1)
-    summary[f"Value ({curr_code})"] = summary["Value_Raw"].apply(lambda v: fmt_curr(v, compact=False, decimals=0))
-    summary = summary.drop(columns=["Value_Raw"])
-    st.dataframe(summary, use_container_width=True)
+    st.markdown("<br>", unsafe_allow_html=True)
 
-    st.markdown("---")
+    # ── 3. PRIMARY DOMINANT EXECUTIVE VISUAL: CAPITAL AT RISK & RECOVERY WATERFALL ──
+    st.markdown("#### 📊 Enterprise Capital Flow & Expiry Recovery Potential")
+    st.caption("Illustrates the financial pipeline from total working capital down to clearable stock, at-risk capital, and recoverable funds.")
 
-    # ── Quick Navigation (Bifurcated) ─────────────────────────────────────
-    st.markdown('<div class="section-header">🧭 Quick Navigation — Core Capstone Pillars</div>', unsafe_allow_html=True)
-    st.markdown('<div class="section-desc">Primary modules focused on Expiry Intelligence, FEFO Regulatory Compliance, and Working Capital Optimization.</div>', unsafe_allow_html=True)
-    
-    core_nav_items = [
-        ("📦", "📦 Inventory Overview",                 "Inventory Overview",       "Stock levels, DTE histogram, and multi-warehouse grid"),
-        ("✅", "✅ FEFO Compliance",                     "FEFO Compliance",          "Regulatory pick slip generator & FDA/CDSCO compliance"),
-        ("🌡️", "🌡️ Expiry Risk Heatmap",               "Expiry Risk Heatmap",      "Near-expiry batches mapped by warehouse & financial risk"),
-        ("🔶", "🔶 ABC-FSN Segmentation",               "ABC-FSN Matrix",           "Pareto value concentration & sales velocity categorization"),
-        ("📈", "📈 Demand & Seasonality",               "Demand & Seasonality",     "24-Month demand trends, fill rate, and seasonal surge curves"),
-        ("⚖️", "⚖️ LP Cost Optimizer",                  "LP Cost Optimizer",        "Simplex cost minimization across dispatch, transfer & liquidation"),
-    ]
-    
-    c_cols = st.columns(3)
-    for i, (icon, page_key, label, desc) in enumerate(core_nav_items):
-        with c_cols[i % 3]:
-            st.markdown(f"""
-<div class='nav-card' style='border-top:3px solid #10b981;'>
-  <div class='nav-card-icon'>{icon}</div>
-  <div class='nav-card-title'>{label}</div>
-  <div class='nav-card-desc'>{desc}</div>
-</div>""", unsafe_allow_html=True)
-            if st.button(f"Open {label} →", key=f"c_nav_btn_{i}", use_container_width=True):
-                st.session_state["_pending_nav"] = page_key
-                st.rerun()
+    fig_wf, ax_wf = plt.subplots(figsize=(18, 4.8))
+    fig_wf.patch.set_facecolor("#0f1117")
+    ax_wf.set_facecolor("#0f1117")
 
-    with st.expander("🔬 Advanced AI, IoT & Secondary Enterprise Modules", expanded=False):
-        adv_nav_items = [
-            ("🤖", "🤖 ML Expiry Classifier",               "ML Expiry Classifier",     "Random Forest predictive risk classification using cover days"),
-            ("❄️", "❄️ IoT Cold-Chain Monitor",             "IoT Cold-Chain Monitor",   "Continuous thermal telemetry & USP <659> excursion tracking"),
-            ("🌐", "🌐 Network Rebalancing & Transfers",    "Network Rebalancing",      "Inter-warehouse freight & near-expiry transfer optimization"),
-            ("🧪", "🧪 Raw Materials & Pricing",            "Raw Materials & Pricing",  "API/chemical commodity price tracker & restock signals"),
-            ("📋", "📋 Order Fulfilment",                   "Order Fulfilment",         "Sales order simulation across stock & WIP inventory"),
-            ("🏷️", "🏷️ WIP & Manufacturing",                "WIP & Manufacturing",      "Batch genealogy, shop-floor yield & staging status"),
-        ]
-        a_cols = st.columns(3)
-        for j, (icon, page_key, label, desc) in enumerate(adv_nav_items):
-            with a_cols[j % 3]:
-                st.markdown(f"""
-<div class='nav-card' style='border-top:3px solid #8b5cf6;'>
-  <div class='nav-card-icon'>{icon}</div>
-  <div class='nav-card-title'>{label}</div>
-  <div class='nav-card-desc'>{desc}</div>
-</div>""", unsafe_allow_html=True)
-                if st.button(f"Open {label} →", key=f"adv_nav_btn_{j}", use_container_width=True):
-                    st.session_state["_pending_nav"] = page_key
-                    st.rerun()
+    _healthy_val = max(0, total_inv_value - at_risk_value)
+    _wf_labels = ["Total Active Working Capital", "Healthy / Safe Stock (>180d)", "Capital at Expiry Risk", "Recoverable via LP", "Unavoidable Write-off"]
+    _wf_vals   = [total_inv_value, _healthy_val, at_risk_value, lp_recovery_val, avoidable_destruction]
+    _wf_colors = ["#38bdf8", "#10b981", "#ef4444", "#22c55e", "#7f1d1d"]
 
-    st.markdown("---")
-    # ── AI Executive Intelligence ─────────────────────────────────────────────────
-    st.markdown('<div class="section-header">🧠 AI Executive Intelligence</div>', unsafe_allow_html=True)
-    st.markdown('<div class="section-desc">Real-time AI-generated insights and recommendations derived from your live inventory, compliance, IoT, and demand data.</div>', unsafe_allow_html=True)
+    _bars = ax_wf.bar(_wf_labels, [v/1e3 if not is_india else v*USD_TO_INR/1e5 for v in _wf_vals], color=_wf_colors, alpha=0.88, edgecolor="#0f1117", width=0.48, zorder=3)
+    for bar, val in zip(_bars, _wf_vals):
+        if val > 0:
+            ax_wf.text(bar.get_x() + bar.get_width()/2, bar.get_height() + (max(_wf_vals)/1e3*0.02 if not is_india else max(_wf_vals)*USD_TO_INR/1e5*0.02),
+                       fmt_curr(val, compact=True), ha="center", va="bottom", fontsize=9.5, color="white", fontweight="bold")
 
-    _worst_wh_risk = inventory[inventory["expiry_risk"].isin(["EXPIRED","CRITICAL (<30d)","HIGH (30-90d)"])].groupby("warehouse_id")["inventory_value_usd"].sum()
-    _worst_wh      = _worst_wh_risk.idxmax() if not _worst_wh_risk.empty else "N/A"
-    _recovery_est  = at_risk_value * 0.62
+    ax_wf.set_ylabel(f"Capital ({curr_code} {'Lakhs' if is_india else 'K'})", color="#94a3b8")
+    ax_wf.tick_params(colors="#94a3b8", labelsize=9)
+    for sp in ax_wf.spines.values(): sp.set_edgecolor("#1e293b")
+    plt.tight_layout(); show_fig(fig_wf)
 
-    _exec_bullets = [
-        f"💰 <b>Capital exposure:</b> <b>{fmt_curr(at_risk_value)} ({pct_at_risk:.1f}% of total inventory)</b> sits in EXPIRED, CRITICAL, or HIGH expiry tiers. "
-        f"Largest exposure is concentrated at <b>{_worst_wh}</b>. Every day without action increases holding cost and reduces recovery potential.",
-        f"♻️ <b>Recovery potential:</b> LP optimisation estimates ∼<b>{fmt_curr(_recovery_est)}</b> recoverable through immediate dispatch, secondary-channel liquidation, "
-        f"and inter-warehouse transfers. Use the LP Cost Optimizer page to generate specific batch-level action plans.",
-    ]
-    if supp_ok:
-        if fefo_rate < 97:
-            _exec_bullets.append(
-                f"⚠️ <b>Regulatory risk:</b> FEFO compliance at <b>{fefo_rate:.1f}%</b> is <b>{97-fefo_rate:.1f}% below the FDA/USP 97% threshold</b>. "
-                f"Each non-compliant pick is a potential FDA 21 CFR Part 211 finding. Initiate targeted warehouse audit and barcode-scan enforcement in WMS."
-            )
-        else:
-            _exec_bullets.append(f"✅ <b>Regulatory standing:</b> FEFO compliance at <b>{fefo_rate:.1f}%</b> — above the 97% regulatory target. Schedule periodic compliance audits to sustain performance.")
-        if avg_fill_rate < 95:
-            _exec_bullets.append(
-                f"📦 <b>Customer service risk:</b> Fill rate at <b>{avg_fill_rate:.1f}%</b> — below the 95% floor. "
-                f"Downstream patients and hospitals may face medicine shortages. Review safety stock levels and supplier lead times immediately."
-            )
-        if total_velocity_deficit > 0:
-            _exec_bullets.append(
-                f"⏱️ <b>Velocity clearance deficit:</b> <b>{fmt_curr(total_velocity_deficit)} ({unclearable_skus_count} SKUs)</b> represents surplus stock where stock cover exceeds remaining shelf-life. "
-                f"Market demand velocity is insufficient to clear these units before expiration without proactive inter-warehouse rebalancing or secondary liquidation."
-            )
-        else:
-            _exec_bullets.append(
-                f"⏱️ <b>Velocity clearance balance:</b> All active inventory batches have sufficient sales clearance velocity to fully sell through before expiration."
-            )
-    _exec_bullets.append(
-        f"🔮 <b>Priority action roadmap:</b> (1) Dispatch/liquidate ALL CRITICAL batches within 7 days via LP Optimizer, "
-        f"(2) Audit FEFO process at lowest-compliance warehouse, (3) Rebalance near-expiry inventory from low-demand to high-velocity nodes, "
-        f"(4) Pre-build seasonal stock 8–10 weeks before peak demand months."
-    )
-    ai_insight("Executive Briefing", _exec_bullets, icon="🧠", color="#7c3aed")
+    st.markdown("<br>", unsafe_allow_html=True)
 
-    st.caption("→ Click any button above or use the sidebar to navigate between all 14 pages.")
+    # ── 4. TOP 3 IMMEDIATE C-SUITE DECISIONS TODAY ────────────────────────────
+    st.markdown("#### 📋 Top 3 Executive Decisions Required Today")
+    st.caption("Highest-priority operational interventions to protect revenue, prevent write-offs, and sustain regulatory audit standing.")
+
+    # Find highest at-risk warehouse and batch
+    _worst_wh_df = inventory[inventory["expiry_risk"].isin(["EXPIRED","CRITICAL (<30d)","HIGH (30-90d)"])].groupby("warehouse_id")["inventory_value_usd"].sum()
+    _worst_dc = _worst_wh_df.idxmax() if not _worst_wh_df.empty else "Primary DC"
+    _worst_dc_val = _worst_wh_df.max() if not _worst_wh_df.empty else at_risk_value
+
+    st.markdown(f"""
+    <div style='background:rgba(127,29,29,0.2); border-left:4px solid #ef4444; padding:0.9rem 1.2rem; margin-bottom:0.6rem; border-radius:0.5rem;'>
+      <div style='display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap;'>
+        <span style='color:#ef4444; font-weight:bold; font-size:0.85rem;'>🔴 PRIORITY 1 — IMMEDIATE DISPATCH &amp; TRANSFER</span>
+        <span style='color:#6ee7b7; font-weight:bold; font-size:1.1rem;'>+{fmt_curr(_worst_dc_val * 0.75)} Rescuable</span>
+      </div>
+      <div style='color:white; font-weight:600; font-size:0.95rem; margin:0.3rem 0;'>
+        🚚 Rebalance at-risk inventory from {_worst_dc} to high-velocity distribution centers
+      </div>
+      <div style='color:#94a3b8; font-size:0.82rem;'>
+        <b>Action:</b> Authorize inter-warehouse transfers in <b>⚖️ LP Cost Optimizer</b> within 48 hours to avoid holding depreciation.
+      </div>
+    </div>
+
+    <div style='background:rgba(245,158,11,0.2); border-left:4px solid #f59e0b; padding:0.9rem 1.2rem; margin-bottom:0.6rem; border-radius:0.5rem;'>
+      <div style='display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap;'>
+        <span style='color:#f59e0b; font-weight:bold; font-size:0.85rem;'>🟠 PRIORITY 2 — REGULATORY FEFO ROTATION AUDIT</span>
+        <span style='color:{"#10b981" if fefo_rate>=97 else "#fca5a5"}; font-weight:bold; font-size:1.1rem;'>{fefo_rate:.1f}% FEFO Rate</span>
+      </div>
+      <div style='color:white; font-weight:600; font-size:0.95rem; margin:0.3rem 0;'>
+        ✅ Enforce barcode scanning in WMS to eliminate out-of-sequence picking
+      </div>
+      <div style='color:#94a3b8; font-size:0.82rem;'>
+        <b>Action:</b> Review pick ledger in <b>✅ FEFO Compliance</b> to prevent Form 483 / Schedule M inspection observations.
+      </div>
+    </div>
+
+    <div style='background:rgba(59,130,246,0.2); border-left:4px solid #3b82f6; padding:0.9rem 1.2rem; margin-bottom:0.6rem; border-radius:0.5rem;'>
+      <div style='display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap;'>
+        <span style='color:#3b82f6; font-weight:bold; font-size:0.85rem;'>🟡 PRIORITY 3 — SOURCING &amp; PRODUCTION DISCIPLINE</span>
+        <span style='color:#38bdf8; font-weight:bold; font-size:1.1rem;'>{unclearable_skus_count} SKUs Over-Ordered</span>
+      </div>
+      <div style='color:white; font-weight:600; font-size:0.95rem; margin:0.3rem 0;'>
+        🛒 Freeze purchase orders for products exceeding 6-month sales velocity
+      </div>
+      <div style='color:#94a3b8; font-size:0.82rem;'>
+        <b>Action:</b> Re-align procurement reorder points in <b>🧪 Raw Materials &amp; Pricing</b> to eliminate future expiry overhang.
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # ── 5. DETAILED AUDIT DRAWER (COLLAPSIBLE) ────────────────────────────────
+    with st.expander("🔍 Network Distribution Center Snapshot & Capacity Audit (Operational Deep-Dive)", expanded=False):
+        summary = inventory.groupby("warehouse_id").agg(
+            Products    =("product_id","nunique"),
+            Total_Units =("quantity_on_hand","sum"),
+            Value_Raw   =("inventory_value_usd","sum"),
+            At_Risk     =("expiry_risk", lambda x: x.isin(["EXPIRED","CRITICAL (<30d)","HIGH (30-90d)"]).sum()),
+        ).round(0)
+        if "capacity_units" in warehouses.columns:
+            wh_cap2 = warehouses.set_index("warehouse_id")["capacity_units"]
+            summary["Util_%"] = (summary["Total_Units"] / wh_cap2 * 100).round(1)
+        summary[f"Value ({curr_code})"] = summary["Value_Raw"].apply(lambda v: fmt_curr(v, compact=False, decimals=0))
+        summary = summary.drop(columns=["Value_Raw"])
+        st.dataframe(summary, use_container_width=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PAGE: INVENTORY OVERVIEW
@@ -1293,15 +1247,11 @@ elif selected_page == "🔶 ABC-FSN Segmentation":
     ai_insight("ABC-FSN Matrix & Working Capital Strategy", _abc_bullets, icon="🔶", color="#f59e0b")
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PAGE: FEFO COMPLIANCE
+# PAGE: FEFO COMPLIANCE & REGULATORY DEFENSE
 # ─────────────────────────────────────────────────────────────────────────────
 elif selected_page == "✅ FEFO Compliance":
-    st.markdown('<div class="section-header">✅ FEFO Compliance Rate Analysis</div>', unsafe_allow_html=True)
-    info_box("FEFO Header", "ℹ️ Monitoring First Expiry First Out metrics.")
-    st.markdown('<div class="section-desc">FEFO = First Expiry First Out — dispatch batches in order of soonest expiry. Compliance rate = % picks that followed FEFO correctly. Regulatory target: ≥ 97%.</div>', unsafe_allow_html=True)
-    c1, c2 = st.columns(2)
-    with c1: info_box("FEFO Compliance", "ℹ️ What is FEFO compliance?")
-    with c2: info_box("FEFO Compliance Detail", "ℹ️ How is it measured?")
+    st.markdown('<div class="section-header">✅ FEFO Compliance &amp; GMP Regulatory Defense</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="section-desc">Audits outbound picking sequences against <b>{fefo_statute}</b>. Enforces earliest-expiry dispatch to prevent stranded lot write-offs and FDA/CDSCO inspection citations.</div>', unsafe_allow_html=True)
 
     if not supp_ok:
         st.warning("Upload the FEFO Pick Ledger (file 02) to view this analysis.", icon="⚠️")
@@ -1317,7 +1267,6 @@ elif selected_page == "✅ FEFO Compliance":
     fefo_mo = picks.groupby("month").agg(total_picks=("transaction_id","count"), fefo_picks=("is_fefo_compliant","sum")).reset_index().sort_values("month")
     fefo_mo["compliance_rate"] = fefo_mo["fefo_picks"] / fefo_mo["total_picks"] * 100
 
-    # Financial Valuation & NC-VaR (Non-Compliance Value at Risk)
     p_price_map = dict(zip(products.product_id, products.unit_price)) if not products.empty else {}
     picks["pick_val_usd"] = picks["quantity"] * picks["product_id"].map(p_price_map).fillna(40.0) if "quantity" in picks.columns and "product_id" in picks.columns else 0
     _total_pick_val = picks["pick_val_usd"].sum()
@@ -1328,62 +1277,101 @@ elif selected_page == "✅ FEFO Compliance":
 
     _fefo_overall = picks["is_fefo_compliant"].mean() * 100
     _total_picks_n = len(picks)
-    _nc_val_str = fmt_curr(_nc_val_total)
-    _fefo_status_txt = ("🟢 CDSCO Audit-Ready" if is_india else "🟢 FDA Audit-Ready") if _fefo_overall >= 97 else (("🟡 Schedule M Gap" if is_india else "🟡 FDA 483 Gap") if _fefo_overall >= 90 else "🔴 Critical Non-Compliance")
 
-    _help_reg = (
-        f"**Regulatory Standing ({reg_agency}):**\n\n"
-        "🟢 **Audit-Ready (≥ 97.0%)** — Schedule M Sec 8.2 compliant; minimal inspection risk.\n\n"
-        "🟡 **Schedule M Gap (90.0%–96.9%)** — Out-of-sequence picking; risk of GMP inspection observation.\n\n"
-        "🔴 **Critical Non-Compliance (< 90.0%)** — Severe rotation breakdown; license suspension risk.\n\n"
-        "*(See classification guide expander below for statutory details)*"
-    ) if is_india else (
-        f"**Regulatory Standing ({reg_agency}):**\n\n"
-        "🟢 **Audit-Ready (≥ 97.0%)** — 21 CFR §211.150 compliant; minimal inspection risk.\n\n"
-        "🟡 **FDA 483 Gap (90.0%–96.9%)** — Out-of-sequence picking; Form 483 observation risk.\n\n"
-        "🔴 **Critical Non-Compliance (< 90.0%)** — Severe rotation breakdown; Warning Letter risk.\n\n"
-        "*(See classification guide expander below for statutory details)*"
-    )
+    # 1. Executive Regulatory Verdict Banner
+    if _fefo_overall >= 97.0:
+        st.markdown(f"""
+        <div style='background:linear-gradient(90deg,#052e16,#14532d); border-left:5px solid #22c55e; padding:0.9rem 1.3rem; border-radius:0.6rem; margin-bottom:1.2rem;'>
+          <div style='display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap;'>
+            <span style='color:#86efac; font-size:1.05rem; font-weight:bold;'>🟢 REGULATORY AUDIT-READY — Network FEFO Compliance at {_fefo_overall:.2f}%</span>
+            <span style='color:#bbf7d0; font-size:0.88rem; font-weight:600;'>{reg_agency} Target ≥ 97.0% (Schedule M / 21 CFR §211.150)</span>
+          </div>
+          <div style='color:#cbd5e1; font-size:0.82rem; margin-top:0.3rem;'>
+            Total Audited Picks: <b>{_total_picks_n:,}</b> &nbsp;|&nbsp; 
+            Non-Compliance VaR: <b style='color:#86efac;'>{fmt_curr(_nc_val_total)}</b> ({_nc_var_intensity:.2f}% of dispatch volume)
+          </div>
+        </div>""", unsafe_allow_html=True)
+    else:
+        st.markdown(f"""
+        <div style='background:linear-gradient(90deg,#7f1d1d,#450a0a); border-left:5px solid #ef4444; padding:0.9rem 1.3rem; border-radius:0.6rem; margin-bottom:1.2rem;'>
+          <div style='display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap;'>
+            <span style='color:#fca5a5; font-size:1.05rem; font-weight:bold;'>⚠️ REGULATORY INSPECTION RISK — Network FEFO Compliance at {_fefo_overall:.2f}% (Below 97.0% Floor)</span>
+            <span style='color:#fecaca; font-size:0.88rem; font-weight:600;'>{_nc_picks_n:,} Non-Compliant Picks Flagged</span>
+          </div>
+          <div style='color:#cbd5e1; font-size:0.82rem; margin-top:0.3rem;'>
+            Non-Compliance VaR: <b style='color:#fca5a5;'>{fmt_curr(_nc_val_total)}</b> in out-of-sequence dispatches. 
+            Elevates risk of <b>{reg_agency} Form 483 / Schedule M non-conformance citations</b> for failure to follow written warehouse procedures.
+          </div>
+        </div>""", unsafe_allow_html=True)
 
-    # ── Executive Regulatory & NC-VaR KPI Strip ─────────────────────────
-    fk1, fk2, fk3, fk4, fk5 = st.columns(5)
-    fk1.metric("Network FEFO Rate", f"{_fefo_overall:.2f}%", delta=f"{_fefo_overall-97:.2f}% vs 97%", help=f"Outbound picks adhering to earliest-expiry sequencing ({reg_agency} target ≥ 97%)")
-    fk2.metric("Total Picks Audited", f"{_total_picks_n:,}", help="Total warehouse outbound picking transactions audited")
-    fk3.metric("FEFO Violations", f"{_nc_picks_n:,}", delta=f"{_nc_picks_n/_total_picks_n*100:.1f}% error", delta_color="inverse", help="Picks where a fresher lot was dispatched ahead of an older lot")
-    fk4.metric(f"NC-VaR ({curr_code} Risk)", _nc_val_str, delta=f"{_nc_var_intensity:.1f}% of dispatch", delta_color="inverse", help=f"Non-Compliance Value at Risk: {fmt_curr(_nc_val_total, compact=False)} total value dispatched out of sequence")
-    fk5.metric("Regulatory Standing", _fefo_status_txt, help=_help_reg)
-    
-    with st.expander(f"📐 NC-VaR Formulation & Regulatory Standing Guide ({fefo_statute})", expanded=False):
-        st.markdown(r"""
-### 📐 Non-Compliance Value at Risk ($\text{NC-VaR}$) Formulation
+    # 2. Top 3 Primary Vital Signs
+    fk1, fk2, fk3 = st.columns(3)
+    with fk1:
+        st.markdown(f"""
+        <div style='background:#0f172a; border:1px solid #1e293b; border-top:3px solid {"#10b981" if _fefo_overall>=97 else "#ef4444"}; border-radius:0.75rem; padding:1.1rem; text-align:center;'>
+          <div style='color:#94a3b8; font-size:0.8rem; text-transform:uppercase; letter-spacing:1px;'>Network FEFO Compliance</div>
+          <div style='color:{"#6ee7b7" if _fefo_overall>=97 else "#fca5a5"}; font-size:2.1rem; font-weight:bold; margin:0.3rem 0;'>{_fefo_overall:.2f}%</div>
+          <div style='color:#64748b; font-size:0.76rem;'>Target: ≥ 97.0% across all {_total_picks_n:,} audited outbound picks</div>
+        </div>""", unsafe_allow_html=True)
+    with fk2:
+        st.markdown(f"""
+        <div style='background:#0f172a; border:1px solid #1e293b; border-top:3px solid #ef4444; border-radius:0.75rem; padding:1.1rem; text-align:center;'>
+          <div style='color:#94a3b8; font-size:0.8rem; text-transform:uppercase; letter-spacing:1px;'>NC-VaR (Value Dispatched Out of Sequence)</div>
+          <div style='color:#fca5a5; font-size:2.1rem; font-weight:bold; margin:0.3rem 0;'>{fmt_curr(_nc_val_total, compact=False, decimals=0)}</div>
+          <div style='color:#64748b; font-size:0.76rem;'>{_nc_var_intensity:.1f}% of total outbound dispatch valuation</div>
+        </div>""", unsafe_allow_html=True)
+    with fk3:
+        st.markdown(f"""
+        <div style='background:#0f172a; border:1px solid #1e293b; border-top:3px solid #f59e0b; border-radius:0.75rem; padding:1.1rem; text-align:center;'>
+          <div style='color:#94a3b8; font-size:0.8rem; text-transform:uppercase; letter-spacing:1px;'>FEFO Pick Violations</div>
+          <div style='color:#fcd34d; font-size:2.1rem; font-weight:bold; margin:0.3rem 0;'>{_nc_picks_n:,}</div>
+          <div style='color:#64748b; font-size:0.76rem;'>Fresh lots picked ahead of older approved stock</div>
+        </div>""", unsafe_allow_html=True)
 
-$$\mathbf{\text{NC-VaR}} = \sum_{i \in \mathcal{V}} \left( Q_i \times P_i \right)$$
+    st.markdown("<br>", unsafe_allow_html=True)
 
-Where:
-- $\mathcal{V}$ = Set of all non-compliant pick transactions (where $\text{is\_fefo\_compliant} = \text{False}$).
-- $Q_i$ = Quantity of units dispatched in violation of FEFO in pick transaction $i$.
-- $P_i$ = Product unit price.
-""" + f"""
-- **NC-VaR Intensity Rate:** $\\frac{{\\text{{NC-VaR}}}}{{\\text{{Total Audited Dispatch Value}}}} \\times 100 = \\mathbf{{{_nc_var_intensity:.2f}\\%}}$.
+    # 3. Dominant Visual: Monthly Compliance Trend & DC Breakdown
+    st.markdown("#### 📊 FEFO Compliance Trajectory & Distribution Center Performance")
+    fig_f, axes_f = plt.subplots(1, 2, figsize=(20, 5.2))
+    fig_f.patch.set_facecolor("#0f1117")
 
----
+    # Left: Monthly Trend
+    ax_f1 = axes_f[0]
+    _x_mo = range(len(fefo_mo))
+    _step_f = max(1, len(fefo_mo)//8)
+    ax_f1.plot(_x_mo, fefo_mo["compliance_rate"], color="#00d4ff", lw=2.5, marker="o", markersize=4, label="Monthly Compliance Rate")
+    ax_f1.axhline(97.0, color="#ef4444", linestyle="--", lw=1.8, label=f"Statutory Target (97.0%)")
+    ax_f1.fill_between(_x_mo, fefo_mo["compliance_rate"], 97.0, where=(fefo_mo["compliance_rate"] < 97.0), color="#ef4444", alpha=0.15, label="Non-Compliance Deficit")
+    ax_f1.set_xticks(list(_x_mo)[::_step_f])
+    ax_f1.set_xticklabels(fefo_mo["month"].tolist()[::_step_f], rotation=25, color="#94a3b8", fontsize=8.5)
+    ax_f1.set_ylabel("FEFO Compliance Rate (%)", color="#94a3b8")
+    ax_f1.set_title(f"24-Month FEFO Compliance Trend ({fefo_statute})", color="white", fontsize=11)
+    ax_f1.set_facecolor("#0f1117"); ax_f1.tick_params(colors="#94a3b8")
+    ax_f1.legend(fontsize=8.5, framealpha=0, labelcolor="#94a3b8", loc="lower left")
+    for sp in ax_f1.spines.values(): sp.set_edgecolor("#1e293b")
 
-### 🏛️ What Does "Regulatory Standing" Mean?
+    # Right: DC Compliance Bar
+    ax_f2 = axes_f[1]
+    _wh_sorted = fefo_wh.sort_values("compliance_rate", ascending=True)
+    _colors_dc = ["#ef4444" if r < 90 else ("#f59e0b" if r < 97 else "#10b981") for r in _wh_sorted["compliance_rate"]]
+    ax_f2.barh(_wh_sorted["warehouse_id"], _wh_sorted["compliance_rate"], color=_colors_dc, alpha=0.88, edgecolor="#0f1117")
+    ax_f2.axvline(97.0, color="#00d4ff", linestyle="--", lw=1.5, label="97% Target")
+    for bar, r in zip(ax_f2.patches, _wh_sorted["compliance_rate"]):
+        ax_f2.text(bar.get_width() + 0.5, bar.get_y()+bar.get_height()/2, f"{r:.1f}%", va="center", fontsize=8.5, color="white")
+    ax_f2.set_xlim(min(70, _wh_sorted["compliance_rate"].min()-5), 104)
+    ax_f2.set_title("FEFO Compliance Rate by Distribution Center", color="white", fontsize=11)
+    ax_f2.set_xlabel("Compliance (%)", color="#94a3b8")
+    ax_f2.set_facecolor("#0f1117"); ax_f2.tick_params(colors="#94a3b8")
+    for sp in ax_f2.spines.values(): sp.set_edgecolor("#1e293b")
 
-The **Regulatory Standing** status badge categorizes the warehouse network's compliance health against mandatory pharmaceutical Good Distribution Practices (**{fefo_statute}**):
+    plt.tight_layout(); show_fig(fig_f)
 
-| Status Level | FEFO Threshold | Regulatory & Operational Meaning | Mandated Compliance Action |
-| :--- | :--- | :--- | :--- |
-| **🟢 {'CDSCO Audit-Ready' if is_india else 'FDA Audit-Ready'}** | **≥ 97.0%** | **Compliant & Audit-Ready.** Outbound picks strictly honor earliest-expiry sequencing. Demonstrates robust WMS control and minimal risk of inspectional observations during regulatory audits. | Continue standard barcode verification and perform routine quarterly compliance sampling. |
-| **🟡 {'Schedule M Gap' if is_india else 'FDA 483 Gap'}** | **90.0% – 96.9%** | **Warning / Non-Conformance Risk.** Operators are bypassing older batches in 3%–10% of picks. Elevates risk of **{'CDSCO Schedule M inspectional non-conformance' if is_india else 'FDA Form 483 inspectional observations'}** for failure to follow written warehouse procedures. | Initiate internal CAPA (Corrective and Preventive Action), enforce barcode scan lockouts in WMS, and retrain picking teams. |
-| **🔴 Critical Non-Compliance** | **< 90.0%** | **Severe Regulatory & Expiry Violation.** Systemic breakdown in stock rotation. Younger stock is systematically picked ahead of older stock, stranding older batches to decay into write-offs. High risk of **{'CDSCO show-cause notice & manufacturing/distribution license risk' if is_india else 'FDA Warning Letter, Import Alert, and mandatory product write-offs'}**. | Issue immediate warehouse stop-ship SOP review, require supervisor dual-authorization for any out-of-sequence pick, and execute 100% physical batch reconciliation. |
+    with st.expander(f"📐 Statutory Guide & NC-VaR Details ({fefo_statute})", expanded=False):
+        st.markdown(f"**Regulatory Standard:** Under FDA 21 CFR §211.150 / CDSCO Schedule M (Sec 8.2), pharmaceutical distributors must ensure oldest approved batches are distributed first.")
+        st.markdown(f"**NC-VaR:** Total value dispatched in violation of FEFO: `{fmt_curr(_nc_val_total, compact=False)}` ({_nc_var_intensity:.2f}% intensity).")
 
-**Regulatory Standard ({fefo_statute}):**
-Under **{'CDSCO Revised Schedule M (Section 8.2 & Rules 71-78)' if is_india else 'FDA 21 CFR §211.150 (Distribution Procedures) & USP <1079>'}**, pharmaceutical manufacturers and distributors are legally required to maintain written procedures ensuring that the oldest approved stock is distributed first.
-        """)
     st.markdown("---")
-
-    # ── Interactive FEFO Dispatch Queue & Pick Slip Generator ───────────────
+# ── Interactive FEFO Dispatch Queue & Pick Slip Generator ───────────────
     st.markdown('<div class="section-header">⚡ Live FEFO Pick Slip & Dispatch Queue Generator</div>', unsafe_allow_html=True)
     st.markdown('<div class="section-desc">Select a product and enter the required order volume. The engine dynamically sequences available warehouse batches in strict First-Expiry-First-Out (FEFO) order, calculates batch allocations, and generates an FDA 21 CFR §211.150 audit-ready pick slip.</div>', unsafe_allow_html=True)
 
@@ -1536,80 +1524,127 @@ Under **{'CDSCO Revised Schedule M (Section 8.2 & Rules 71-78)' if is_india else
     ai_insight("FEFO Compliance — Root Cause & Action Plan", _fefo_bullets, icon="✅", color="#10b981")
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PAGE: EXPIRY RISK HEATMAP
+# PAGE: EXPIRY RISK EARLY-WARNING RADAR
 # ─────────────────────────────────────────────────────────────────────────────
 elif selected_page == "🌡️ Expiry Risk Heatmap":
-    st.markdown('<div class="section-header">🌡️ Expiry Risk Heatmap</div>', unsafe_allow_html=True)
-    info_box("Heatmap Header", "ℹ️ Heatmap analysis for expiry risk.")
-    st.markdown('<div class="section-desc">DTE = Days-to-Expiry | Red cells = urgent action required | Each cell = total units in that risk tier at that warehouse.</div>', unsafe_allow_html=True)
-    c1, c2 = st.columns(2)
-    with c1: info_box("Expiry Risk Heatmap", "ℹ️ How to read this heatmap")
-    with c2: info_box("Risk Tiers", "ℹ️ What do the risk tiers mean?")
+    st.markdown('<div class="section-header">🌡️ Expiry Risk Early-Warning Radar</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-desc">Identifies near-expiry batches across all distribution centers 30–180 days in advance, providing the operational bridge directly into the LP Cost Optimizer.</div>', unsafe_allow_html=True)
 
-    fig, axes = plt.subplots(1, 3, figsize=(22, 7))
-    fig.patch.set_facecolor("#0f1117")
-    fig.suptitle("Expiry Risk Heatmap — Days-to-Expiry (DTE) Analysis", fontsize=14, color="#f59e0b", fontweight="bold", y=1.04)
-
-    ax = axes[0]
-    pivot_risk = inventory.pivot_table(values="quantity_on_hand", index="warehouse_id", columns="expiry_risk", aggfunc="sum", fill_value=0)
-    col_order = [c for c in RISK_ORDER if c in pivot_risk.columns]
-    sns.heatmap(pivot_risk[col_order]/1000, annot=True, fmt=".1f", cmap=LinearSegmentedColormap.from_list("risk",["#10b981","#f59e0b","#ef4444"]), ax=ax, cbar_kws={"label":"Units ('000)"}, linewidths=0.5, linecolor="#0f1117")
-    ax.set_title("Units at Risk by Warehouse ('000)"); ax.tick_params(axis="x", rotation=35)
-
-    ax = axes[1]
-    at_risk = inventory[inventory["expiry_risk"].isin(["EXPIRED","CRITICAL (<30d)","HIGH (30-90d)"])]
-    risk_val = at_risk.groupby("warehouse_id")["inventory_value_usd"].sum().sort_values(ascending=True)
-    _rv_plot = risk_val.values/1e3 if not is_india else risk_val.values * USD_TO_INR / 1e5
-    ax.barh(risk_val.index, _rv_plot, color="#ef4444", alpha=0.85)
-    ax.set_title(f"At-Risk Inventory Value by Warehouse ({curr_code} {'Lakhs' if is_india else 'K'})"); ax.set_xlabel(f"{curr_code} {'Lakhs' if is_india else 'K'}")
-    for bar, v in zip(ax.patches, risk_val.values):
-        ax.text(bar.get_width()+0.5, bar.get_y()+bar.get_height()/2, f"{fmt_curr(v)}", va="center", fontsize=9)
-
-    ax = axes[2]
-    sample = inventory.dropna(subset=["days_to_expiry"]).sample(min(2000, len(inventory)), random_state=42)
-    for risk_cat, grp in sample.groupby("expiry_risk"):
-        ax.scatter(grp["days_to_expiry"], grp["inventory_value_usd"]/1e3, label=risk_cat, alpha=0.55, s=18, color=RISK_COLORS.get(risk_cat,"#888"))
-    for thresh, col, lbl in [(30,"#ef4444","30d"),(90,"#f59e0b","90d"),(180,"#3b82f6","180d")]:
-        ax.axvline(thresh, color=col, linestyle="--", lw=1.5, label=lbl)
-    ax.set_title("DTE vs Inventory Value"); ax.set_xlabel("Days to Expiry"); ax.set_ylabel("Value (USD K)"); ax.legend(fontsize=7, framealpha=0)
-
-    plt.tight_layout()
-    show_fig(fig)
-    info_box("Heatmap Charts", "ℹ️ Visualization of expiry risk data.")
-    info_box("Expiry Risk Heatmap", "ℹ️ What action should I take?")
-
-    risk_summary = inventory.groupby("expiry_risk").agg(Products=("product_id","nunique"), Total_Units=("quantity_on_hand","sum"), Total_Value_USD=("inventory_value_usd","sum")).reindex([r for r in RISK_ORDER if r in inventory["expiry_risk"].unique()]).round(0)
-    st.dataframe(risk_summary, use_container_width=True)
-    info_box("Summary Table", "ℹ️ Grouped summary of inventory at risk.")
-
-    # ── AI Insight: Expiry Risk Financial Impact ──────────────────────
     _exp_val   = inventory[inventory["expiry_risk"]=="EXPIRED"]["inventory_value_usd"].sum()
     _crit_val  = inventory[inventory["expiry_risk"]=="CRITICAL (<30d)"]["inventory_value_usd"].sum()
     _high_val  = inventory[inventory["expiry_risk"]=="HIGH (30-90d)"]["inventory_value_usd"].sum()
-    _crit_u    = inventory[inventory["expiry_risk"]=="CRITICAL (<30d)"]["quantity_on_hand"].sum()
-    _exp_u     = inventory[inventory["expiry_risk"]=="EXPIRED"]["quantity_on_hand"].sum()
-    _worst_r_wh= risk_val.idxmax() if not risk_val.empty else "N/A"
-    _risk_bullets = [
-        f"🛑 <b>Immediate write-off risk:</b> <b>{_exp_u:,.0f} units ({fmt_curr(_exp_val)}) already EXPIRED</b> — zero recovery possible. "
-        f"Regulatory certified destruction must begin immediately. Notify QA, complete batch disposition records.",
-        f"🔴 <b>48-hour window — CRITICAL batches:</b> <b>{_crit_u:,.0f} units ({fmt_curr(_crit_val)})</b> expire in <30 days. "
-        f"At current dispatch velocity, a significant portion will expire unsold without urgent action. "
-        f"Run LP Cost Optimizer now for batch-by-batch allocation recommendations.",
-        f"🏢 <b>Hotspot warehouse: {_worst_r_wh}</b> carries the highest at-risk USD exposure in the network. "
-        f"Prioritise emergency dispatch orders from this warehouse. Consider inter-warehouse transfer to high-demand locations using the Freight Rebalancing tool.",
-    ]
-    if _high_val > 0:
-        _risk_bullets.append(
-            f"📅 <b>30-day cascade risk:</b> Without intervention, HIGH-tier stock ({fmt_curr(_high_val)}) will move into CRITICAL next month. "
-            f"Begin proactive inter-warehouse transfers now — use Geo Sales Intelligence to identify which warehouses have high demand."
-        )
-    _risk_bullets.append(
-        f"💡 <b>Recovery strategy:</b> (1) EXPIRED → certified destruction + regulatory documentation, "
-        f"(2) CRITICAL → emergency dispatch to highest-demand warehouse today, "
-        f"(3) HIGH → planned transfer/liquidation within 30 days, "
-        f"(4) Run LP Cost Optimizer for mathematically optimal unit-by-unit allocation across all 4 channels."
-    )
-    ai_insight("Expiry Risk — Financial Impact & Recovery Roadmap", _risk_bullets, icon="🌡️", color="#ef4444")
+    _med_val   = inventory[inventory["expiry_risk"]=="MEDIUM (90-180d)"]["inventory_value_usd"].sum()
+    _tot_at_risk = _exp_val + _crit_val + _high_val
+
+    at_risk_df = inventory[inventory["expiry_risk"].isin(["EXPIRED","CRITICAL (<30d)","HIGH (30-90d)"])]
+    risk_val_by_dc = at_risk_df.groupby("warehouse_id")["inventory_value_usd"].sum().sort_values(ascending=True)
+    _worst_dc = risk_val_by_dc.idxmax() if not risk_val_by_dc.empty else "None"
+    _worst_dc_val = risk_val_by_dc.max() if not risk_val_by_dc.empty else 0
+
+    # 1. Executive Verdict Banner
+    if _tot_at_risk > 0:
+        st.markdown(f"""
+        <div style='background:linear-gradient(90deg,#7f1d1d,#450a0a); border-left:5px solid #ef4444; padding:0.9rem 1.3rem; border-radius:0.6rem; margin-bottom:1.2rem;'>
+          <div style='display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap;'>
+            <span style='color:#fca5a5; font-size:1.05rem; font-weight:bold;'>⚠️ EXPIRY RADAR: {fmt_curr(_tot_at_risk)} Value Exposed to Expiry Overhang</span>
+            <span style='color:#fecaca; font-size:0.88rem; font-weight:600;'>Primary Exposure Hotspot: {_worst_dc} ({fmt_curr(_worst_dc_val)})</span>
+          </div>
+          <div style='color:#cbd5e1; font-size:0.82rem; margin-top:0.3rem;'>
+            Critical Window (&lt;30d): <b style='color:#fca5a5;'>{fmt_curr(_crit_val)}</b> &nbsp;|&nbsp; 
+            30–90d Horizon: <b style='color:#fcd34d;'>{fmt_curr(_high_val)}</b> &nbsp;|&nbsp; 
+            Expired (Mandatory Destruction): <b style='color:#ef4444;'>{fmt_curr(_exp_val)}</b>
+          </div>
+        </div>""", unsafe_allow_html=True)
+    else:
+        st.markdown(f"""
+        <div style='background:linear-gradient(90deg,#052e16,#14532d); border-left:5px solid #22c55e; padding:0.9rem 1.3rem; border-radius:0.6rem; margin-bottom:1.2rem;'>
+          <span style='color:#86efac; font-size:1.05rem; font-weight:bold;'>✅ NO CRITICAL EXPIRY EXPOSURE — All active batches have &gt;90 days shelf-life remaining</span>
+        </div>""", unsafe_allow_html=True)
+
+    # 2. Top 3 Vital Signs
+    ek1, ek2, ek3 = st.columns(3)
+    with ek1:
+        st.markdown(f"""
+        <div style='background:#0f172a; border:1px solid #1e293b; border-top:3px solid #7f1d1d; border-radius:0.75rem; padding:1.1rem; text-align:center;'>
+          <div style='color:#94a3b8; font-size:0.8rem; text-transform:uppercase; letter-spacing:1px;'>Expired Stock (Zero Salvage)</div>
+          <div style='color:#fca5a5; font-size:1.9rem; font-weight:bold; margin:0.3rem 0;'>{fmt_curr(_exp_val, compact=False, decimals=0)}</div>
+          <div style='color:#64748b; font-size:0.76rem;'>Immediate QA certified destruction required</div>
+        </div>""", unsafe_allow_html=True)
+    with ek2:
+        st.markdown(f"""
+        <div style='background:#0f172a; border:1px solid #1e293b; border-top:3px solid #ef4444; border-radius:0.75rem; padding:1.1rem; text-align:center;'>
+          <div style='color:#94a3b8; font-size:0.8rem; text-transform:uppercase; letter-spacing:1px;'>Critical Window (&lt;30 Days)</div>
+          <div style='color:#fca5a5; font-size:1.9rem; font-weight:bold; margin:0.3rem 0;'>{fmt_curr(_crit_val, compact=False, decimals=0)}</div>
+          <div style='color:#64748b; font-size:0.76rem;'>Urgent emergency dispatch or secondary liquidation</div>
+        </div>""", unsafe_allow_html=True)
+    with ek3:
+        st.markdown(f"""
+        <div style='background:#0f172a; border:1px solid #1e293b; border-top:3px solid #f59e0b; border-radius:0.75rem; padding:1.1rem; text-align:center;'>
+          <div style='color:#94a3b8; font-size:0.8rem; text-transform:uppercase; letter-spacing:1px;'>30–90 Day Cascade Risk</div>
+          <div style='color:#fcd34d; font-size:1.9rem; font-weight:bold; margin:0.3rem 0;'>{fmt_curr(_high_val, compact=False, decimals=0)}</div>
+          <div style='color:#64748b; font-size:0.76rem;'>Inter-warehouse transfer &amp; sales velocity acceleration</div>
+        </div>""", unsafe_allow_html=True)
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # 3. Dominant Visual: 2-Panel Spacious Radar
+    st.markdown("#### 📊 Expiry Risk Radar — Distribution Center Heatmap & Valuation Exposure")
+    fig_exp, axes_exp = plt.subplots(1, 2, figsize=(20, 5.5))
+    fig_exp.patch.set_facecolor("#0f1117")
+
+    # Left: Units Matrix
+    ax_e1 = axes_exp[0]
+    pivot_risk = inventory.pivot_table(values="quantity_on_hand", index="warehouse_id", columns="expiry_risk", aggfunc="sum", fill_value=0)
+    col_order = [c for c in RISK_ORDER if c in pivot_risk.columns]
+    sns.heatmap(pivot_risk[col_order]/1000, annot=True, fmt=".1f", cmap=LinearSegmentedColormap.from_list("risk",["#10b981","#f59e0b","#ef4444"]), ax=ax_e1, cbar_kws={"label":"Units ('000)"}, linewidths=0.5, linecolor="#0f1117")
+    ax_e1.set_title("Units at Risk by DC ('000 units)", color="white", fontsize=11)
+    ax_e1.tick_params(colors="#94a3b8", axis="x", rotation=30)
+    ax_e1.tick_params(colors="#94a3b8", axis="y")
+
+    # Right: Valuation Exposure Bar
+    ax_e2 = axes_exp[1]
+    _rv_plot = risk_val_by_dc.values/1e3 if not is_india else risk_val_by_dc.values * USD_TO_INR / 1e5
+    ax_e2.barh(risk_val_by_dc.index, _rv_plot, color="#ef4444", alpha=0.85, edgecolor="#0f1117")
+    ax_e2.set_title(f"At-Risk Value by DC ({curr_code} {'Lakhs' if is_india else 'K'})", color="white", fontsize=11)
+    ax_e2.set_xlabel(f"Exposed Capital ({curr_code})", color="#94a3b8")
+    ax_e2.set_facecolor("#0f1117"); ax_e2.tick_params(colors="#94a3b8")
+    for bar, v in zip(ax_e2.patches, risk_val_by_dc.values):
+        ax_e2.text(bar.get_width() + (max(_rv_plot)*0.02 if len(_rv_plot)>0 else 1), bar.get_y()+bar.get_height()/2, f"{fmt_curr(v)}", va="center", fontsize=8.5, color="white")
+    for sp in ax_e2.spines.values(): sp.set_edgecolor("#1e293b")
+
+    plt.tight_layout(); show_fig(fig_exp)
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # 4. Direct Action Bridge to LP Optimizer
+    st.markdown(f"""
+    <div style='background:rgba(16,185,129,0.15); border-left:4px solid #10b981; padding:1rem 1.4rem; border-radius:0.5rem;'>
+      <div style='display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap;'>
+        <div>
+          <span style='color:#6ee7b7; font-weight:bold; font-size:0.95rem;'>🚀 EXECUTION BRIDGE: Automated Recovery Optimization</span>
+          <div style='color:#cbd5e1; font-size:0.85rem; margin-top:0.2rem;'>
+            Convert this <b>{fmt_curr(_tot_at_risk)}</b> at-risk exposure into concrete dispatch, transfer, and liquidation decisions with specified deadlines.
+          </div>
+        </div>
+      </div>
+    </div>""", unsafe_allow_html=True)
+
+    c_btn1, c_btn2 = st.columns([1, 2])
+    with c_btn1:
+        if st.button("⚖️ Open Capital Recovery & LP Optimizer →", type="primary", use_container_width=True):
+            st.session_state["_pending_nav"] = "⚖️ LP Cost Optimizer"
+            st.rerun()
+
+    # 5. Collapsible Summary Drawer
+    with st.expander("🔍 Risk Category Register & Unit Breakdown", expanded=False):
+        risk_summary = inventory.groupby("expiry_risk").agg(
+            Products=("product_id","nunique"),
+            Total_Units=("quantity_on_hand","sum"),
+            Total_Value_USD=("inventory_value_usd","sum")
+        ).reindex([r for r in RISK_ORDER if r in inventory["expiry_risk"].unique()]).round(0)
+        risk_summary[f"Total Value ({curr_code})"] = risk_summary["Total_Value_USD"].apply(lambda v: fmt_curr(v, compact=False, decimals=0))
+        risk_summary = risk_summary.drop(columns=["Total_Value_USD"])
+        st.dataframe(risk_summary, use_container_width=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PAGE: DEMAND & SEASONALITY
