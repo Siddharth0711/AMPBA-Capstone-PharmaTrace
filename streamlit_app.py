@@ -485,26 +485,83 @@ with st.sidebar:
 
     st.markdown("---")
 
-    # ── Grouped Navigation ─────────────────────────────────────────────────
-    ALL_PAGES = [
-        ("OPERATIONS",         "🏠 Home & KPI Summary"),
-        ("OPERATIONS",         "📦 Inventory Overview"),
-        ("OPERATIONS",         "🧪 Raw Materials & Pricing"),
-        ("COMPLIANCE",         "✅ FEFO Compliance"),
-        ("COMPLIANCE",         "❄️ IoT Cold-Chain Monitor"),
-        ("EXPIRY MANAGEMENT",  "🌡️ Expiry Risk Heatmap"),
-        ("EXPIRY MANAGEMENT",  "⚖️ LP Cost Optimizer"),
-        ("DEMAND & ANALYTICS", "📈 Demand & Seasonality"),
-        ("DEMAND & ANALYTICS", "🔶 ABC-FSN Segmentation"),
-        ("DEMAND & ANALYTICS", "🤖 ML Expiry Classifier"),
-        ("SUPPLY CHAIN",       "📋 Order Fulfilment"),
-        ("SUPPLY CHAIN",       "🏷️ WIP & Manufacturing"),
-        ("SUPPLY CHAIN",       "🌐 Network Rebalancing & Transfers"),
+    # ── Bifurcated Navigation Architecture ──────────────────────────────────
+    CORE_PAGES = [
+        "🏠 Home & KPI Summary",
+        "📦 Inventory Overview",
+        "🌡️ Expiry Risk Heatmap",
+        "✅ FEFO Compliance",
+        "🔶 ABC-FSN Segmentation",
+        "📈 Demand & Seasonality",
+        "⚖️ LP Cost Optimizer",
     ]
-    PAGES = [p for _, p in ALL_PAGES]
+    
+    ADVANCED_PAGES = [
+        "🤖 ML Expiry Classifier",
+        "❄️ IoT Cold-Chain Monitor",
+        "🌐 Network Rebalancing & Transfers",
+    ]
+    
+    EXTENDED_PAGES = [
+        "🧪 Raw Materials & Pricing",
+        "📋 Order Fulfilment",
+        "🏷️ WIP & Manufacturing",
+    ]
 
-    st.markdown("<div style='font-size:11px; font-weight:700; color:#00d4ff; letter-spacing:0.08em; margin: 4px 0 8px;'>NAVIGATION MODULES</div>", unsafe_allow_html=True)
-    selected_page = st.radio("Navigate", PAGES, key="page_nav", label_visibility="collapsed")
+    ALL_PAGES_LIST = CORE_PAGES + ADVANCED_PAGES + EXTENDED_PAGES
+
+    # Resolve pending navigation target
+    curr_target = st.session_state.get("page_nav", CORE_PAGES[0])
+    
+    # Category detection for default scope
+    if curr_target in ADVANCED_PAGES:
+        auto_scope_idx = 1
+    elif curr_target in EXTENDED_PAGES:
+        auto_scope_idx = 2
+    else:
+        auto_scope_idx = 0
+
+    st.markdown("<div style='font-size:11px; font-weight:700; color:#00d4ff; letter-spacing:0.08em; margin: 4px 0 6px;'>🎯 DASHBOARD SCOPE VIEW</div>", unsafe_allow_html=True)
+    
+    scope_options = [
+        "🌟 Core Capstone (Expiry & FEFO)",
+        "🔬 Advanced Analytics & AI",
+        "🏢 Extended Operations (Optional)",
+        "🌐 All Modules (Full Portfolio)",
+    ]
+
+    # Initialize scope in session state if not present
+    if "scope_view_sel" not in st.session_state:
+        st.session_state["scope_view_sel"] = scope_options[auto_scope_idx]
+
+    selected_scope = st.selectbox(
+        "Select Scope View",
+        scope_options,
+        key="scope_view_sel",
+        label_visibility="collapsed"
+    )
+
+    if selected_scope == "🌟 Core Capstone (Expiry & FEFO)":
+        visible_pages = CORE_PAGES
+        scope_badge = "<div style='font-size:10px; color:#10b981; margin: -2px 0 8px; font-weight:600;'>✅ 7 Core Pillars (Capstone Presentation)</div>"
+    elif selected_scope == "🔬 Advanced Analytics & AI":
+        visible_pages = ADVANCED_PAGES
+        scope_badge = "<div style='font-size:10px; color:#8b5cf6; margin: -2px 0 8px; font-weight:600;'>🔬 3 Advanced AI &amp; Cold-Chain Modules</div>"
+    elif selected_scope == "🏢 Extended Operations (Optional)":
+        visible_pages = EXTENDED_PAGES
+        scope_badge = "<div style='font-size:10px; color:#f59e0b; margin: -2px 0 8px; font-weight:600;'>🏢 3 Secondary ERP &amp; WIP Modules</div>"
+    else:
+        visible_pages = ALL_PAGES_LIST
+        scope_badge = "<div style='font-size:10px; color:#00d4ff; margin: -2px 0 8px; font-weight:600;'>🌐 All 13 Supply Chain Modules</div>"
+
+    st.markdown(scope_badge, unsafe_allow_html=True)
+    st.markdown("<div style='font-size:11px; font-weight:700; color:#94a3b8; letter-spacing:0.08em; margin: 4px 0 4px;'>PAGE NAVIGATION</div>", unsafe_allow_html=True)
+
+    # Ensure page_nav in session state is valid for visible_pages
+    if st.session_state.get("page_nav") not in visible_pages:
+        st.session_state["page_nav"] = visible_pages[0]
+
+    selected_page = st.radio("Navigate", visible_pages, key="page_nav", label_visibility="collapsed")
     st.markdown("---")
 
     # ── Template Download ──────────────────────────────────────────────────
@@ -850,29 +907,53 @@ if selected_page == "🏠 Home & KPI Summary":
 
     st.markdown("---")
 
-    # ── Quick Navigation ──────────────────────────────────────────────────
-    st.markdown('<div class="section-header">🧭 Quick Navigation</div>', unsafe_allow_html=True)
-    # Nav items: (icon, exact_page_name_from_ALL_PAGES, short_label, description)
-    nav_items = [
-        ("📦", "📦 Inventory Overview",                 "Inventory Overview",       "Stock levels, expiry risk, and multi-warehouse grid"),
-        ("✅", "✅ FEFO Compliance",                     "FEFO Compliance",          "Regulatory pick slip generator & audit compliance rate"),
-        ("🌡️", "🌡️ Expiry Risk Heatmap",               "Expiry Risk Heatmap",      "Near-expiry batches mapped by warehouse & USD value"),
-        ("⚖️", "⚖️ LP Cost Optimizer",                  "LP Cost Optimizer",        "Simplex cost minimization across dispatch/transfer/liquidation"),
-        ("📋", "📋 Order Fulfilment",                   "Order Fulfilment",         "Simulate a sales order — check stock, WIP & raw materials"),
-        ("🌐", "🌐 Network Rebalancing & Transfers",    "Network Rebalancing",      "Geo demand hotspots, transfer vs manufacture savings & freight"),
+    # ── Quick Navigation (Bifurcated) ─────────────────────────────────────
+    st.markdown('<div class="section-header">🧭 Quick Navigation — Core Capstone Pillars</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-desc">Primary modules focused on Expiry Intelligence, FEFO Regulatory Compliance, and Working Capital Optimization.</div>', unsafe_allow_html=True)
+    
+    core_nav_items = [
+        ("📦", "📦 Inventory Overview",                 "Inventory Overview",       "Stock levels, DTE histogram, and multi-warehouse grid"),
+        ("✅", "✅ FEFO Compliance",                     "FEFO Compliance",          "Regulatory pick slip generator & FDA/CDSCO compliance"),
+        ("🌡️", "🌡️ Expiry Risk Heatmap",               "Expiry Risk Heatmap",      "Near-expiry batches mapped by warehouse & financial risk"),
+        ("🔶", "🔶 ABC-FSN Segmentation",               "ABC-FSN Matrix",           "Pareto value concentration & sales velocity categorization"),
+        ("📈", "📈 Demand & Seasonality",               "Demand & Seasonality",     "24-Month demand trends, fill rate, and seasonal surge curves"),
+        ("⚖️", "⚖️ LP Cost Optimizer",                  "LP Cost Optimizer",        "Simplex cost minimization across dispatch, transfer & liquidation"),
     ]
-    nav_cols = st.columns(3)
-    for i, (icon, page_key, label, desc) in enumerate(nav_items):
-        with nav_cols[i % 3]:
+    
+    c_cols = st.columns(3)
+    for i, (icon, page_key, label, desc) in enumerate(core_nav_items):
+        with c_cols[i % 3]:
             st.markdown(f"""
-<div class='nav-card'>
+<div class='nav-card' style='border-top:3px solid #10b981;'>
   <div class='nav-card-icon'>{icon}</div>
   <div class='nav-card-title'>{label}</div>
   <div class='nav-card-desc'>{desc}</div>
 </div>""", unsafe_allow_html=True)
-            if st.button(f"Open {label} →", key=f"nav_btn_{i}", use_container_width=True):
+            if st.button(f"Open {label} →", key=f"c_nav_btn_{i}", use_container_width=True):
                 st.session_state["_pending_nav"] = page_key
                 st.rerun()
+
+    with st.expander("🔬 Advanced AI, IoT & Secondary Enterprise Modules", expanded=False):
+        adv_nav_items = [
+            ("🤖", "🤖 ML Expiry Classifier",               "ML Expiry Classifier",     "Random Forest predictive risk classification using cover days"),
+            ("❄️", "❄️ IoT Cold-Chain Monitor",             "IoT Cold-Chain Monitor",   "Continuous thermal telemetry & USP <659> excursion tracking"),
+            ("🌐", "🌐 Network Rebalancing & Transfers",    "Network Rebalancing",      "Inter-warehouse freight & near-expiry transfer optimization"),
+            ("🧪", "🧪 Raw Materials & Pricing",            "Raw Materials & Pricing",  "API/chemical commodity price tracker & restock signals"),
+            ("📋", "📋 Order Fulfilment",                   "Order Fulfilment",         "Sales order simulation across stock & WIP inventory"),
+            ("🏷️", "🏷️ WIP & Manufacturing",                "WIP & Manufacturing",      "Batch genealogy, shop-floor yield & staging status"),
+        ]
+        a_cols = st.columns(3)
+        for j, (icon, page_key, label, desc) in enumerate(adv_nav_items):
+            with a_cols[j % 3]:
+                st.markdown(f"""
+<div class='nav-card' style='border-top:3px solid #8b5cf6;'>
+  <div class='nav-card-icon'>{icon}</div>
+  <div class='nav-card-title'>{label}</div>
+  <div class='nav-card-desc'>{desc}</div>
+</div>""", unsafe_allow_html=True)
+                if st.button(f"Open {label} →", key=f"adv_nav_btn_{j}", use_container_width=True):
+                    st.session_state["_pending_nav"] = page_key
+                    st.rerun()
 
     st.markdown("---")
     # ── AI Executive Intelligence ─────────────────────────────────────────────────
