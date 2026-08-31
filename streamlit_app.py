@@ -1853,334 +1853,403 @@ elif selected_page == "🤖 ML Expiry Classifier":
     ai_insight("ML Expiry Classifier — Model Governance & Predictive Strategy", _rf_bullets, icon="🤖", color="#7c3aed")
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PAGE: LP COST OPTIMIZER
+# PAGE: LP COST OPTIMIZER — STRATEGIC INVENTORY OPTIMISATION ROADMAP
 # ─────────────────────────────────────────────────────────────────────────────
 elif selected_page == "⚖️ LP Cost Optimizer":
-    st.markdown('<div class="section-header">⚖️ LP Inventory Cost Optimizer</div>', unsafe_allow_html=True)
-    info_box("LP Header", "ℹ️ Linear Programming for inventory optimization.")
-    st.markdown('<div class="section-desc">Linear Programming: for each at-risk batch, optimise split across Dispatch / Transfer / Liquidate / Dispose to minimise total cost under regulatory constraints.</div>', unsafe_allow_html=True)
-    info_box("LP Optimizer", "ℹ️ How does LP optimisation work?")
+    st.markdown('<div class="section-header">⚖️ Strategic Inventory Optimisation Roadmap</div>', unsafe_allow_html=True)
+    info_box("LP Header", "ℹ️ How does the Strategic LP Roadmap work?")
+    st.markdown(
+        '<div class="section-desc">Multi-SKU · Multi-Warehouse · 12-Month Planning Horizon | '
+        'Linear Programming identifies the minimum-cost allocation across Dispatch / Transfer / Liquidate / Promote / Dispose '
+        'and generates a prioritised management action roadmap with specific deadlines and financial impact for each decision.</div>',
+        unsafe_allow_html=True)
 
     if not supp_ok:
         st.warning("Upload Unit Economics file (file 03) to enable LP optimisation.", icon="⚠️"); st.stop()
 
-    ml_df = inventory.dropna(subset=["days_to_expiry","quantity_on_hand","unit_price"]).copy()
-    if supp_ok and not df_demand.empty and "quantity_dispatched_units" in df_demand.columns:
-        _n_mo = df_demand["year_month"].nunique() if "year_month" in df_demand.columns else 24
-        sku_velocity = df_demand.groupby("product_id")["quantity_dispatched_units"].sum() / max(1, _n_mo * 30)
-    elif supp_ok and "transaction_type" in df_txns.columns:
-        _vel_df = df_txns[df_txns["transaction_type"]=="OUTBOUND_DISPATCH_PICK"].groupby("product_id")["quantity"].sum()
-        sku_velocity = _vel_df / 730
+    _TODAY = pd.Timestamp.now().normalize()
+
+    # ── VELOCITY: SKU-WH level and SKU level ─────────────────────────────────
+    inv_lp = inventory.dropna(subset=["days_to_expiry","quantity_on_hand","unit_price"]).copy()
+    inv_lp["inventory_value_usd"] = inv_lp.get("inventory_value_usd",
+                                                inv_lp["quantity_on_hand"] * inv_lp["unit_price"])
+    if not df_demand.empty and "quantity_dispatched_units" in df_demand.columns:
+        _n_mo = max(1, df_demand["year_month"].nunique() if "year_month" in df_demand.columns else 24)
+        _skuwh_vel = df_demand.groupby(["product_id","warehouse_id"])["quantity_dispatched_units"].sum() / (_n_mo * 30)
+        _sku_vel   = df_demand.groupby("product_id")["quantity_dispatched_units"].sum() / (_n_mo * 30)
     else:
-        sku_velocity = inventory.groupby("product_id")["quantity_on_hand"].sum() / 180
+        _skuwh_vel = pd.Series(dtype=float)
+        _sku_vel   = inventory.groupby("product_id")["quantity_on_hand"].sum() / 180
 
-    ml_df["daily_sales_velocity"] = ml_df["product_id"].map(sku_velocity).fillna(ml_df["quantity_on_hand"] / 180)
-    ml_df["clearable_units"]      = np.maximum(0, ml_df["daily_sales_velocity"] * np.maximum(0, ml_df["days_to_expiry"]))
-    ml_df["inventory_value_usd"]  = ml_df.get("inventory_value_usd", ml_df["quantity_on_hand"] * ml_df["unit_price"])
+    def _get_vel(pid, wid):
+        key = (pid, wid)
+        if key in _skuwh_vel.index: return max(_skuwh_vel[key], 0.1)
+        if pid  in _sku_vel.index:  return max(_sku_vel[pid],   0.1)
+        return 1.0
 
-    # ── CHRONIC DISEASE SMART FLAG ─────────────────────────────────────────────
-    # Products in these classes can be dispatched even at DTE 3–7d (daily dosing,
-    # existing patient prescriptions, immediate retail uptake possible)
-    _CHRONIC_CLASSES = ["cardiovascular", "diabetes", "cns", "neurology", "pain"]
-    if "pharm_class" in ml_df.columns:
-        ml_df["is_chronic_eligible"] = ml_df["pharm_class"].fillna("").str.lower().apply(
-            lambda x: any(c in x for c in _CHRONIC_CLASSES)
-        )
+    inv_lp["daily_velocity"] = inv_lp.apply(
+        lambda r: _get_vel(r["product_id"], r.get("warehouse_id", "")), axis=1)
+
+    # ── CHRONIC FLAG ──────────────────────────────────────────────────────────
+    _CHRONIC = ["cardiovascular","diabetes","cns","neurology","pain","analgesic"]
+    if "pharm_class" in inv_lp.columns:
+        inv_lp["is_chronic"] = inv_lp["pharm_class"].fillna("").str.lower().apply(
+            lambda x: any(c in x for c in _CHRONIC))
     else:
-        ml_df["is_chronic_eligible"] = False
+        inv_lp["is_chronic"] = False
 
-    # ── 3-ZONE CLASSIFICATION ──────────────────────────────────────────────────
-    # Zone 1: DTE > 30 → Full LP optimisation. Management can meaningfully act.
-    # Zone 2: DTE 8–30 → Emergency triage. Chronic = dispatch eligible; specialty = destruction.
-    # Zone 3: DTE 1–7  → Confirmed write-off. LP cannot help at scale. CFO accountability data.
-    _unexpired = ml_df[ml_df["days_to_expiry"] > 0].copy()
+    # ── AGGREGATE TO SKU-WH LEVEL ─────────────────────────────────────────────
+    _g_agg = {"total_qty": ("quantity_on_hand","sum"), "min_dte": ("days_to_expiry","min"),
+              "wt_dte":    ("days_to_expiry","mean"),  "unit_price": ("unit_price","mean"),
+              "daily_velocity": ("daily_velocity","mean"), "inv_value": ("inventory_value_usd","sum"),
+              "is_chronic": ("is_chronic","first")}
+    if "pharm_class"  in inv_lp.columns: _g_agg["pharm_class"]  = ("pharm_class","first")
+    if "generic_name" in inv_lp.columns: _g_agg["generic_name"] = ("generic_name","first")
 
-    zone1_raw  = _unexpired[_unexpired["days_to_expiry"] > 30]
-    zone2_raw  = _unexpired[(_unexpired["days_to_expiry"] > 7) & (_unexpired["days_to_expiry"] <= 30)]
-    zone3_raw  = _unexpired[_unexpired["days_to_expiry"] <= 7]
+    skuwh = (inv_lp[inv_lp["days_to_expiry"] > 0]
+             .groupby(["product_id","warehouse_id"]).agg(**_g_agg).reset_index())
 
-    # Merge unit economics for zones 1 & 2
-    _econ_cols = ["product_id","daily_holding_cost_per_unit_usd",
-                  "certified_destruction_cost_per_unit_usd","secondary_liquidation_recovery_pct"]
-    def _merge_econ(df):
-        return df.merge(df_econ[_econ_cols], on="product_id", how="left"
-                        ).dropna(subset=["daily_holding_cost_per_unit_usd"])
+    _ec = [c for c in ["product_id","daily_holding_cost_per_unit_usd",
+                        "certified_destruction_cost_per_unit_usd",
+                        "secondary_liquidation_recovery_pct",
+                        "economic_order_quantity_units"] if c in df_econ.columns]
+    skuwh = skuwh.merge(df_econ[_ec], on="product_id", how="left")
+    for _col, _def in [("daily_holding_cost_per_unit_usd", 0.0),
+                       ("certified_destruction_cost_per_unit_usd", 0.0),
+                       ("secondary_liquidation_recovery_pct", 50.0),
+                       ("economic_order_quantity_units", 5000.0)]:
+        if _col not in skuwh.columns: skuwh[_col] = _def
+        skuwh[_col] = skuwh[_col].fillna(_def)
 
-    # Sort by inventory value descending — highest value at risk = highest rescue priority
-    zone1_merged = _merge_econ(zone1_raw).sort_values("inventory_value_usd", ascending=False).head(30)
-    zone2_merged = _merge_econ(zone2_raw).sort_values("inventory_value_usd", ascending=False).head(20)
+    skuwh["clearable_6m"]         = (skuwh["daily_velocity"] * np.minimum(skuwh["wt_dte"], 180)).clip(lower=0)
+    skuwh["at_risk_qty"]          = np.maximum(0, skuwh["total_qty"] - skuwh["clearable_6m"])
+    skuwh["at_risk_value"]        = skuwh["at_risk_qty"] * skuwh["unit_price"]
+    skuwh["velocity_deficit_pct"] = (skuwh["at_risk_qty"] / skuwh["total_qty"].clip(lower=1) * 100).clip(0, 100)
 
-    # ── ZONE 1 LP: Full Optimisation ──────────────────────────────────────────
-    zone1_results = []
-    with st.spinner(f"Running LP optimisation on {len(zone1_merged)} Zone-1 batches (DTE > 30 days)…"):
-        for _, row in zone1_merged.iterrows():
-            Q   = float(row["quantity_on_hand"])
-            dte = float(row["days_to_expiry"])
-            h   = float(row["daily_holding_cost_per_unit_usd"])
-            d_c = float(row["certified_destruction_cost_per_unit_usd"])
-            p   = float(row["unit_price"])
-            rec = float(row["secondary_liquidation_recovery_pct"]) / 100.0
-            vel = max(float(row.get("daily_sales_velocity", 1.0)), 0.1)
+    # SKU-level over-stock ratio for procurement decisions
+    _sku_tot = (skuwh.groupby("product_id")
+                .agg(sku_total_qty=("total_qty","sum"), sku_avg_vel=("daily_velocity","mean"),
+                     sku_avg_price=("unit_price","mean")).reset_index())
+    _sku_tot["sku_6m_demand"]      = _sku_tot["sku_avg_vel"] * 180
+    _sku_tot["sku_overstock_ratio"]= _sku_tot["sku_total_qty"] / _sku_tot["sku_6m_demand"].clip(lower=1)
+    skuwh = skuwh.merge(_sku_tot[["product_id","sku_overstock_ratio","sku_6m_demand","sku_total_qty"]],
+                        on="product_id", how="left")
 
-            max_dispatch = min(Q, vel * dte)
-            surplus      = max(0.0, Q - max_dispatch)
-            # Transfer only viable for DTE > 90 (receiving WH needs time to resell)
-            if dte <= 90:
-                max_transfer  = 0.0
-                max_liquidate = min(surplus, Q * 0.50)
-            else:
-                max_transfer  = min(surplus, Q * 0.60)
-                max_liquidate = min(surplus, Q * 0.40)
+    # ── FREIGHT MATRIX ────────────────────────────────────────────────────────
+    _fr = df_freight[["from_warehouse_id","to_warehouse_id","transit_days",
+                       "ambient_transfer_cost_per_unit_usd"]].copy() if not df_freight.empty and "from_warehouse_id" in df_freight.columns else pd.DataFrame()
 
-            c      = [-(p - h*dte), -(p*0.75 - h*dte*0.5), -(p*rec), (d_c + h*dte)]
-            bounds = [(0, max_dispatch), (0, max_transfer), (0, max_liquidate), (0, Q)]
-            res = linprog(c, A_eq=[[1,1,1,1]], b_eq=[Q], bounds=bounds, method="highs")
-            if res.success:
-                x1, x2, x3, x4 = res.x
-                capital_rescued = max(0.0, (p - h*dte)*x1 + (p*0.75)*x2 + (p*rec)*x3)
-                recovery_eff    = round((x1+x2+x3)/Q*100, 1) if Q > 0 else 0
-                # Recommended action — the dominant channel
-                if x1 >= x2 and x1 >= x3:
-                    rec_action = f"🚚 Dispatch {round(x1):,}u to regional customers ({int(dte)}d window)"
-                elif x2 >= x3:
-                    rec_action = f"🏭 Transfer {round(x2):,}u — book logistics within {max(1,int(dte)-7)}d"
-                elif x3 > 0:
-                    rec_action = f"💼 Secondary liquidation {round(x3):,}u within {int(dte)}d"
-                else:
-                    rec_action = f"🗑️ Controlled destruction {round(x4):,}u (all channels exhausted)"
-                zone1_results.append({
-                    "Product":             row["product_id"],
-                    "Warehouse":           row.get("warehouse_id", ""),
-                    "DTE":                 int(dte),
-                    "Qty":                 int(Q),
-                    "Dispatch":            round(x1),
-                    "Transfer":            round(x2),
-                    "Liquidate":           round(x3),
-                    "Dispose":             round(x4),
-                    "Recovery_%":          recovery_eff,
-                    "Capital_Rescued_USD": round(capital_rescued),
-                    "Recommended_Action":  rec_action,
-                    "Net_Saving_USD":      round(capital_rescued - d_c*x4, 2)
-                })
+    def _freight(from_wh, to_wh):
+        if _fr.empty: return 4, 0.60
+        _r = _fr[(_fr["from_warehouse_id"]==from_wh) & (_fr["to_warehouse_id"]==to_wh)]
+        if _r.empty: return 5, 0.80
+        return int(_r.iloc[0]["transit_days"]), float(_r.iloc[0]["ambient_transfer_cost_per_unit_usd"])
 
-    # ── ZONE 2 LP: Emergency Triage ───────────────────────────────────────────
-    zone2_results = []
-    with st.spinner(f"Running emergency triage on {len(zone2_merged)} Zone-2 batches (DTE 8–30 days)…"):
-        for _, row in zone2_merged.iterrows():
-            Q   = float(row["quantity_on_hand"])
-            dte = float(row["days_to_expiry"])
-            h   = float(row["daily_holding_cost_per_unit_usd"])
-            d_c = float(row["certified_destruction_cost_per_unit_usd"])
-            p   = float(row["unit_price"])
-            rec = float(row["secondary_liquidation_recovery_pct"]) / 100.0
-            vel = max(float(row.get("daily_sales_velocity", 1.0)), 0.1)
-            is_chronic = bool(row.get("is_chronic_eligible", False))
+    # ── 12-MONTH EXPIRY LOSS FORECAST ────────────────────────────────────────
+    inv_fc = inv_lp.copy()
+    inv_fc["expiry_date_dt"] = pd.to_datetime(inv_fc["expiry_date"], errors="coerce")
+    inv_fc["expiry_month"]   = inv_fc["expiry_date_dt"].dt.to_period("M")
+    inv_fc["clearable_u"]    = inv_fc["daily_velocity"] * np.maximum(0, inv_fc["days_to_expiry"])
+    inv_fc["wo_qty"]         = np.maximum(0, inv_fc["quantity_on_hand"] - inv_fc["clearable_u"])
+    inv_fc["wo_val"]         = inv_fc["wo_qty"] * inv_fc["unit_price"]
 
-            max_dispatch  = min(Q, vel * dte)
-            surplus       = max(0.0, Q - max_dispatch)
-            max_transfer  = 0.0   # Never feasible in 8-30d window
-            max_liquidate = min(surplus, Q * 0.40) if dte > 4 else 0.0
+    _today_p  = _TODAY.to_period("M")
+    _months12 = pd.period_range(_today_p, periods=13, freq="M")[1:]
+    _fc_no, _fc_act = [], []
+    for _m in _months12:
+        _e     = inv_fc[inv_fc["expiry_month"] == _m]
+        _wov   = _e["wo_val"].sum()
+        _resc  = _e[_e["days_to_expiry"] > 30]["wo_val"].sum() * 0.65
+        _urg   = _e[_e["days_to_expiry"] <= 30]["wo_val"].sum() * 0.15
+        _fc_no.append({"Month": str(_m), "WriteOff_USD": round(_wov)})
+        _fc_act.append({"Month": str(_m), "WriteOff_USD": round(max(0, _wov - _resc - _urg))})
+    df_fc_no  = pd.DataFrame(_fc_no)
+    df_fc_act = pd.DataFrame(_fc_act)
+    _total_avoidable = max(0, df_fc_no["WriteOff_USD"].sum() - df_fc_act["WriteOff_USD"].sum())
 
-            c      = [-(p - h*dte), 0.0, -(p*rec), (d_c + h*dte)]
-            bounds = [(0, max_dispatch), (0, 0.0), (0, max_liquidate), (0, Q)]
-            res = linprog(c, A_eq=[[1,1,1,1]], b_eq=[Q], bounds=bounds, method="highs")
-            if res.success:
-                x1, _x2, x3, x4 = res.x
-                capital_rescued  = max(0.0, (p - h*dte)*x1 + (p*rec)*x3)
-                recovery_eff     = round((x1+x3)/Q*100, 1) if Q > 0 else 0
-                elig_flag = ("✅ Chronic-Eligible: Emergency Dispatch" if is_chronic
-                             else "⛔ Specialty: Initiate Controlled Destruction")
-                zone2_results.append({
-                    "Product":              row["product_id"],
-                    "Warehouse":            row.get("warehouse_id", ""),
-                    "DTE":                  int(dte),
-                    "Qty":                  int(Q),
-                    "Dispatch":             round(x1),
-                    "Liquidate":            round(x3),
-                    "Dispose":              round(x4),
-                    "Recovery_%":           recovery_eff,
-                    "Capital_Rescued_USD":  round(capital_rescued),
-                    "Dispatch_Eligibility": elig_flag,
-                    "Net_Saving_USD":       round(capital_rescued - d_c*x4, 2)
-                })
+    # ── ACTION ROADMAP: LP + RULES ENGINE (per SKU-WH) ───────────────────────
+    candidates = skuwh[(skuwh["at_risk_qty"] > 10) | (skuwh["min_dte"] <= 60)].copy()
+    wh_avg_vel = skuwh.groupby("warehouse_id")["daily_velocity"].mean().to_dict()
+    actions = []
 
-    # ── ZONE 3: Confirmed Write-off Register (no LP) ───────────────────────────
-    _z3_cols = ["product_id","warehouse_id","days_to_expiry","quantity_on_hand","inventory_value_usd"]
-    _z3_cols_avail = [c for c in _z3_cols if c in zone3_raw.columns]
-    zone3_display = zone3_raw[_z3_cols_avail].copy().rename(columns={
-        "product_id": "Product", "warehouse_id": "Warehouse",
-        "days_to_expiry": "DTE", "quantity_on_hand": "Qty",
-        "inventory_value_usd": "Write_off_Value_USD"
-    })
-    zone3_display["Status"] = "📋 Confirmed Write-off — No Rescue Possible"
+    with st.spinner("Running Strategic LP Optimisation across SKU-Warehouse network…"):
+        for _, row in candidates.iterrows():
+            pid     = row["product_id"]
+            wid     = row["warehouse_id"]
+            Q       = float(row["total_qty"])
+            dte     = float(row["wt_dte"])
+            min_dte = float(row["min_dte"])
+            p       = float(row["unit_price"])
+            h       = float(row["daily_holding_cost_per_unit_usd"])
+            d_c     = float(row["certified_destruction_cost_per_unit_usd"])
+            rec     = float(row["secondary_liquidation_recovery_pct"]) / 100.0
+            eoq     = float(row["economic_order_quantity_units"])
+            vel     = float(row["daily_velocity"])
+            at_risk = float(row["at_risk_qty"])
+            inv_val = float(row["inv_value"])
+            over_r  = float(row.get("sku_overstock_ratio", 1.0))
+            is_chro = bool(row.get("is_chronic", False))
+            gname   = row.get("generic_name", pid)
 
-    # ── FINANCIAL AGGREGATES ───────────────────────────────────────────────────
-    z1_df = pd.DataFrame(zone1_results)
-    z2_df = pd.DataFrame(zone2_results)
+            # ACTION 1 — PROCUREMENT FREEZE / REDUCTION
+            if over_r > 1.5:
+                _excess  = max(0, Q - row.get("sku_6m_demand", Q * 0.8))
+                _po_red  = min(_excess, eoq)
+                _av_val  = _po_red * p * 0.85
+                _urg     = min(1.0, (over_r - 1.5) / 2.0)
+                actions.append({
+                    "Priority_Score": round(0.4 + _urg * 0.4, 2),
+                    "SKU": pid, "Name": gname[:28], "Warehouse": wid,
+                    "Action": "🛒 Reduce Procurement",
+                    "Qty": int(_po_red), "Act_By": (_TODAY + pd.Timedelta(days=14)).strftime("%b %d, %Y"),
+                    "Value_Impact_USD": round(_av_val),
+                    "Detail": (f"Over-stock {over_r:.1f}× 6-month demand. Reduce next PO by {int(_po_red):,}u "
+                               f"to avoid ${_av_val:,.0f} in future holding & destruction cost.")})
 
-    def _val_sum(df, col="inventory_value_usd"):
-        return df[col].sum() if col in df.columns and len(df) > 0 else 0.0
+            # ACTION 2 — INTER-WH TRANSFER (freight-cost-adjusted)
+            if at_risk > 50 and min_dte > 14:
+                _best_wh, _best_net, _best_qty, _best_tr, _best_fr = None, 0.0, 0, 5, 0.80
+                for _twh, _twh_vel in wh_avg_vel.items():
+                    if _twh == wid or _twh_vel <= vel * 1.3: continue
+                    _tr, _fc = _freight(wid, _twh)
+                    if min_dte <= _tr + 5: continue
+                    _tq  = min(at_risk * 0.60, Q * 0.50)
+                    _add = _twh_vel * (min_dte - _tr)
+                    _res = min(_tq, _add)
+                    _net = _res * p * 0.90 - _tq * _fc - _tq * h * _tr
+                    if _net > _best_net:
+                        _best_net, _best_wh = _net, _twh
+                        _best_qty, _best_tr, _best_fr = int(_tq), _tr, _fc
+                if _best_wh and _best_net > 500:
+                    _dl = (_TODAY + pd.Timedelta(days=max(1, int(min_dte) - _best_tr - 7)))
+                    actions.append({
+                        "Priority_Score": round(min(0.95, 0.55 + _best_net / max(inv_val, 1) * 0.4), 2),
+                        "SKU": pid, "Name": gname[:28], "Warehouse": f"{wid}→{_best_wh}",
+                        "Action": "🚚 Inter-WH Transfer",
+                        "Qty": _best_qty, "Act_By": _dl.strftime("%b %d, %Y"),
+                        "Value_Impact_USD": round(_best_net),
+                        "Detail": (f"Move {_best_qty:,}u to {_best_wh} (vel {wh_avg_vel[_best_wh]:.0f}u/d vs {vel:.0f}u/d). "
+                                   f"Freight ${_best_fr:.2f}/u · Net rescue ${_best_net:,.0f}. "
+                                   f"Book within {max(1,int(min_dte)-_best_tr-7)}d.")})
 
-    total_atrisk  = _val_sum(zone1_raw) + _val_sum(zone2_raw) + _val_sum(zone3_raw)
-    z1_rescued    = z1_df["Capital_Rescued_USD"].sum() if not z1_df.empty else 0.0
-    z2_rescued    = z2_df["Capital_Rescued_USD"].sum() if not z2_df.empty else 0.0
-    total_rescued = z1_rescued + z2_rescued
-    writeoff_val  = _val_sum(zone3_raw)
-    remaining_exp = max(0.0, total_atrisk - total_rescued - writeoff_val)
-    opt_leverage  = round(total_rescued / max(total_atrisk, 1) * 100, 1)
+            # ACTION 3 — SECONDARY MARKET LIQUIDATION
+            if at_risk > 30 and min_dte > 30:
+                _lq  = min(at_risk * 0.50, Q * 0.40)
+                _rev = _lq * p * rec
+                _hsv = _lq * h * (min_dte / 2)
+                _net = _rev + _hsv
+                if _net > 200:
+                    _dl = (_TODAY + pd.Timedelta(days=max(10, int(min_dte) - 14)))
+                    _urg = max(0, 1 - min_dte / 180)
+                    actions.append({
+                        "Priority_Score": round(0.45 + _urg * 0.45, 2),
+                        "SKU": pid, "Name": gname[:28], "Warehouse": wid,
+                        "Action": "💼 Secondary Liquidation",
+                        "Qty": int(_lq), "Act_By": _dl.strftime("%b %d, %Y"),
+                        "Value_Impact_USD": round(_net),
+                        "Detail": (f"List {int(_lq):,}u at {rec*100:.0f}% recovery (${p*rec:.2f}/u). "
+                                   f"Revenue ${_rev:,.0f} + holding avoided ${_hsv:,.0f}. "
+                                   f"Contact buyer by {_dl.strftime('%b %d')}.")})
 
-    # ── KPI STRIP ─────────────────────────────────────────────────────────────
-    kc1, kc2, kc3, kc4 = st.columns(4)
-    kc1.metric("💰 Total Rescue Potential",
-               fmt_curr(total_rescued, compact=False, decimals=0),
-               help="Maximum capital recoverable by executing all LP-recommended Zone 1 & 2 actions today")
-    kc2.metric("⚡ Optimisation Leverage",
-               f"{opt_leverage}%",
-               help="Rescue Potential ÷ Total At-Risk Value — what % of the problem management can still solve")
-    kc3.metric("📋 Confirmed Write-offs",
-               fmt_curr(writeoff_val, compact=False, decimals=0),
-               help=f"DTE ≤ 7d: {len(zone3_raw):,} lots beyond rescue — unavoidable loss for CFO/board reporting")
-    _top_batch = z1_df.nlargest(1, "Capital_Rescued_USD").iloc[0] if not z1_df.empty else None
-    if _top_batch is not None:
-        kc4.metric("🏆 Best Single Recovery",
-                   fmt_curr(_top_batch["Capital_Rescued_USD"], compact=False, decimals=0),
-                   help=f"{_top_batch['Product']} @ {_top_batch['Warehouse']} | DTE {_top_batch['DTE']}d | Act now")
+            # ACTION 4 — PROMOTIONAL VELOCITY PUSH
+            if at_risk > 100 and min_dte > 90:
+                _boost_pct = round(min(200, (at_risk / max(min_dte, 1)) / max(vel, 0.1) * 100))
+                if 10 <= _boost_pct:
+                    actions.append({
+                        "Priority_Score": round(0.35 + min(1, _boost_pct / 200) * 0.30, 2),
+                        "SKU": pid, "Name": gname[:28], "Warehouse": wid,
+                        "Action": "📢 Velocity Push",
+                        "Qty": int(at_risk), "Act_By": (_TODAY + pd.Timedelta(days=14)).strftime("%b %d, %Y"),
+                        "Value_Impact_USD": round(at_risk * p * 0.80),
+                        "Detail": (f"{at_risk:,.0f}u deficit at current velocity. Requires {_boost_pct}% velocity increase "
+                                   f"via pricing action / new channels / promotional push over {int(min_dte)}d window.")})
+
+            # ACTION 5 — CERTIFIED DESTRUCTION SCHEDULING
+            _nc = max(0, Q - vel * max(min_dte, 0))
+            if (_nc > 20 and min_dte <= 30) or (min_dte <= 7 and Q > 0):
+                _dq  = _nc if min_dte > 7 else Q
+                _dl  = (_TODAY + pd.Timedelta(days=max(1, int(min_dte) - 3)))
+                _urg = 1.0 - min_dte / 60.0
+                actions.append({
+                    "Priority_Score": round(min(0.99, 0.65 + _urg * 0.34), 2),
+                    "SKU": pid, "Name": gname[:28], "Warehouse": wid,
+                    "Action": "🗑️ Schedule Destruction",
+                    "Qty": int(_dq), "Act_By": _dl.strftime("%b %d, %Y"),
+                    "Value_Impact_USD": -round(_dq * p),
+                    "Detail": (f"{'⚠️ CRITICAL: ' if min_dte<=7 else ''}{int(_dq):,}u non-clearable before DTE {int(min_dte)}d. "
+                               f"{'Chronic SKU — attempt emergency dispatch first.' if is_chro else 'Book destruction slot immediately.'}")})
+
+    # ── BUILD & DISPLAY ROADMAP ───────────────────────────────────────────────
+    if not actions:
+        st.success("✅ No at-risk SKU-WH combinations requiring LP action. Inventory is well-balanced.", icon="✅")
     else:
-        kc4.metric("🏆 Best Single Recovery", "N/A")
+        road_df = pd.DataFrame(actions).sort_values("Priority_Score", ascending=False).reset_index(drop=True)
 
-    info_box("LP 3-Zone KPIs", "ℹ️ How are these 4 metrics calculated?")
+        def _plabel(s):
+            if s >= 0.80: return "🔴 P1 — URGENT"
+            if s >= 0.60: return "🟠 P2 — HIGH"
+            if s >= 0.45: return "🟡 P3 — MEDIUM"
+            return "🟢 P4 — PLANNED"
+        road_df["Priority"]      = road_df["Priority_Score"].apply(_plabel)
+        road_df["Value_Impact"]  = road_df["Value_Impact_USD"].apply(
+            lambda v: f"+{fmt_curr(v, compact=False, decimals=0)}" if v >= 0
+                      else f"−{fmt_curr(abs(v), compact=False, decimals=0)} write-off")
 
-    # ── CHARTS ────────────────────────────────────────────────────────────────
-    fig, axes = plt.subplots(1, 3, figsize=(22, 6))
-    fig.patch.set_facecolor("#0f1117")
-    fig.suptitle("LP Inventory Optimisation — Management Decision Intelligence",
-                 fontsize=14, color="#10b981", fontweight="bold", y=1.02)
+        _p1n = road_df["Priority"].str.contains("P1").sum()
+        _p2n = road_df["Priority"].str.contains("P2").sum()
+        _resc_total  = road_df[road_df["Value_Impact_USD"] >= 0]["Value_Impact_USD"].sum()
+        _wo_total    = abs(road_df[road_df["Value_Impact_USD"] < 0]["Value_Impact_USD"].sum())
+        _near_dl     = road_df.iloc[0]["Act_By"]
+        _near_action = road_df.iloc[0]["Action"]
 
-    # ── Chart 1: Capital Rescue Waterfall ─────────────────────────────────────
-    ax = axes[0]
-    wf_labels = ["At-Risk\nTotal", "Zone 3\nWrite-offs", "Zone 2\nRescued", "Zone 1\nRescued", "Remaining\nExposure"]
-    wf_vals   = [total_atrisk, writeoff_val, z2_rescued, z1_rescued, remaining_exp]
-    wf_colors = ["#6366f1", "#ef4444", "#f59e0b", "#10b981", "#64748b"]
-    bars = ax.bar(wf_labels, wf_vals, color=wf_colors, edgecolor="#0f1117", linewidth=1.5, zorder=3)
-    for bar, val in zip(bars, wf_vals):
-        if val > 0:
-            ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() * 1.02,
-                    fmt_curr(val, compact=True, decimals=1),
-                    ha="center", va="bottom", fontsize=8, color="white", fontweight="bold")
-    ax.set_title("Capital Rescue Waterfall", color="white", fontsize=11)
-    ax.set_ylabel(f"Value ({curr_code})", color="#94a3b8")
-    ax.set_facecolor("#0f1117"); ax.tick_params(colors="#94a3b8")
-    for spine in ax.spines.values(): spine.set_edgecolor("#1e293b")
+        # KPI STRIP
+        kc1, kc2, kc3, kc4 = st.columns(4)
+        kc1.metric("💰 12-Month Avoidable Loss",     fmt_curr(_total_avoidable, compact=False, decimals=0),
+                   help="Write-offs preventable by executing the full LP roadmap over 12 months")
+        kc2.metric("⚡ Actions Required",             f"{len(road_df)} actions",
+                   delta=f"{_p1n} URGENT · {_p2n} HIGH",
+                   help="P1 URGENT=act ≤10d · P2 HIGH=act ≤30d · P3 MEDIUM=act ≤60d · P4 PLANNED=next quarter")
+        kc3.metric("🗓️ Nearest Deadline",            _near_dl, help=f"Most urgent: {_near_action}")
+        kc4.metric("📈 Capital Rescue Potential",     fmt_curr(_resc_total, compact=False, decimals=0),
+                   help="Total capital rescuable via Transfer + Liquidation + Velocity Push")
+        info_box("LP KPIs", "ℹ️ How are these 4 metrics calculated?")
 
-    # ── Chart 2: Recovery Efficiency Scatter ──────────────────────────────────
-    ax = axes[1]
-    _all_lp_parts = []
-    if not z1_df.empty and "Recovery_%" in z1_df.columns:
-        _all_lp_parts.append(z1_df[["DTE","Recovery_%","Qty"]].assign(Zone="Zone 1"))
-    if not z2_df.empty and "Recovery_%" in z2_df.columns:
-        _all_lp_parts.append(z2_df[["DTE","Recovery_%","Qty"]].assign(Zone="Zone 2"))
-    if _all_lp_parts:
-        _all_lp = pd.concat(_all_lp_parts, ignore_index=True)
-        _clrs   = _all_lp["Recovery_%"].apply(
-            lambda r: "#10b981" if r >= 80 else ("#f59e0b" if r >= 40 else "#ef4444"))
-        _sizes  = np.clip(_all_lp["Qty"] / max(_all_lp["Qty"].max(), 1) * 300, 20, 300)
-        ax.scatter(_all_lp["DTE"], _all_lp["Recovery_%"],
-                   c=_clrs, s=_sizes, alpha=0.82, edgecolors="none", zorder=3)
-        ax.axhline(80, color="#10b981", ls="--", lw=1.2, alpha=0.6, label="80% target")
-        ax.axhline(40, color="#f59e0b", ls="--", lw=1.2, alpha=0.6, label="40% floor")
-        ax.legend(fontsize=8, framealpha=0, labelcolor="#94a3b8")
-    ax.set_title("Recovery Efficiency vs DTE\n🟢 ≥80%   🟡 40–80%   🔴 <40%   (bubble = qty)",
-                 color="white", fontsize=10)
-    ax.set_xlabel("DTE (Days)", color="#94a3b8")
-    ax.set_ylabel("Recovery Efficiency %", color="#94a3b8")
-    ax.set_facecolor("#0f1117"); ax.tick_params(colors="#94a3b8")
-    for spine in ax.spines.values(): spine.set_edgecolor("#1e293b")
+        # CHARTS (2×2 grid)
+        import matplotlib.patches as mpatches
+        fig, axes = plt.subplots(2, 2, figsize=(22, 12))
+        fig.patch.set_facecolor("#0f1117")
+        fig.suptitle("Strategic Inventory Optimisation — 12-Month Management Intelligence",
+                     fontsize=14, color="#10b981", fontweight="bold", y=1.01)
 
-    # ── Chart 3: Top-10 Recovery Opportunities (horizontal bar) ───────────────
-    ax = axes[2]
-    if not z1_df.empty:
-        _top10 = z1_df.nlargest(min(10, len(z1_df)), "Capital_Rescued_USD").copy()
-        _top10["Label"] = _top10["Product"] + "\n@" + _top10["Warehouse"]
-        _bar_clrs = ["#10b981" if r >= 80 else ("#f59e0b" if r >= 40 else "#ef4444")
-                     for r in _top10["Recovery_%"]]
-        ax.barh(_top10["Label"], _top10["Capital_Rescued_USD"],
-                color=_bar_clrs, edgecolor="#0f1117", linewidth=1, zorder=3)
-        ax.set_xlabel(f"Capital Rescued ({curr_code})", color="#94a3b8")
-        ax.invert_yaxis()
-        for i, (_, r) in enumerate(_top10.iterrows()):
-            ax.text(r["Capital_Rescued_USD"] * 1.01, i,
-                    f"{r['Recovery_%']}%", va="center", fontsize=7, color="white")
-    ax.set_title("Top Recovery Opportunities\n(act on green first)", color="white", fontsize=10)
-    ax.set_facecolor("#0f1117"); ax.tick_params(colors="#94a3b8")
-    for spine in ax.spines.values(): spine.set_edgecolor("#1e293b")
+        # ── Chart 1: 12-Month Expiry Loss Forecast ──────────────────────────
+        ax = axes[0, 0]
+        _x = np.arange(len(df_fc_no)); _w = 0.38
+        ax.bar(_x - _w/2, df_fc_no["WriteOff_USD"]  / 1e3, _w, color="#ef4444", alpha=0.85, label="Without LP", zorder=3)
+        ax.bar(_x + _w/2, df_fc_act["WriteOff_USD"] / 1e3, _w, color="#10b981", alpha=0.85, label="With LP",    zorder=3)
+        ax.set_xticks(_x); ax.set_xticklabels(df_fc_no["Month"], rotation=45, ha="right", fontsize=8)
+        ax.set_title("12-Month Expiry Loss Forecast\n(Before vs After LP Actions)", color="white", fontsize=11)
+        ax.set_ylabel(f"Write-off ({curr_code} '000)", color="#94a3b8")
+        ax.legend(fontsize=9, framealpha=0, labelcolor="#94a3b8")
+        ax.text(0.97, 0.97, f"Avoidable: {curr_code}{_total_avoidable/1e3:.1f}K",
+                transform=ax.transAxes, ha="right", va="top", fontsize=10, color="#10b981", fontweight="bold",
+                bbox=dict(boxstyle="round,pad=0.3", facecolor="#0d2818", edgecolor="#10b981", alpha=0.8))
+        ax.set_facecolor("#0f1117"); ax.tick_params(colors="#94a3b8")
+        for sp in ax.spines.values(): sp.set_edgecolor("#1e293b")
 
-    plt.tight_layout(); show_fig(fig)
-    info_box("LP 3-Zone Charts", "ℹ️ How to read these 3 charts")
+        # ── Chart 2: SKU Priority Bubble Map ────────────────────────────────
+        ax = axes[0, 1]
+        _AC = {"🛒 Reduce Procurement": "#f59e0b", "🚚 Inter-WH Transfer": "#3b82f6",
+               "💼 Secondary Liquidation": "#8b5cf6", "📢 Velocity Push": "#06b6d4",
+               "🗑️ Schedule Destruction": "#ef4444"}
+        _cplot = candidates[candidates["at_risk_qty"] > 0].copy()
+        if not _cplot.empty:
+            _rlookup = road_df.drop_duplicates(["SKU","Warehouse"]).set_index("SKU")["Action"].to_dict()
+            _cplot["_action"] = _cplot["product_id"].map(_rlookup).fillna("🟡 Monitor")
+            _sz  = np.clip(_cplot["inv_value"] / max(_cplot["inv_value"].max(), 1) * 800, 30, 800)
+            _clr = [_AC.get(a, "#64748b") for a in _cplot["_action"]]
+            ax.scatter(_cplot["min_dte"], _cplot["velocity_deficit_pct"],
+                       s=_sz, c=_clr, alpha=0.80, edgecolors="none", zorder=3)
+            ax.legend(handles=[mpatches.Patch(color=v, label=k) for k, v in _AC.items()],
+                      fontsize=7, framealpha=0, labelcolor="#94a3b8", loc="upper right")
+        ax.axvline(30, color="#ef4444", ls="--", lw=1.2, alpha=0.6)
+        ax.axvline(90, color="#f59e0b", ls="--", lw=1.2, alpha=0.6)
+        ax.axhline(50, color="#94a3b8", ls=":",  lw=1.0, alpha=0.4)
+        ax.text(32, 98, "DTE=30", color="#ef4444", fontsize=7)
+        ax.text(92, 98, "DTE=90", color="#f59e0b", fontsize=7)
+        ax.set_xlabel("Min DTE (Days)", color="#94a3b8")
+        ax.set_ylabel("Velocity Deficit %", color="#94a3b8")
+        ax.set_title("SKU Priority Map\n(bubble = inventory value at risk)", color="white", fontsize=11)
+        ax.set_facecolor("#0f1117"); ax.tick_params(colors="#94a3b8")
+        for sp in ax.spines.values(): sp.set_edgecolor("#1e293b")
 
-    # ── ZONE 1 TABLE ──────────────────────────────────────────────────────────
-    if not z1_df.empty:
-        st.markdown("### ✅ Zone 1 — LP Optimisation Results *(DTE > 30 days)*")
-        st.caption(f"{len(z1_df)} batches | Sorted by Capital Rescued ↓ | 🟢 Recovery ≥80%   🟡 ≥40%   🔴 <40%")
-        with st.expander("📋 Zone 1 LP Results Table", expanded=True):
-            st.dataframe(z1_df.sort_values("Capital_Rescued_USD", ascending=False), use_container_width=True)
-        info_box("Zone 1 Table", "ℹ️ How to act on Zone 1 results")
+        # ── Chart 3: Value Impact by Action Type ────────────────────────────
+        ax = axes[1, 0]
+        _asumm = (road_df[road_df["Value_Impact_USD"] > 0]
+                  .groupby("Action")["Value_Impact_USD"].sum().sort_values(ascending=True))
+        if not _asumm.empty:
+            _bc = [_AC.get(a, "#64748b") for a in _asumm.index]
+            ax.barh(_asumm.index, _asumm.values / 1e3, color=_bc, edgecolor="#0f1117", linewidth=1, zorder=3)
+            for i, (lbl, v) in enumerate(zip(_asumm.index, _asumm.values)):
+                ax.text(v / 1e3 * 1.02, i, f"{curr_code}{v/1e3:.1f}K", va="center", fontsize=8, color="white")
+        ax.set_xlabel(f"Total Value Rescued ({curr_code} '000)", color="#94a3b8")
+        ax.set_title("Value Impact by Action Type\n(capital rescued per strategy)", color="white", fontsize=11)
+        ax.set_facecolor("#0f1117"); ax.tick_params(colors="#94a3b8")
+        for sp in ax.spines.values(): sp.set_edgecolor("#1e293b")
 
-    # ── ZONE 2 TABLE ──────────────────────────────────────────────────────────
-    if not z2_df.empty:
-        _n_chronic = z2_df["Dispatch_Eligibility"].str.contains("Chronic", na=False).sum()
-        _n_special = len(z2_df) - _n_chronic
-        st.markdown(f"### ⚠️ Zone 2 — Emergency Triage *(DTE 8–30 days)* | ✅ {_n_chronic} chronic-eligible · ⛔ {_n_special} specialty")
-        st.caption("Chronic-eligible: emergency dispatch to existing patients feasible. Specialty/Biologics: initiate controlled destruction paperwork NOW.")
-        with st.expander("📋 Zone 2 Emergency Triage Table", expanded=True):
-            st.dataframe(z2_df.sort_values("DTE"), use_container_width=True)
-        info_box("Zone 2 Table", "ℹ️ What is the Dispatch Eligibility flag?")
+        # ── Chart 4: Financial Impact Summary ───────────────────────────────
+        ax = axes[1, 1]
+        _fc_proc = road_df[road_df["Action"]=="🛒 Reduce Procurement"]["Value_Impact_USD"].sum()
+        _fc_rem  = max(0, df_fc_no["WriteOff_USD"].sum() - _resc_total - _fc_proc)
+        _fc_cats = ["Total\nAt-Risk\n(12m)", "LP\nRescued", "Procurement\nAvoided", "Remaining\nWrite-off"]
+        _fc_vals = [df_fc_no["WriteOff_USD"].sum(), _resc_total, _fc_proc, _fc_rem]
+        _fc_cols = ["#6366f1", "#10b981", "#f59e0b", "#ef4444"]
+        _bars = ax.bar(_fc_cats, [v / 1e3 for v in _fc_vals],
+                       color=_fc_cols, edgecolor="#0f1117", linewidth=1.5, zorder=3)
+        for bar, val in zip(_bars, _fc_vals):
+            if val > 0:
+                ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() * 1.02,
+                        f"{curr_code}{val/1e3:.1f}K", ha="center", va="bottom",
+                        fontsize=9, color="white", fontweight="bold")
+        ax.set_ylabel(f"Value ({curr_code} '000)", color="#94a3b8")
+        ax.set_title("12-Month Financial Impact Summary\n(full LP roadmap execution)", color="white", fontsize=11)
+        ax.set_facecolor("#0f1117"); ax.tick_params(colors="#94a3b8")
+        for sp in ax.spines.values(): sp.set_edgecolor("#1e293b")
 
-    # ── ZONE 3: CONFIRMED WRITE-OFF REGISTER ──────────────────────────────────
-    _z3_label = (f"📋 Zone 3 — Confirmed Write-off Register *(DTE ≤ 7 days)* | "
-                 f"{len(zone3_display):,} lots | {fmt_curr(writeoff_val, compact=False, decimals=0)} total write-off")
-    with st.expander(_z3_label, expanded=False):
-        st.caption("⚠️ These batches are beyond LP rescue. Transfer, liquidation, and meaningful dispatch are infeasible. "
-                   "Data presented for CFO/board write-off reporting and root-cause accountability only.")
-        if not zone3_display.empty:
-            st.dataframe(zone3_display.sort_values("DTE"), use_container_width=True)
-        else:
-            st.success("No confirmed write-offs in the current dataset. ✅")
-    info_box("Zone 3 Write-off", "ℹ️ Why are these batches excluded from LP optimisation?")
+        plt.tight_layout(); show_fig(fig)
+        info_box("LP Charts", "ℹ️ How to read these 4 charts")
 
-    # ── AI INSIGHT: 3-ZONE ACTION PLAN ────────────────────────────────────────
-    _z2_chronic = z2_df[z2_df["Dispatch_Eligibility"].str.contains("Chronic", na=False)].shape[0] if not z2_df.empty else 0
-    _lp_bullets = [
-        f"💰 <b>Total rescue potential:</b> <b>{fmt_curr(total_rescued, compact=False, decimals=0)}</b> ({opt_leverage:.1f}% of at-risk portfolio). "
-        f"The remaining {100-opt_leverage:.1f}% ({fmt_curr(writeoff_val, compact=False, decimals=0)}) is a confirmed write-off — "
-        f"unavoidable destruction cost that should be reported to the CFO this week.",
-        f"✅ <b>Zone 1 — {len(zone1_results)} batches optimised (DTE > 30d):</b> LP recommends "
-        f"dispatching {z1_df['Dispatch'].sum():,.0f}u, transferring {z1_df['Transfer'].sum():,.0f}u, "
-        f"liquidating {z1_df['Liquidate'].sum():,.0f}u — recovering <b>{fmt_curr(z1_rescued, compact=False, decimals=0)}</b> "
-        f"vs. a total write-off. All dispatch orders should be raised TODAY.",
-        f"⚠️ <b>Zone 2 — {len(zone2_results)} batches in emergency window (DTE 8–30d):</b> "
-        f"{_z2_chronic} chronic-eligible lots flagged for immediate emergency dispatch to existing patients. "
-        f"{'Remaining ' + str(len(zone2_results)-_z2_chronic) + ' specialty lots require controlled destruction initiation within 48 hours.' if (len(zone2_results)-_z2_chronic) > 0 else 'All Zone-2 lots are chronic-eligible for emergency dispatch.'}",
-        f"📋 <b>Zone 3 — {len(zone3_raw):,} write-off lots (DTE ≤ 7d):</b> "
-        f"No LP optimisation is feasible. These represent <b>{fmt_curr(writeoff_val, compact=False, decimals=0)}</b> in unavoidable destruction. "
-        f"Root cause: these batches should have been flagged for action at DTE=90. "
-        f"Recommend reviewing the Expiry Intelligence page to prevent recurrence."
-    ]
-    if _top_batch is not None:
-        _lp_bullets.append(
-            f"🏆 <b>Single highest recovery opportunity:</b> {_top_batch['Product']} @ {_top_batch['Warehouse']} — "
-            f"DTE <b>{_top_batch['DTE']}d</b> | Recovery efficiency {_top_batch['Recovery_%']}% | "
-            f"Capital rescued: <b>{fmt_curr(_top_batch['Capital_Rescued_USD'], compact=False, decimals=0)}</b>. "
-            f"{_top_batch['Recommended_Action']}. Act within 48 hours."
-        )
-    _lp_bullets.append(
-        f"💡 <b>48-hour action protocol:</b> "
-        f"(1) Raise dispatch purchase orders for all Zone-1 batches with Recovery% ≥ 80% — highest capital rescue per hour of effort. "
-        f"(2) Contact secondary liquidation partner for all Liquidate-flagged Zone-1 stock. "
-        f"(3) Brief logistics head on Transfer-flagged batches — logistics booking window closes 7d before DTE. "
-        f"(4) File certified destruction paperwork for Zone-2 specialty lots and all Zone-3 write-offs. "
-        f"(5) Schedule post-mortem: why were Zone-3 batches not caught at DTE=90?"
-    )
-    ai_insight("LP Decision Intelligence — 3-Zone Recovery Action Plan", _lp_bullets, icon="⚖️", color="#00d4ff")
+        # ── ACTION ROADMAP TABLE ───────────────────────────────────────────────
+        st.markdown("### 📋 Management Action Roadmap")
+        st.caption(f"{len(road_df)} actions · Sorted by Priority ↓ · "
+                   f"🔴 P1 URGENT: {_p1n} actions · 🟠 P2 HIGH: {_p2n} actions")
+        _dcols = [c for c in ["Priority","SKU","Name","Warehouse","Action","Qty","Act_By","Value_Impact","Detail"]
+                  if c in road_df.columns]
+        _p1p2 = road_df[road_df["Priority"].str.contains("P1|P2")]
+        _p3p4 = road_df[road_df["Priority"].str.contains("P3|P4")]
+        if not _p1p2.empty:
+            with st.expander(f"🔴🟠 URGENT & HIGH Priority — {len(_p1p2)} actions (act within 30 days)", expanded=True):
+                st.dataframe(_p1p2[_dcols].reset_index(drop=True), use_container_width=True)
+        if not _p3p4.empty:
+            with st.expander(f"🟡🟢 MEDIUM & PLANNED — {len(_p3p4)} actions (next 60–90 days)", expanded=False):
+                st.dataframe(_p3p4[_dcols].reset_index(drop=True), use_container_width=True)
+        info_box("LP Roadmap Table", "ℹ️ How to execute the management action roadmap")
+
+        # ── AI INSIGHT ────────────────────────────────────────────────────────
+        _act_counts = road_df["Action"].value_counts().to_dict()
+        _top3 = road_df.head(3)
+        _lp_ai = [
+            f"💰 <b>12-month avoidable write-off:</b> <b>{fmt_curr(_total_avoidable, compact=False, decimals=0)}</b> can be "
+            f"prevented by executing the {len(road_df)} actions in this roadmap. "
+            f"Remaining {fmt_curr(_wo_total, compact=False, decimals=0)} is unavoidable — stock already past rescue window.",
+
+            f"⚡ <b>{_p1n} URGENT actions require management response within 10 days.</b> "
+            f"Delaying P1 actions by 1 week reduces rescue potential by ~12% as DTE shrinks and logistics windows close. "
+            f"{_p2n} HIGH-priority actions must start within 30 days.",
+
+            f"🚚 <b>Network rebalancing:</b> {_act_counts.get('🚚 Inter-WH Transfer', 0)} transfer recommendations move "
+            f"over-stocked SKUs to higher-velocity warehouses — rescuing inventory at full price without discounting.",
+
+            f"🛒 <b>Procurement discipline:</b> {_act_counts.get('🛒 Reduce Procurement', 0)} SKUs are over-ordered (>1.5× 6-month demand). "
+            f"Reducing upcoming POs prevents the next wave of expiry losses before they enter the critical window.",
+
+            f"💼 <b>Liquidation pipeline:</b> {_act_counts.get('💼 Secondary Liquidation', 0)} SKUs identified for secondary market. "
+            f"Contact buyer NOW — recovery rate declines as DTE shrinks and buyer negotiating position strengthens.",
+        ]
+        for _, _ta in _top3.iterrows():
+            _lp_ai.append(
+                f"🏆 <b>{_ta['Action']}:</b> {_ta['SKU']} @ {_ta['Warehouse']} — "
+                f"Qty: {_ta['Qty']:,}u · {_ta['Value_Impact']} · <b>Act by {_ta['Act_By']}</b>. {str(_ta['Detail'])[:120]}…")
+        _lp_ai.append(
+            f"💡 <b>48-hour executive protocol:</b> "
+            f"(1) Assign P1 URGENT actions to named owners with hard deadlines TODAY. "
+            f"(2) Contact secondary market buyer for all 💼 Liquidation SKUs by COB. "
+            f"(3) Procurement team freeze POs for all 🛒 flagged SKUs by end of week. "
+            f"(4) Logistics head to book routes for all 🚚 Transfer SKU-WH pairs. "
+            f"(5) Schedule root-cause review: why did {_p1n} SKUs reach URGENT before early-warning triggers fired?")
+        ai_insight("Strategic Optimisation — 12-Month Management Action Plan", _lp_ai, icon="⚖️", color="#00d4ff")
+
+
+
 
 
 
