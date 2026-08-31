@@ -2,6 +2,8 @@
 PharmaTrace AI — Warehouse & FEFO Inventory Optimization Dashboard
 Streamlit App  |  ISB AMPBA Capstone  |  Sponsor: Innodatatics Inc.
 
+Cache-bust: 2026-08-31 20:42
+
 Run locally:
     streamlit run streamlit_app.py
 
