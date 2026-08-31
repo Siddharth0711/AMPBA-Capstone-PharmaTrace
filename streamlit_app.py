@@ -1869,194 +1869,321 @@ elif selected_page == "⚖️ LP Cost Optimizer":
         _n_mo = df_demand["year_month"].nunique() if "year_month" in df_demand.columns else 24
         sku_velocity = df_demand.groupby("product_id")["quantity_dispatched_units"].sum() / max(1, _n_mo * 30)
     elif supp_ok and "transaction_type" in df_txns.columns:
-        velocity = df_txns[df_txns["transaction_type"]=="OUTBOUND_DISPATCH_PICK"].groupby("product_id")["quantity"].sum().reset_index().rename(columns={"quantity":"total_dispatched"})
-        sku_velocity = velocity.set_index("product_id")["total_dispatched"] / 730
+        _vel_df = df_txns[df_txns["transaction_type"]=="OUTBOUND_DISPATCH_PICK"].groupby("product_id")["quantity"].sum()
+        sku_velocity = _vel_df / 730
     else:
         sku_velocity = inventory.groupby("product_id")["quantity_on_hand"].sum() / 180
 
     ml_df["daily_sales_velocity"] = ml_df["product_id"].map(sku_velocity).fillna(ml_df["quantity_on_hand"] / 180)
-    ml_df["clearable_units"] = np.maximum(0, ml_df["daily_sales_velocity"] * np.maximum(0, ml_df["days_to_expiry"]))
-    
-    # Target unexpired near-expiry & velocity-deficit batches (DTE > 0)
-    ml_df["is_at_risk_candidate"] = (ml_df["days_to_expiry"] > 0) & ((ml_df["days_to_expiry"] <= 180) | (ml_df["quantity_on_hand"] > ml_df["clearable_units"]))
+    ml_df["clearable_units"]      = np.maximum(0, ml_df["daily_sales_velocity"] * np.maximum(0, ml_df["days_to_expiry"]))
+    ml_df["inventory_value_usd"]  = ml_df.get("inventory_value_usd", ml_df["quantity_on_hand"] * ml_df["unit_price"])
 
-    # Merge unit economics & sort by urgency (lowest positive DTE first)
-    at_risk_inv = ml_df[ml_df["is_at_risk_candidate"]].merge(
-        df_econ[["product_id","daily_holding_cost_per_unit_usd","stockout_penalty_cost_per_unit_usd","certified_destruction_cost_per_unit_usd","secondary_liquidation_recovery_pct"]],
-        on="product_id", how="left").dropna(subset=["daily_holding_cost_per_unit_usd"])
+    # ── CHRONIC DISEASE SMART FLAG ─────────────────────────────────────────────
+    # Products in these classes can be dispatched even at DTE 3–7d (daily dosing,
+    # existing patient prescriptions, immediate retail uptake possible)
+    _CHRONIC_CLASSES = ["cardiovascular", "diabetes", "cns", "neurology", "pain"]
+    if "pharm_class" in ml_df.columns:
+        ml_df["is_chronic_eligible"] = ml_df["pharm_class"].fillna("").str.lower().apply(
+            lambda x: any(c in x for c in _CHRONIC_CLASSES)
+        )
+    else:
+        ml_df["is_chronic_eligible"] = False
 
-    # If dataset has few batches <= 180d, take the lowest unexpired DTE batches in the system
-    if len(at_risk_inv) < 10:
-        at_risk_inv = ml_df[ml_df["days_to_expiry"] > 0].merge(
-            df_econ[["product_id","daily_holding_cost_per_unit_usd","stockout_penalty_cost_per_unit_usd","certified_destruction_cost_per_unit_usd","secondary_liquidation_recovery_pct"]],
-            on="product_id", how="left").dropna(subset=["daily_holding_cost_per_unit_usd"])
+    # ── 3-ZONE CLASSIFICATION ──────────────────────────────────────────────────
+    # Zone 1: DTE > 30 → Full LP optimisation. Management can meaningfully act.
+    # Zone 2: DTE 8–30 → Emergency triage. Chronic = dispatch eligible; specialty = destruction.
+    # Zone 3: DTE 1–7  → Confirmed write-off. LP cannot help at scale. CFO accountability data.
+    _unexpired = ml_df[ml_df["days_to_expiry"] > 0].copy()
 
-    at_risk_inv = at_risk_inv.sort_values(by=["days_to_expiry", "quantity_on_hand"], ascending=[True, False])
+    zone1_raw  = _unexpired[_unexpired["days_to_expiry"] > 30]
+    zone2_raw  = _unexpired[(_unexpired["days_to_expiry"] > 7) & (_unexpired["days_to_expiry"] <= 30)]
+    zone3_raw  = _unexpired[_unexpired["days_to_expiry"] <= 7]
 
-    # ── LP Lead-Time Feasibility Constants ────────────────────────────────
-    # Based on real pharma logistics: inter-warehouse transfers take 7-10 days minimum;
-    # secondary liquidation takes 3-5 days minimum (buyer agreement + pickup + documentation)
-    TRANSFER_LEAD_DAYS   = 7   # Min DTE required to allow inter-warehouse transfer
-    LIQUIDATE_LEAD_DAYS  = 4   # Min DTE required to allow secondary market liquidation
+    # Merge unit economics for zones 1 & 2
+    _econ_cols = ["product_id","daily_holding_cost_per_unit_usd",
+                  "certified_destruction_cost_per_unit_usd","secondary_liquidation_recovery_pct"]
+    def _merge_econ(df):
+        return df.merge(df_econ[_econ_cols], on="product_id", how="left"
+                        ).dropna(subset=["daily_holding_cost_per_unit_usd"])
 
-    with st.spinner(f"Running LP optimisation on {min(50,len(at_risk_inv))} near-expiry / surplus records…"):
-        lp_results = []
-        for _, row in at_risk_inv.head(50).iterrows():
+    # Sort by inventory value descending — highest value at risk = highest rescue priority
+    zone1_merged = _merge_econ(zone1_raw).sort_values("inventory_value_usd", ascending=False).head(30)
+    zone2_merged = _merge_econ(zone2_raw).sort_values("inventory_value_usd", ascending=False).head(20)
+
+    # ── ZONE 1 LP: Full Optimisation ──────────────────────────────────────────
+    zone1_results = []
+    with st.spinner(f"Running LP optimisation on {len(zone1_merged)} Zone-1 batches (DTE > 30 days)…"):
+        for _, row in zone1_merged.iterrows():
             Q   = float(row["quantity_on_hand"])
-            dte = max(1.0, float(row["days_to_expiry"]))
+            dte = float(row["days_to_expiry"])
             h   = float(row["daily_holding_cost_per_unit_usd"])
             d_c = float(row["certified_destruction_cost_per_unit_usd"])
             p   = float(row["unit_price"])
             rec = float(row["secondary_liquidation_recovery_pct"]) / 100.0
             vel = max(float(row.get("daily_sales_velocity", 1.0)), 0.1)
 
-            # ── Tier 1: DTE 1–3 days (Critical) ──────────────────────────
-            # Only emergency dispatch to existing customers is feasible.
-            # Transfer and liquidation are physically infeasible.
-            if dte <= 3:
-                max_dispatch  = min(Q, vel * dte)  # What market can absorb in DTE days
-                max_transfer  = 0.0                # NOT feasible — logistics lead time > DTE
-                max_liquidate = 0.0                # NOT feasible — buyer lead time > DTE
-                surplus = max(0.0, Q - max_dispatch)
-                # All units that cannot be dispatched must be disposed
-                lp_results.append({
-                    "product_id":  row["product_id"],
-                    "warehouse_id": row.get("warehouse_id", ""),
-                    "DTE":         int(dte),
-                    "Qty":         int(Q),
-                    "Dispatch":    round(max_dispatch),
-                    "Transfer":    0,
-                    "Liquidate":   0,
-                    "Dispose":     round(surplus),
-                    "Action_Tier": "🔴 Critical (1–3d): Emergency Dispatch Only",
-                    "Net_Saving_USD": round((p - h * dte) * max_dispatch - (d_c + h * dte) * surplus, 2)
-                })
-                continue
-
-            # ── Tier 2: DTE 4–7 days (Urgent) ────────────────────────────
-            # Emergency dispatch + same-city liquidation possible.
-            # Transfer NOT feasible (requires 7+ days).
-            elif dte <= 7:
-                max_dispatch  = min(Q, vel * dte)
-                surplus       = max(0.0, Q - max_dispatch)
-                max_transfer  = 0.0                          # Still infeasible
-                max_liquidate = min(surplus, Q * 0.40)       # Same-city emergency liquidation
-
-            # ── Tier 3: DTE 8–30 days (High) ─────────────────────────────
-            # Dispatch + regional liquidation possible.
-            # Transfer still infeasible (>7d lead time, but DTE only 8-30d, no time to sell at destination).
-            elif dte <= 30:
-                max_dispatch  = min(Q, vel * dte)
-                surplus       = max(0.0, Q - max_dispatch)
-                max_transfer  = 0.0                          # Infeasible — receiving WH needs time to sell too
-                max_liquidate = min(surplus, Q * 0.50)       # Regional secondary market liquidation
-
-            # ── Tier 4: DTE 31–90 days (Medium) ──────────────────────────
-            # All channels feasible. Transfer to high-demand warehouse is viable.
-            elif dte <= 90:
-                max_dispatch  = min(Q, vel * dte)
-                surplus       = max(0.0, Q - max_dispatch)
-                max_transfer  = min(surplus, Q * 0.50)       # Short-haul transfer feasible
-                max_liquidate = min(surplus, Q * 0.35)       # Liquidation feasible
-
-            # ── Tier 5: DTE > 90 days (Low / Velocity-Deficit) ───────────
-            # Full channel access — focus is on velocity deficit, not immediate expiry urgency
+            max_dispatch = min(Q, vel * dte)
+            surplus      = max(0.0, Q - max_dispatch)
+            # Transfer only viable for DTE > 90 (receiving WH needs time to resell)
+            if dte <= 90:
+                max_transfer  = 0.0
+                max_liquidate = min(surplus, Q * 0.50)
             else:
-                max_dispatch  = min(Q, vel * dte)
-                surplus       = max(0.0, Q - max_dispatch)
                 max_transfer  = min(surplus, Q * 0.60)
                 max_liquidate = min(surplus, Q * 0.40)
 
-            # Cost coefficients (negative = value to maximize)
-            c = [-(p - h * dte), -(p * 0.75 - h * dte * 0.5), -(p * rec), (d_c + h * dte)]
-            A_eq  = [[1, 1, 1, 1]]
-            b_eq  = [Q]
+            c      = [-(p - h*dte), -(p*0.75 - h*dte*0.5), -(p*rec), (d_c + h*dte)]
             bounds = [(0, max_dispatch), (0, max_transfer), (0, max_liquidate), (0, Q)]
-            res = linprog(c, A_eq=A_eq, b_eq=b_eq, bounds=bounds, method="highs")
+            res = linprog(c, A_eq=[[1,1,1,1]], b_eq=[Q], bounds=bounds, method="highs")
             if res.success:
                 x1, x2, x3, x4 = res.x
-                # Classify action tier for display
-                if dte <= 7:
-                    tier_label = "🟠 Urgent (4–7d): Dispatch + Liquidate"
-                elif dte <= 30:
-                    tier_label = "🟡 High (8–30d): Dispatch + Regional Liquidation"
-                elif dte <= 90:
-                    tier_label = "🟢 Medium (31–90d): Dispatch + Transfer + Liquidate"
+                capital_rescued = max(0.0, (p - h*dte)*x1 + (p*0.75)*x2 + (p*rec)*x3)
+                recovery_eff    = round((x1+x2+x3)/Q*100, 1) if Q > 0 else 0
+                # Recommended action — the dominant channel
+                if x1 >= x2 and x1 >= x3:
+                    rec_action = f"🚚 Dispatch {round(x1):,}u to regional customers ({int(dte)}d window)"
+                elif x2 >= x3:
+                    rec_action = f"🏭 Transfer {round(x2):,}u — book logistics within {max(1,int(dte)-7)}d"
+                elif x3 > 0:
+                    rec_action = f"💼 Secondary liquidation {round(x3):,}u within {int(dte)}d"
                 else:
-                    tier_label = "💙 Velocity Deficit (>90d): All Channels"
-                net_saved = (p - h * dte)*x1 + (p * 0.75 - h * dte * 0.5)*x2 + (p * rec)*x3 - (d_c + h * dte)*x4
-                lp_results.append({
-                    "product_id":  row["product_id"],
-                    "warehouse_id": row.get("warehouse_id", ""),
-                    "DTE":         int(dte),
-                    "Qty":         int(Q),
-                    "Dispatch":    round(x1),
-                    "Transfer":    round(x2),
-                    "Liquidate":   round(x3),
-                    "Dispose":     round(x4),
-                    "Action_Tier": tier_label,
-                    "Net_Saving_USD": round(net_saved, 2)
+                    rec_action = f"🗑️ Controlled destruction {round(x4):,}u (all channels exhausted)"
+                zone1_results.append({
+                    "Product":             row["product_id"],
+                    "Warehouse":           row.get("warehouse_id", ""),
+                    "DTE":                 int(dte),
+                    "Qty":                 int(Q),
+                    "Dispatch":            round(x1),
+                    "Transfer":            round(x2),
+                    "Liquidate":           round(x3),
+                    "Dispose":             round(x4),
+                    "Recovery_%":          recovery_eff,
+                    "Capital_Rescued_USD": round(capital_rescued),
+                    "Recommended_Action":  rec_action,
+                    "Net_Saving_USD":      round(capital_rescued - d_c*x4, 2)
                 })
 
+    # ── ZONE 2 LP: Emergency Triage ───────────────────────────────────────────
+    zone2_results = []
+    with st.spinner(f"Running emergency triage on {len(zone2_merged)} Zone-2 batches (DTE 8–30 days)…"):
+        for _, row in zone2_merged.iterrows():
+            Q   = float(row["quantity_on_hand"])
+            dte = float(row["days_to_expiry"])
+            h   = float(row["daily_holding_cost_per_unit_usd"])
+            d_c = float(row["certified_destruction_cost_per_unit_usd"])
+            p   = float(row["unit_price"])
+            rec = float(row["secondary_liquidation_recovery_pct"]) / 100.0
+            vel = max(float(row.get("daily_sales_velocity", 1.0)), 0.1)
+            is_chronic = bool(row.get("is_chronic_eligible", False))
 
-    if lp_results:
-        lp_df = pd.DataFrame(lp_results)
-        _tot_opt_saving = lp_df['Net_Saving_USD'].sum()
-        _tot_opt_qty    = lp_df['Qty'].sum()
+            max_dispatch  = min(Q, vel * dte)
+            surplus       = max(0.0, Q - max_dispatch)
+            max_transfer  = 0.0   # Never feasible in 8-30d window
+            max_liquidate = min(surplus, Q * 0.40) if dte > 4 else 0.0
 
-        # ROI & Financial Impact Summary
-        lp_k1, lp_k2, lp_k3, lp_k4 = st.columns(4)
-        lp_k1.metric("Batches Optimised", f"{len(lp_df)}", help="Number of priority near-expiry lots evaluated by the HiGHS simplex solver")
-        lp_k2.metric("Total Net Savings", fmt_curr(_tot_opt_saving, compact=False, decimals=0), help=f"Total {curr_code} value recovered vs default disposal write-off")
-        lp_k3.metric("Avg Saving / Batch", fmt_curr(lp_df['Net_Saving_USD'].mean(), compact=False, decimals=0), help=f"Average financial recovery per at-risk batch ({curr_code})")
-        lp_k4.metric("Units Protected", f"{_tot_opt_qty:,}", help="Total pharmaceutical units allocated across optimal recovery channels")
-        info_box("Optimization Metrics", "ℹ️ Performance metrics for LP optimization.")
-        fig, axes = plt.subplots(1, 2, figsize=(18, 6)); fig.patch.set_facecolor("#0f1117")
-        fig.suptitle("LP Inventory Cost Optimisation Results", fontsize=14, color="#10b981", fontweight="bold", y=1.04)
-        alloc = lp_df[["Dispatch","Transfer","Liquidate","Dispose"]].sum()
-        axes[0].pie(alloc.values, labels=alloc.index, autopct="%1.1f%%", colors=["#10b981","#3b82f6","#f59e0b","#ef4444"], wedgeprops={"edgecolor":"#0f1117","linewidth":2})
-        axes[0].set_title("Optimal Allocation Split")
-        axes[1].scatter(lp_df["DTE"], lp_df["Net_Saving_USD"], color="#00d4ff", alpha=0.7, s=40)
-        axes[1].axhline(0, color="#ef4444", linestyle="--", lw=1.5, label="Break-even")
-        axes[1].set_title("Net Savings vs Days-to-Expiry"); axes[1].set_xlabel("DTE (Days)"); axes[1].set_ylabel(f"Net Saving ({curr_code})"); axes[1].legend(fontsize=9, framealpha=0)
-        plt.tight_layout(); show_fig(fig)
-        info_box("Optimization Charts", "ℹ️ Visualization of LP results.")
-        info_box("LP Optimizer", "ℹ️ How to interpret LP results")
-        with st.expander("📋 LP Results Table", expanded=True):
-            st.dataframe(lp_df, use_container_width=True)
-        info_box("LP Table", "ℹ️ Detailed results of LP calculations.")
+            c      = [-(p - h*dte), 0.0, -(p*rec), (d_c + h*dte)]
+            bounds = [(0, max_dispatch), (0, 0.0), (0, max_liquidate), (0, Q)]
+            res = linprog(c, A_eq=[[1,1,1,1]], b_eq=[Q], bounds=bounds, method="highs")
+            if res.success:
+                x1, _x2, x3, x4 = res.x
+                capital_rescued  = max(0.0, (p - h*dte)*x1 + (p*rec)*x3)
+                recovery_eff     = round((x1+x3)/Q*100, 1) if Q > 0 else 0
+                elig_flag = ("✅ Chronic-Eligible: Emergency Dispatch" if is_chronic
+                             else "⛔ Specialty: Initiate Controlled Destruction")
+                zone2_results.append({
+                    "Product":              row["product_id"],
+                    "Warehouse":            row.get("warehouse_id", ""),
+                    "DTE":                  int(dte),
+                    "Qty":                  int(Q),
+                    "Dispatch":             round(x1),
+                    "Liquidate":            round(x3),
+                    "Dispose":              round(x4),
+                    "Recovery_%":           recovery_eff,
+                    "Capital_Rescued_USD":  round(capital_rescued),
+                    "Dispatch_Eligibility": elig_flag,
+                    "Net_Saving_USD":       round(capital_rescued - d_c*x4, 2)
+                })
 
-        # ── AI Insight: LP Recovery Action Plan ─────────────────────
-        _lp_total_saving = lp_df["Net_Saving_USD"].sum()
-        _top3_lp = lp_df.nlargest(3, "Net_Saving_USD")
-        _alloc_total = alloc.sum() if alloc.sum() > 0 else 1
-        _dp = alloc.get("Dispatch",0)  / _alloc_total * 100
-        _lq = alloc.get("Liquidate",0) / _alloc_total * 100
-        _tr = alloc.get("Transfer",0)  / _alloc_total * 100
-        _ds = alloc.get("Dispose",0)   / _alloc_total * 100
-        _lp_bullets = [
-            f"💰 <b>Total value recoverable:</b> <b>{fmt_curr(_lp_total_saving, compact=False, decimals=0)}</b> across {len(lp_df)} optimised batches — representing the maximum extractable value given "
-            f"dispatch velocity constraints, 35% liquidation channel cap, and regulatory disposal requirements.",
-            f"📊 <b>Optimal allocation mix:</b> LP recommends <b>{_dp:.0f}% dispatch</b> (highest recovery), "
-            f"{_tr:.0f}% inter-warehouse transfer, {_lq:.0f}% secondary liquidation, {_ds:.0f}% regulatory disposal. "
-            f"Execute dispatch orders immediately — each day of delay adds holding cost and reduces remaining DTE.",
-        ]
-        for _, _lpr in _top3_lp.iterrows():
-            _lp_bullets.append(
-                f"🏆 <b>High-impact batch:</b> {_lpr['product_id']} @ {_lpr['warehouse_id']} — "
-                f"DTE: <b>{_lpr['DTE']}d</b> | Net saving: <b>{fmt_curr(_lpr['Net_Saving_USD'], compact=False, decimals=0)}</b> | "
-                f"Dispatch {_lpr['Dispatch']:.0f}u · Transfer {_lpr['Transfer']:.0f}u · Liquidate {_lpr['Liquidate']:.0f}u"
-            )
-        _lp_bullets.append(
-            f"💡 <b>Next steps:</b> (1) Export LP table and raise dispatch purchase orders for top-saving batches TODAY, "
-            f"(2) Contact secondary liquidation partner for liquidation-flagged stock, "
-            f"(3) Coordinate with logistics team for transfer-flagged batches, "
-            f"(4) Initiate certified destruction paperwork for dispose-flagged batches."
-        )
-        ai_insight("LP Optimisation — Maximum Recovery Action Plan", _lp_bullets, icon="⚖️", color="#00d4ff")
+    # ── ZONE 3: Confirmed Write-off Register (no LP) ───────────────────────────
+    _z3_cols = ["product_id","warehouse_id","days_to_expiry","quantity_on_hand","inventory_value_usd"]
+    _z3_cols_avail = [c for c in _z3_cols if c in zone3_raw.columns]
+    zone3_display = zone3_raw[_z3_cols_avail].copy().rename(columns={
+        "product_id": "Product", "warehouse_id": "Warehouse",
+        "days_to_expiry": "DTE", "quantity_on_hand": "Qty",
+        "inventory_value_usd": "Write_off_Value_USD"
+    })
+    zone3_display["Status"] = "📋 Confirmed Write-off — No Rescue Possible"
 
+    # ── FINANCIAL AGGREGATES ───────────────────────────────────────────────────
+    z1_df = pd.DataFrame(zone1_results)
+    z2_df = pd.DataFrame(zone2_results)
+
+    def _val_sum(df, col="inventory_value_usd"):
+        return df[col].sum() if col in df.columns and len(df) > 0 else 0.0
+
+    total_atrisk  = _val_sum(zone1_raw) + _val_sum(zone2_raw) + _val_sum(zone3_raw)
+    z1_rescued    = z1_df["Capital_Rescued_USD"].sum() if not z1_df.empty else 0.0
+    z2_rescued    = z2_df["Capital_Rescued_USD"].sum() if not z2_df.empty else 0.0
+    total_rescued = z1_rescued + z2_rescued
+    writeoff_val  = _val_sum(zone3_raw)
+    remaining_exp = max(0.0, total_atrisk - total_rescued - writeoff_val)
+    opt_leverage  = round(total_rescued / max(total_atrisk, 1) * 100, 1)
+
+    # ── KPI STRIP ─────────────────────────────────────────────────────────────
+    kc1, kc2, kc3, kc4 = st.columns(4)
+    kc1.metric("💰 Total Rescue Potential",
+               fmt_curr(total_rescued, compact=False, decimals=0),
+               help="Maximum capital recoverable by executing all LP-recommended Zone 1 & 2 actions today")
+    kc2.metric("⚡ Optimisation Leverage",
+               f"{opt_leverage}%",
+               help="Rescue Potential ÷ Total At-Risk Value — what % of the problem management can still solve")
+    kc3.metric("📋 Confirmed Write-offs",
+               fmt_curr(writeoff_val, compact=False, decimals=0),
+               help=f"DTE ≤ 7d: {len(zone3_raw):,} lots beyond rescue — unavoidable loss for CFO/board reporting")
+    _top_batch = z1_df.nlargest(1, "Capital_Rescued_USD").iloc[0] if not z1_df.empty else None
+    if _top_batch is not None:
+        kc4.metric("🏆 Best Single Recovery",
+                   fmt_curr(_top_batch["Capital_Rescued_USD"], compact=False, decimals=0),
+                   help=f"{_top_batch['Product']} @ {_top_batch['Warehouse']} | DTE {_top_batch['DTE']}d | Act now")
     else:
-        st.warning("LP solver returned no feasible solutions.")
+        kc4.metric("🏆 Best Single Recovery", "N/A")
+
+    info_box("LP 3-Zone KPIs", "ℹ️ How are these 4 metrics calculated?")
+
+    # ── CHARTS ────────────────────────────────────────────────────────────────
+    fig, axes = plt.subplots(1, 3, figsize=(22, 6))
+    fig.patch.set_facecolor("#0f1117")
+    fig.suptitle("LP Inventory Optimisation — Management Decision Intelligence",
+                 fontsize=14, color="#10b981", fontweight="bold", y=1.02)
+
+    # ── Chart 1: Capital Rescue Waterfall ─────────────────────────────────────
+    ax = axes[0]
+    wf_labels = ["At-Risk\nTotal", "Zone 3\nWrite-offs", "Zone 2\nRescued", "Zone 1\nRescued", "Remaining\nExposure"]
+    wf_vals   = [total_atrisk, writeoff_val, z2_rescued, z1_rescued, remaining_exp]
+    wf_colors = ["#6366f1", "#ef4444", "#f59e0b", "#10b981", "#64748b"]
+    bars = ax.bar(wf_labels, wf_vals, color=wf_colors, edgecolor="#0f1117", linewidth=1.5, zorder=3)
+    for bar, val in zip(bars, wf_vals):
+        if val > 0:
+            ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() * 1.02,
+                    fmt_curr(val, compact=True, decimals=1),
+                    ha="center", va="bottom", fontsize=8, color="white", fontweight="bold")
+    ax.set_title("Capital Rescue Waterfall", color="white", fontsize=11)
+    ax.set_ylabel(f"Value ({curr_code})", color="#94a3b8")
+    ax.set_facecolor("#0f1117"); ax.tick_params(colors="#94a3b8")
+    for spine in ax.spines.values(): spine.set_edgecolor("#1e293b")
+
+    # ── Chart 2: Recovery Efficiency Scatter ──────────────────────────────────
+    ax = axes[1]
+    _all_lp_parts = []
+    if not z1_df.empty and "Recovery_%" in z1_df.columns:
+        _all_lp_parts.append(z1_df[["DTE","Recovery_%","Qty"]].assign(Zone="Zone 1"))
+    if not z2_df.empty and "Recovery_%" in z2_df.columns:
+        _all_lp_parts.append(z2_df[["DTE","Recovery_%","Qty"]].assign(Zone="Zone 2"))
+    if _all_lp_parts:
+        _all_lp = pd.concat(_all_lp_parts, ignore_index=True)
+        _clrs   = _all_lp["Recovery_%"].apply(
+            lambda r: "#10b981" if r >= 80 else ("#f59e0b" if r >= 40 else "#ef4444"))
+        _sizes  = np.clip(_all_lp["Qty"] / max(_all_lp["Qty"].max(), 1) * 300, 20, 300)
+        ax.scatter(_all_lp["DTE"], _all_lp["Recovery_%"],
+                   c=_clrs, s=_sizes, alpha=0.82, edgecolors="none", zorder=3)
+        ax.axhline(80, color="#10b981", ls="--", lw=1.2, alpha=0.6, label="80% target")
+        ax.axhline(40, color="#f59e0b", ls="--", lw=1.2, alpha=0.6, label="40% floor")
+        ax.legend(fontsize=8, framealpha=0, labelcolor="#94a3b8")
+    ax.set_title("Recovery Efficiency vs DTE\n🟢 ≥80%   🟡 40–80%   🔴 <40%   (bubble = qty)",
+                 color="white", fontsize=10)
+    ax.set_xlabel("DTE (Days)", color="#94a3b8")
+    ax.set_ylabel("Recovery Efficiency %", color="#94a3b8")
+    ax.set_facecolor("#0f1117"); ax.tick_params(colors="#94a3b8")
+    for spine in ax.spines.values(): spine.set_edgecolor("#1e293b")
+
+    # ── Chart 3: Top-10 Recovery Opportunities (horizontal bar) ───────────────
+    ax = axes[2]
+    if not z1_df.empty:
+        _top10 = z1_df.nlargest(min(10, len(z1_df)), "Capital_Rescued_USD").copy()
+        _top10["Label"] = _top10["Product"] + "\n@" + _top10["Warehouse"]
+        _bar_clrs = ["#10b981" if r >= 80 else ("#f59e0b" if r >= 40 else "#ef4444")
+                     for r in _top10["Recovery_%"]]
+        ax.barh(_top10["Label"], _top10["Capital_Rescued_USD"],
+                color=_bar_clrs, edgecolor="#0f1117", linewidth=1, zorder=3)
+        ax.set_xlabel(f"Capital Rescued ({curr_code})", color="#94a3b8")
+        ax.invert_yaxis()
+        for i, (_, r) in enumerate(_top10.iterrows()):
+            ax.text(r["Capital_Rescued_USD"] * 1.01, i,
+                    f"{r['Recovery_%']}%", va="center", fontsize=7, color="white")
+    ax.set_title("Top Recovery Opportunities\n(act on green first)", color="white", fontsize=10)
+    ax.set_facecolor("#0f1117"); ax.tick_params(colors="#94a3b8")
+    for spine in ax.spines.values(): spine.set_edgecolor("#1e293b")
+
+    plt.tight_layout(); show_fig(fig)
+    info_box("LP 3-Zone Charts", "ℹ️ How to read these 3 charts")
+
+    # ── ZONE 1 TABLE ──────────────────────────────────────────────────────────
+    if not z1_df.empty:
+        st.markdown("### ✅ Zone 1 — LP Optimisation Results *(DTE > 30 days)*")
+        st.caption(f"{len(z1_df)} batches | Sorted by Capital Rescued ↓ | 🟢 Recovery ≥80%   🟡 ≥40%   🔴 <40%")
+        with st.expander("📋 Zone 1 LP Results Table", expanded=True):
+            st.dataframe(z1_df.sort_values("Capital_Rescued_USD", ascending=False), use_container_width=True)
+        info_box("Zone 1 Table", "ℹ️ How to act on Zone 1 results")
+
+    # ── ZONE 2 TABLE ──────────────────────────────────────────────────────────
+    if not z2_df.empty:
+        _n_chronic = z2_df["Dispatch_Eligibility"].str.contains("Chronic", na=False).sum()
+        _n_special = len(z2_df) - _n_chronic
+        st.markdown(f"### ⚠️ Zone 2 — Emergency Triage *(DTE 8–30 days)* | ✅ {_n_chronic} chronic-eligible · ⛔ {_n_special} specialty")
+        st.caption("Chronic-eligible: emergency dispatch to existing patients feasible. Specialty/Biologics: initiate controlled destruction paperwork NOW.")
+        with st.expander("📋 Zone 2 Emergency Triage Table", expanded=True):
+            st.dataframe(z2_df.sort_values("DTE"), use_container_width=True)
+        info_box("Zone 2 Table", "ℹ️ What is the Dispatch Eligibility flag?")
+
+    # ── ZONE 3: CONFIRMED WRITE-OFF REGISTER ──────────────────────────────────
+    _z3_label = (f"📋 Zone 3 — Confirmed Write-off Register *(DTE ≤ 7 days)* | "
+                 f"{len(zone3_display):,} lots | {fmt_curr(writeoff_val, compact=False, decimals=0)} total write-off")
+    with st.expander(_z3_label, expanded=False):
+        st.caption("⚠️ These batches are beyond LP rescue. Transfer, liquidation, and meaningful dispatch are infeasible. "
+                   "Data presented for CFO/board write-off reporting and root-cause accountability only.")
+        if not zone3_display.empty:
+            st.dataframe(zone3_display.sort_values("DTE"), use_container_width=True)
+        else:
+            st.success("No confirmed write-offs in the current dataset. ✅")
+    info_box("Zone 3 Write-off", "ℹ️ Why are these batches excluded from LP optimisation?")
+
+    # ── AI INSIGHT: 3-ZONE ACTION PLAN ────────────────────────────────────────
+    _z2_chronic = z2_df[z2_df["Dispatch_Eligibility"].str.contains("Chronic", na=False)].shape[0] if not z2_df.empty else 0
+    _lp_bullets = [
+        f"💰 <b>Total rescue potential:</b> <b>{fmt_curr(total_rescued, compact=False, decimals=0)}</b> ({opt_leverage:.1f}% of at-risk portfolio). "
+        f"The remaining {100-opt_leverage:.1f}% ({fmt_curr(writeoff_val, compact=False, decimals=0)}) is a confirmed write-off — "
+        f"unavoidable destruction cost that should be reported to the CFO this week.",
+        f"✅ <b>Zone 1 — {len(zone1_results)} batches optimised (DTE > 30d):</b> LP recommends "
+        f"dispatching {z1_df['Dispatch'].sum():,.0f}u, transferring {z1_df['Transfer'].sum():,.0f}u, "
+        f"liquidating {z1_df['Liquidate'].sum():,.0f}u — recovering <b>{fmt_curr(z1_rescued, compact=False, decimals=0)}</b> "
+        f"vs. a total write-off. All dispatch orders should be raised TODAY.",
+        f"⚠️ <b>Zone 2 — {len(zone2_results)} batches in emergency window (DTE 8–30d):</b> "
+        f"{_z2_chronic} chronic-eligible lots flagged for immediate emergency dispatch to existing patients. "
+        f"{'Remaining ' + str(len(zone2_results)-_z2_chronic) + ' specialty lots require controlled destruction initiation within 48 hours.' if (len(zone2_results)-_z2_chronic) > 0 else 'All Zone-2 lots are chronic-eligible for emergency dispatch.'}",
+        f"📋 <b>Zone 3 — {len(zone3_raw):,} write-off lots (DTE ≤ 7d):</b> "
+        f"No LP optimisation is feasible. These represent <b>{fmt_curr(writeoff_val, compact=False, decimals=0)}</b> in unavoidable destruction. "
+        f"Root cause: these batches should have been flagged for action at DTE=90. "
+        f"Recommend reviewing the Expiry Intelligence page to prevent recurrence."
+    ]
+    if _top_batch is not None:
+        _lp_bullets.append(
+            f"🏆 <b>Single highest recovery opportunity:</b> {_top_batch['Product']} @ {_top_batch['Warehouse']} — "
+            f"DTE <b>{_top_batch['DTE']}d</b> | Recovery efficiency {_top_batch['Recovery_%']}% | "
+            f"Capital rescued: <b>{fmt_curr(_top_batch['Capital_Rescued_USD'], compact=False, decimals=0)}</b>. "
+            f"{_top_batch['Recommended_Action']}. Act within 48 hours."
+        )
+    _lp_bullets.append(
+        f"💡 <b>48-hour action protocol:</b> "
+        f"(1) Raise dispatch purchase orders for all Zone-1 batches with Recovery% ≥ 80% — highest capital rescue per hour of effort. "
+        f"(2) Contact secondary liquidation partner for all Liquidate-flagged Zone-1 stock. "
+        f"(3) Brief logistics head on Transfer-flagged batches — logistics booking window closes 7d before DTE. "
+        f"(4) File certified destruction paperwork for Zone-2 specialty lots and all Zone-3 write-offs. "
+        f"(5) Schedule post-mortem: why were Zone-3 batches not caught at DTE=90?"
+    )
+    ai_insight("LP Decision Intelligence — 3-Zone Recovery Action Plan", _lp_bullets, icon="⚖️", color="#00d4ff")
+
+
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PAGE: IOT COLD-CHAIN MONITOR
