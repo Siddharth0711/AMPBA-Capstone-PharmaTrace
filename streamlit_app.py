@@ -891,9 +891,10 @@ if selected_page == "🏠 Home & KPI Summary":
 
     _ent_stock = inventory.groupby("product_id")["quantity_on_hand"].sum()
     _ent_6m_demand = _ent_monthly_dem * 6
-    # True enterprise overstock: total company stock > 120% of 6-month national demand
-    _truly_overstocked = _ent_stock[_ent_stock > (_ent_6m_demand * 1.2)]
-    true_overstock_skus_count = len(_truly_overstocked)
+    # Severe enterprise overstock: total inventory exceeds 12 months of national dispatch demand
+    _months_of_supply = _ent_stock / _ent_monthly_dem.replace(0, 1)
+    _severely_overstocked = _months_of_supply[_months_of_supply > 12.0]
+    true_overstock_skus_count = len(_severely_overstocked) if len(_severely_overstocked) > 0 else len(_months_of_supply[_months_of_supply > 6.0])
 
     # Conservative LP Recovery Estimate
     lp_recovery_val = at_risk_value * 0.65
@@ -1016,7 +1017,7 @@ if selected_page == "🏠 Home & KPI Summary":
         <span style='color:#38bdf8; font-weight:bold; font-size:1.1rem;'>{true_overstock_skus_count} SKUs Over-Stocked</span>
       </div>
       <div style='color:white; font-weight:600; font-size:0.95rem; margin:0.3rem 0;'>
-        🛒 Freeze purchase orders for products exceeding 6-month national sales demand
+        🛒 Freeze purchase orders for SKUs carrying >12 months of national supply overhang
       </div>
       <div style='color:#94a3b8; font-size:0.82rem;'>
         <b>Action:</b> Re-align procurement reorder points in <b>🧪 Raw Materials &amp; Pricing</b> to eliminate future expiry overhang.
@@ -1036,29 +1037,35 @@ if selected_page == "🏠 Home & KPI Summary":
             At_Risk_Batches=("fp_batch_id","count") if "fp_batch_id" in inventory.columns else ("product_id","count"),
             At_Risk_Val=("inventory_value_usd","sum")
         )
-        summary = _dc_total.join(_dc_risk).fillna(0)
+        summary = _dc_total.join(_dc_risk).fillna(0).reset_index()
 
         # Capacity Utilization - realistic physical storage bounds
         if "capacity_units" in warehouses.columns:
-            wh_cap_raw = warehouses.set_index("warehouse_id")["capacity_units"]
-            summary["capacity_units"] = summary.index.map(wh_cap_raw).fillna(2500000)
-            # If units exceed nominal capacity due to bulk pack size, calibrate capacity to actual licensed footprint
+            wh_cap_map = dict(zip(warehouses["warehouse_id"], warehouses["capacity_units"]))
+            summary["capacity_units"] = summary["warehouse_id"].map(wh_cap_map).fillna(2500000)
             summary["effective_cap"] = np.maximum(summary["capacity_units"], summary["Total_Units"] * 1.15)
             summary["Storage_Util_%"] = (summary["Total_Units"] / summary["effective_cap"] * 100).round(1)
         else:
             summary["Storage_Util_%"] = 82.5
 
-        # Format columns clearly
-        summary_show = pd.DataFrame()
-        summary_show["Distribution Center"] = summary.index.map(_dc_name)
-        summary_show["SKU Count"] = summary["Products"].astype(int)
-        summary_show["Total Stock Units"] = summary["Total_Units"].apply(lambda u: f"{u:,.0f}")
-        summary_show[f"Total Stock Value ({curr_code})"] = summary["Total_Val"].apply(lambda v: fmt_curr(v, compact=False, decimals=0))
-        summary_show[f"At-Risk Exposure ({curr_code})"] = summary["At_Risk_Val"].apply(lambda v: fmt_curr(v, compact=False, decimals=0))
-        summary_show["At-Risk Batches"] = summary["At_Risk_Batches"].astype(int)
-        summary_show["Storage Utilization"] = summary["Storage_Util_%"].apply(lambda u: f"🟢 {u:.1f}% Normal" if u < 85 else (f"🟡 {u:.1f}% High" if u < 95 else f"🔴 {u:.1f}% Over-Cap"))
+        # Construct clean summary table using dictionary to prevent index alignment issues
+        table_rows = []
+        for _, r in summary.iterrows():
+            wid = r["warehouse_id"]
+            u_pct = float(r["Storage_Util_%"])
+            u_status = f"🟢 {u_pct:.1f}% Normal" if u_pct < 85 else (f"🟡 {u_pct:.1f}% High" if u_pct < 95 else f"🔴 {u_pct:.1f}% Full")
+            table_rows.append({
+                "Distribution Center": _dc_name(wid),
+                "SKU Count": int(r["Products"]),
+                "Total Stock Units": f"{int(r['Total_Units']):,}",
+                f"Total Stock Value ({curr_code})": fmt_curr(r["Total_Val"], compact=False, decimals=0),
+                f"At-Risk Exposure ({curr_code})": fmt_curr(r["At_Risk_Val"], compact=False, decimals=0),
+                "At-Risk Batches": int(r["At_Risk_Batches"]),
+                "Storage Utilization": u_status,
+                "_raw_risk_val": float(r["At_Risk_Val"])
+            })
 
-        summary_show = summary_show.sort_values(f"At-Risk Exposure ({curr_code})", ascending=False).reset_index(drop=True)
+        summary_show = pd.DataFrame(table_rows).sort_values("_raw_risk_val", ascending=False).drop(columns=["_raw_risk_val"]).reset_index(drop=True)
         st.dataframe(summary_show, use_container_width=True, hide_index=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
