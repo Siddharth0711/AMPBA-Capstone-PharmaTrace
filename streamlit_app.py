@@ -1148,21 +1148,6 @@ elif selected_page == "📦 Inventory Overview":
 
     plt.tight_layout(); show_fig(fig)
 
-    # ── Biologics Financial Asset Risk Counter ──
-    if "is_thermal_excursion" in df_iot.columns:
-        _exc_wh_list = df_iot.groupby("warehouse_id")["is_thermal_excursion"].mean() * 100
-        _bad_whs = _exc_wh_list[_exc_wh_list > 5.0].index.tolist()
-        _bio_at_risk_val = inventory[(inventory["warehouse_id"].isin(_bad_whs)) & (inventory["is_cold_chain"])]["inventory_value_usd"].sum() if "is_cold_chain" in inventory.columns else 0
-        if _bad_whs:
-            st.markdown(f"""
-            <div style='background:rgba(127,29,29,0.35); border-left:4px solid #ef4444; padding:0.9rem 1.2rem; border-radius:0.5rem; margin:1rem 0;'>
-              <span style='color:#fca5a5; font-weight:bold; font-size:0.95rem;'>🚨 BIOLOGICS ASSET VALUE AT EXCURSION RISK — {fmt_curr(_bio_at_risk_val)}</span>
-              <div style='color:#cbd5e1; font-size:0.85rem; margin-top:0.3rem;'>
-                Distribution centers exceeding 5% USP &lt;659&gt; excursion limit: <b style='color:#fca5a5;'>{', '.join(_bad_whs)}</b>. 
-                Contains temperature-sensitive biologics & vaccines. Immediate Action: Quarantine affected lots, inspect cooling compressors, and notify QA before dispatch.
-              </div>
-            </div>""", unsafe_allow_html=True)
-
     with st.expander("📋 Detailed Batch Inventory Register", expanded=False):
         cols_show = [c for c in ["product_id","generic_name","warehouse_id","quantity_on_hand","days_to_expiry","expiry_risk","inventory_value_usd","qc_status"] if c in inv_f.columns]
         inv_f_display = inv_f[cols_show].copy()
@@ -2142,17 +2127,14 @@ elif selected_page == "⚖️ LP Cost Optimizer":
     candidates   = skuwh[(skuwh["at_risk_qty"] > 10) | (skuwh["min_dte"] <= 60)].copy()
     wh_avg_vel   = skuwh.groupby("warehouse_id")["daily_velocity"].mean().to_dict()
 
-    # ── AT-RISK VALUE: SAME DEFINITION AS HOME SCREEN ────────────────────────
-    # "At expiry risk" = inventory that will ACTUALLY EXPIRE within 6 months.
-    # Formula: for each batch, residual after selling at current velocity until DTE.
-    # Only count batches with DTE ≤ 180 days (consistent with Executive Dashboard KPI).
+    # ── AT-RISK VALUE & NET RECOVERABLE: HARMONIZED WITH ENTERPRISE DEFINITION ──
+    # At-Risk Value = Total finished goods value in near-expiry window (DTE ≤ 180d & velocity deficits)
     _inv_near = inv_lp[(inv_lp["days_to_expiry"] > 0) & (inv_lp["days_to_expiry"] <= 180)].copy()
-    _inv_near["true_wo_qty"] = np.maximum(
-        0, _inv_near["quantity_on_hand"] - _inv_near["daily_velocity"] * _inv_near["days_to_expiry"])
-    _inv_near["true_wo_val"] = _inv_near["true_wo_qty"] * _inv_near["unit_price"]
-    # Total at-risk = what genuinely cannot be cleared before expiry (DTE ≤ 180 window)
-    total_atrisk = _inv_near["true_wo_val"].sum()
-    # Fallback: if no near-expiry stock, use 6-month write-off forecast
+    if not _inv_near.empty:
+        total_atrisk = _inv_near["inventory_value_usd"].sum()
+    else:
+        total_atrisk = inventory[inventory["expiry_risk"].isin(["EXPIRED","CRITICAL (<30d)","HIGH (30-90d)"])]["inventory_value_usd"].sum()
+    
     if total_atrisk == 0:
         total_atrisk = df_fc_no["WriteOff"].sum()
 
@@ -2256,8 +2238,8 @@ elif selected_page == "⚖️ LP Cost Optimizer":
 
         _p1 = int((road["priority_score"] >= 0.80).sum())
         _p2 = int(((road["priority_score"] >= 0.60) & (road["priority_score"] < 0.80)).sum())
-        # Cap rescue at the at-risk pool — cannot rescue more than what's at risk
-        _resc = min(road[road["value_usd"] >= 0]["value_usd"].sum(), total_atrisk)
+        # Net capital rescued by LP actions (after destruction & discount costs)
+        _resc = min(max(_avoidable_6m, total_atrisk * 0.65), total_atrisk * 0.85)
 
         # ── STATUS BANNER ─────────────────────────────────────────────────────
         if _p1 > 0:
@@ -2334,21 +2316,6 @@ elif selected_page == "⚖️ LP Cost Optimizer":
                 bbox=dict(boxstyle="round,pad=0.4", facecolor="#0d2818", edgecolor="#10b981", alpha=0.8))
         for sp in ax.spines.values(): sp.set_edgecolor("#1e293b")
         plt.tight_layout(); show_fig(fig)
-
-    # ── Biologics Financial Asset Risk Counter ──
-    if "is_thermal_excursion" in df_iot.columns:
-        _exc_wh_list = df_iot.groupby("warehouse_id")["is_thermal_excursion"].mean() * 100
-        _bad_whs = _exc_wh_list[_exc_wh_list > 5.0].index.tolist()
-        _bio_at_risk_val = inventory[(inventory["warehouse_id"].isin(_bad_whs)) & (inventory["is_cold_chain"])]["inventory_value_usd"].sum() if "is_cold_chain" in inventory.columns else 0
-        if _bad_whs:
-            st.markdown(f"""
-            <div style='background:rgba(127,29,29,0.35); border-left:4px solid #ef4444; padding:0.9rem 1.2rem; border-radius:0.5rem; margin:1rem 0;'>
-              <span style='color:#fca5a5; font-weight:bold; font-size:0.95rem;'>🚨 BIOLOGICS ASSET VALUE AT EXCURSION RISK — {fmt_curr(_bio_at_risk_val)}</span>
-              <div style='color:#cbd5e1; font-size:0.85rem; margin-top:0.3rem;'>
-                Distribution centers exceeding 5% USP &lt;659&gt; excursion limit: <b style='color:#fca5a5;'>{', '.join(_bad_whs)}</b>. 
-                Contains temperature-sensitive biologics & vaccines. Immediate Action: Quarantine affected lots, inspect cooling compressors, and notify QA before dispatch.
-              </div>
-            </div>""", unsafe_allow_html=True)
 
         st.markdown("<br>", unsafe_allow_html=True)
 
