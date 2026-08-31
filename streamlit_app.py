@@ -1865,35 +1865,84 @@ elif selected_page == "⚖️ LP Cost Optimizer":
         st.warning("Upload Unit Economics file (file 03) to enable LP optimisation.", icon="⚠️"); st.stop()
 
     ml_df = inventory.dropna(subset=["days_to_expiry","quantity_on_hand","unit_price"]).copy()
-    if supp_ok and "transaction_type" in df_txns.columns:
+    if supp_ok and not df_demand.empty and "quantity_dispatched_units" in df_demand.columns:
+        _n_mo = df_demand["year_month"].nunique() if "year_month" in df_demand.columns else 24
+        sku_velocity = df_demand.groupby("product_id")["quantity_dispatched_units"].sum() / max(1, _n_mo * 30)
+    elif supp_ok and "transaction_type" in df_txns.columns:
         velocity = df_txns[df_txns["transaction_type"]=="OUTBOUND_DISPATCH_PICK"].groupby("product_id")["quantity"].sum().reset_index().rename(columns={"quantity":"total_dispatched"})
-        velocity["avg_monthly_dispatch"] = velocity["total_dispatched"] / 24
-        ml_df["avg_monthly_dispatch"] = ml_df["product_id"].map(velocity.set_index("product_id")["avg_monthly_dispatch"]).fillna(ml_df["quantity_on_hand"].median()/6)
+        sku_velocity = velocity.set_index("product_id")["total_dispatched"] / 730
     else:
-        ml_df["avg_monthly_dispatch"] = ml_df["quantity_on_hand"] / 6
-    ml_df["risk_score"] = (ml_df["days_to_expiry"] / ml_df["shelf_life_days"].replace(0,1)).clip(0,1)
+        sku_velocity = inventory.groupby("product_id")["quantity_on_hand"].sum() / 180
 
-    at_risk_inv = ml_df[ml_df["risk_score"]>0.5].merge(
+    ml_df["daily_sales_velocity"] = ml_df["product_id"].map(sku_velocity).fillna(ml_df["quantity_on_hand"] / 180)
+    ml_df["clearable_units"] = np.maximum(0, ml_df["daily_sales_velocity"] * np.maximum(0, ml_df["days_to_expiry"]))
+    ml_df["is_at_risk_candidate"] = (ml_df["days_to_expiry"] <= 180) | (ml_df["quantity_on_hand"] > ml_df["clearable_units"])
+
+    # Merge unit economics & sort by urgency (lowest DTE first)
+    at_risk_inv = ml_df[ml_df["is_at_risk_candidate"]].merge(
         df_econ[["product_id","daily_holding_cost_per_unit_usd","stockout_penalty_cost_per_unit_usd","certified_destruction_cost_per_unit_usd","secondary_liquidation_recovery_pct"]],
         on="product_id", how="left").dropna(subset=["daily_holding_cost_per_unit_usd"])
 
-    with st.spinner(f"Running LP optimisation on {min(50,len(at_risk_inv))} at-risk records…"):
+    # If dataset has few batches <= 180d, take the lowest DTE batches in the system
+    if len(at_risk_inv) < 10:
+        at_risk_inv = ml_df.merge(
+            df_econ[["product_id","daily_holding_cost_per_unit_usd","stockout_penalty_cost_per_unit_usd","certified_destruction_cost_per_unit_usd","secondary_liquidation_recovery_pct"]],
+            on="product_id", how="left").dropna(subset=["daily_holding_cost_per_unit_usd"])
+
+    at_risk_inv = at_risk_inv.sort_values(by=["days_to_expiry", "quantity_on_hand"], ascending=[True, False])
+
+    with st.spinner(f"Running LP optimisation on {min(50,len(at_risk_inv))} near-expiry / surplus records…"):
         lp_results = []
         for _, row in at_risk_inv.head(50).iterrows():
-            Q, dte = float(row["quantity_on_hand"]), max(float(row["days_to_expiry"]), 1)
-            h, d_c = float(row["daily_holding_cost_per_unit_usd"]), float(row["certified_destruction_cost_per_unit_usd"])
-            p, rec = float(row["unit_price"]), float(row["secondary_liquidation_recovery_pct"])/100.0
-            vel = max(float(row.get("avg_monthly_dispatch",30))/30.0, 0.1)
-            max_dispatch = min(Q*0.9, vel*dte); max_transfer = min(Q*0.5, Q-max_dispatch)
-            max_liquidate = Q*0.35; min_dispose = Q*0.05 if dte<2 else 0
-            c = [-(p-h*dte), -(p*0.6-h*dte*0.5), -(p*rec), d_c+h*dte]
-            A_ub = [[1,1,1,1],[1,0,0,0],[0,1,0,0],[0,0,1,0]]
-            b_ub = [Q, max_dispatch, max_transfer, max_liquidate]
-            bounds = [(0,max_dispatch),(0,max_transfer),(0,max_liquidate),(min_dispose,Q)]
-            res = linprog(c, A_ub=A_ub, b_ub=b_ub, bounds=bounds, method="highs")
+            Q = float(row["quantity_on_hand"])
+            dte = float(row["days_to_expiry"])
+            h = float(row["daily_holding_cost_per_unit_usd"])
+            d_c = float(row["certified_destruction_cost_per_unit_usd"])
+            p = float(row["unit_price"])
+            rec = float(row["secondary_liquidation_recovery_pct"])/100.0
+            vel = max(float(row.get("daily_sales_velocity", 1.0)), 0.1)
+
+            if dte <= 0:
+                # Already Expired: mandatory disposal
+                lp_results.append({
+                    "product_id": row["product_id"],
+                    "warehouse_id": row.get("warehouse_id",""),
+                    "DTE": int(dte),
+                    "Qty": int(Q),
+                    "Dispatch": 0,
+                    "Transfer": 0,
+                    "Liquidate": 0,
+                    "Dispose": int(Q),
+                    "Net_Saving_USD": round(-d_c * Q, 2)
+                })
+                continue
+
+            # Standard dispatch can take up to 100% of Q if market velocity allows
+            max_dispatch = min(Q, vel * dte)
+            surplus_qty = max(0.0, Q - max_dispatch)
+
+            # Secondary channels only receive surplus volume that cannot be dispatched
+            max_transfer = min(surplus_qty, Q * 0.60)
+            max_liquidate = min(surplus_qty, Q * 0.40)
+
+            c = [-(p - h * dte), -(p * 0.75 - h * dte * 0.5), -(p * rec), (d_c + h * dte)]
+            A_eq = [[1, 1, 1, 1]]
+            b_eq = [Q]
+            bounds = [(0, max_dispatch), (0, max_transfer), (0, max_liquidate), (0, Q)]
+            res = linprog(c, A_eq=A_eq, b_eq=b_eq, bounds=bounds, method="highs")
             if res.success:
-                x1,x2,x3,x4 = res.x
-                lp_results.append({"product_id":row["product_id"],"warehouse_id":row.get("warehouse_id",""),"DTE":int(dte),"Qty":int(Q),"Dispatch":round(x1),"Transfer":round(x2),"Liquidate":round(x3),"Dispose":round(x4),"Net_Saving_USD":round(-res.fun,2)})
+                x1, x2, x3, x4 = res.x
+                lp_results.append({
+                    "product_id": row["product_id"],
+                    "warehouse_id": row.get("warehouse_id",""),
+                    "DTE": int(dte),
+                    "Qty": int(Q),
+                    "Dispatch": round(x1),
+                    "Transfer": round(x2),
+                    "Liquidate": round(x3),
+                    "Dispose": round(x4),
+                    "Net_Saving_USD": round(-res.fun, 2)
+                })
 
     if lp_results:
         lp_df = pd.DataFrame(lp_results)
@@ -1902,7 +1951,7 @@ elif selected_page == "⚖️ LP Cost Optimizer":
 
         # ROI & Financial Impact Summary
         lp_k1, lp_k2, lp_k3, lp_k4 = st.columns(4)
-        lp_k1.metric("Batches Optimised", f"{len(lp_df)}", help="Number of near-expiry inventory lots evaluated by the HiGHS simplex solver")
+        lp_k1.metric("Batches Optimised", f"{len(lp_df)}", help="Number of priority near-expiry lots evaluated by the HiGHS simplex solver")
         lp_k2.metric("Total Net Savings", fmt_curr(_tot_opt_saving, compact=False, decimals=0), help=f"Total {curr_code} value recovered vs default disposal write-off")
         lp_k3.metric("Avg Saving / Batch", fmt_curr(lp_df['Net_Saving_USD'].mean(), compact=False, decimals=0), help=f"Average financial recovery per at-risk batch ({curr_code})")
         lp_k4.metric("Units Protected", f"{_tot_opt_qty:,}", help="Total pharmaceutical units allocated across optimal recovery channels")
@@ -1914,11 +1963,11 @@ elif selected_page == "⚖️ LP Cost Optimizer":
         axes[0].set_title("Optimal Allocation Split")
         axes[1].scatter(lp_df["DTE"], lp_df["Net_Saving_USD"], color="#00d4ff", alpha=0.7, s=40)
         axes[1].axhline(0, color="#ef4444", linestyle="--", lw=1.5, label="Break-even")
-        axes[1].set_title("Net Savings vs Days-to-Expiry"); axes[1].set_xlabel("DTE"); axes[1].set_ylabel("Net Saving (USD)"); axes[1].legend(fontsize=9, framealpha=0)
+        axes[1].set_title("Net Savings vs Days-to-Expiry"); axes[1].set_xlabel("DTE (Days)"); axes[1].set_ylabel(f"Net Saving ({curr_code})"); axes[1].legend(fontsize=9, framealpha=0)
         plt.tight_layout(); show_fig(fig)
         info_box("Optimization Charts", "ℹ️ Visualization of LP results.")
         info_box("LP Optimizer", "ℹ️ How to interpret LP results")
-        with st.expander("📋 LP Results Table"):
+        with st.expander("📋 LP Results Table", expanded=True):
             st.dataframe(lp_df, use_container_width=True)
         info_box("LP Table", "ℹ️ Detailed results of LP calculations.")
 
