@@ -1893,45 +1893,111 @@ elif selected_page == "⚖️ LP Cost Optimizer":
 
     at_risk_inv = at_risk_inv.sort_values(by=["days_to_expiry", "quantity_on_hand"], ascending=[True, False])
 
+    # ── LP Lead-Time Feasibility Constants ────────────────────────────────
+    # Based on real pharma logistics: inter-warehouse transfers take 7-10 days minimum;
+    # secondary liquidation takes 3-5 days minimum (buyer agreement + pickup + documentation)
+    TRANSFER_LEAD_DAYS   = 7   # Min DTE required to allow inter-warehouse transfer
+    LIQUIDATE_LEAD_DAYS  = 4   # Min DTE required to allow secondary market liquidation
+
     with st.spinner(f"Running LP optimisation on {min(50,len(at_risk_inv))} near-expiry / surplus records…"):
         lp_results = []
         for _, row in at_risk_inv.head(50).iterrows():
-            Q = float(row["quantity_on_hand"])
+            Q   = float(row["quantity_on_hand"])
             dte = max(1.0, float(row["days_to_expiry"]))
-            h = float(row["daily_holding_cost_per_unit_usd"])
+            h   = float(row["daily_holding_cost_per_unit_usd"])
             d_c = float(row["certified_destruction_cost_per_unit_usd"])
-            p = float(row["unit_price"])
-            rec = float(row["secondary_liquidation_recovery_pct"])/100.0
+            p   = float(row["unit_price"])
+            rec = float(row["secondary_liquidation_recovery_pct"]) / 100.0
             vel = max(float(row.get("daily_sales_velocity", 1.0)), 0.1)
 
-            # Standard dispatch can take up to 100% of Q if market velocity allows
-            max_dispatch = min(Q, vel * dte)
-            surplus_qty = max(0.0, Q - max_dispatch)
+            # ── Tier 1: DTE 1–3 days (Critical) ──────────────────────────
+            # Only emergency dispatch to existing customers is feasible.
+            # Transfer and liquidation are physically infeasible.
+            if dte <= 3:
+                max_dispatch  = min(Q, vel * dte)  # What market can absorb in DTE days
+                max_transfer  = 0.0                # NOT feasible — logistics lead time > DTE
+                max_liquidate = 0.0                # NOT feasible — buyer lead time > DTE
+                surplus = max(0.0, Q - max_dispatch)
+                # All units that cannot be dispatched must be disposed
+                lp_results.append({
+                    "product_id":  row["product_id"],
+                    "warehouse_id": row.get("warehouse_id", ""),
+                    "DTE":         int(dte),
+                    "Qty":         int(Q),
+                    "Dispatch":    round(max_dispatch),
+                    "Transfer":    0,
+                    "Liquidate":   0,
+                    "Dispose":     round(surplus),
+                    "Action_Tier": "🔴 Critical (1–3d): Emergency Dispatch Only",
+                    "Net_Saving_USD": round((p - h * dte) * max_dispatch - (d_c + h * dte) * surplus, 2)
+                })
+                continue
 
-            # Secondary channels only receive surplus volume that cannot be dispatched
-            max_transfer = min(surplus_qty, Q * 0.60)
-            max_liquidate = min(surplus_qty, Q * 0.40)
+            # ── Tier 2: DTE 4–7 days (Urgent) ────────────────────────────
+            # Emergency dispatch + same-city liquidation possible.
+            # Transfer NOT feasible (requires 7+ days).
+            elif dte <= 7:
+                max_dispatch  = min(Q, vel * dte)
+                surplus       = max(0.0, Q - max_dispatch)
+                max_transfer  = 0.0                          # Still infeasible
+                max_liquidate = min(surplus, Q * 0.40)       # Same-city emergency liquidation
 
+            # ── Tier 3: DTE 8–30 days (High) ─────────────────────────────
+            # Dispatch + regional liquidation possible.
+            # Transfer still infeasible (>7d lead time, but DTE only 8-30d, no time to sell at destination).
+            elif dte <= 30:
+                max_dispatch  = min(Q, vel * dte)
+                surplus       = max(0.0, Q - max_dispatch)
+                max_transfer  = 0.0                          # Infeasible — receiving WH needs time to sell too
+                max_liquidate = min(surplus, Q * 0.50)       # Regional secondary market liquidation
+
+            # ── Tier 4: DTE 31–90 days (Medium) ──────────────────────────
+            # All channels feasible. Transfer to high-demand warehouse is viable.
+            elif dte <= 90:
+                max_dispatch  = min(Q, vel * dte)
+                surplus       = max(0.0, Q - max_dispatch)
+                max_transfer  = min(surplus, Q * 0.50)       # Short-haul transfer feasible
+                max_liquidate = min(surplus, Q * 0.35)       # Liquidation feasible
+
+            # ── Tier 5: DTE > 90 days (Low / Velocity-Deficit) ───────────
+            # Full channel access — focus is on velocity deficit, not immediate expiry urgency
+            else:
+                max_dispatch  = min(Q, vel * dte)
+                surplus       = max(0.0, Q - max_dispatch)
+                max_transfer  = min(surplus, Q * 0.60)
+                max_liquidate = min(surplus, Q * 0.40)
+
+            # Cost coefficients (negative = value to maximize)
             c = [-(p - h * dte), -(p * 0.75 - h * dte * 0.5), -(p * rec), (d_c + h * dte)]
-            A_eq = [[1, 1, 1, 1]]
-            b_eq = [Q]
+            A_eq  = [[1, 1, 1, 1]]
+            b_eq  = [Q]
             bounds = [(0, max_dispatch), (0, max_transfer), (0, max_liquidate), (0, Q)]
             res = linprog(c, A_eq=A_eq, b_eq=b_eq, bounds=bounds, method="highs")
             if res.success:
                 x1, x2, x3, x4 = res.x
-                # Net savings = financial capital rescued by active channels minus disposal cost of any remainder
+                # Classify action tier for display
+                if dte <= 7:
+                    tier_label = "🟠 Urgent (4–7d): Dispatch + Liquidate"
+                elif dte <= 30:
+                    tier_label = "🟡 High (8–30d): Dispatch + Regional Liquidation"
+                elif dte <= 90:
+                    tier_label = "🟢 Medium (31–90d): Dispatch + Transfer + Liquidate"
+                else:
+                    tier_label = "💙 Velocity Deficit (>90d): All Channels"
                 net_saved = (p - h * dte)*x1 + (p * 0.75 - h * dte * 0.5)*x2 + (p * rec)*x3 - (d_c + h * dte)*x4
                 lp_results.append({
-                    "product_id": row["product_id"],
-                    "warehouse_id": row.get("warehouse_id",""),
-                    "DTE": int(dte),
-                    "Qty": int(Q),
-                    "Dispatch": round(x1),
-                    "Transfer": round(x2),
-                    "Liquidate": round(x3),
-                    "Dispose": round(x4),
+                    "product_id":  row["product_id"],
+                    "warehouse_id": row.get("warehouse_id", ""),
+                    "DTE":         int(dte),
+                    "Qty":         int(Q),
+                    "Dispatch":    round(x1),
+                    "Transfer":    round(x2),
+                    "Liquidate":   round(x3),
+                    "Dispose":     round(x4),
+                    "Action_Tier": tier_label,
                     "Net_Saving_USD": round(net_saved, 2)
                 })
+
 
     if lp_results:
         lp_df = pd.DataFrame(lp_results)
