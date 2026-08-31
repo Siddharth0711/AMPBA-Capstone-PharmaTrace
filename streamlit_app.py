@@ -1876,16 +1876,18 @@ elif selected_page == "⚖️ LP Cost Optimizer":
 
     ml_df["daily_sales_velocity"] = ml_df["product_id"].map(sku_velocity).fillna(ml_df["quantity_on_hand"] / 180)
     ml_df["clearable_units"] = np.maximum(0, ml_df["daily_sales_velocity"] * np.maximum(0, ml_df["days_to_expiry"]))
-    ml_df["is_at_risk_candidate"] = (ml_df["days_to_expiry"] <= 180) | (ml_df["quantity_on_hand"] > ml_df["clearable_units"])
+    
+    # Target unexpired near-expiry & velocity-deficit batches (DTE > 0)
+    ml_df["is_at_risk_candidate"] = (ml_df["days_to_expiry"] > 0) & ((ml_df["days_to_expiry"] <= 180) | (ml_df["quantity_on_hand"] > ml_df["clearable_units"]))
 
-    # Merge unit economics & sort by urgency (lowest DTE first)
+    # Merge unit economics & sort by urgency (lowest positive DTE first)
     at_risk_inv = ml_df[ml_df["is_at_risk_candidate"]].merge(
         df_econ[["product_id","daily_holding_cost_per_unit_usd","stockout_penalty_cost_per_unit_usd","certified_destruction_cost_per_unit_usd","secondary_liquidation_recovery_pct"]],
         on="product_id", how="left").dropna(subset=["daily_holding_cost_per_unit_usd"])
 
-    # If dataset has few batches <= 180d, take the lowest DTE batches in the system
+    # If dataset has few batches <= 180d, take the lowest unexpired DTE batches in the system
     if len(at_risk_inv) < 10:
-        at_risk_inv = ml_df.merge(
+        at_risk_inv = ml_df[ml_df["days_to_expiry"] > 0].merge(
             df_econ[["product_id","daily_holding_cost_per_unit_usd","stockout_penalty_cost_per_unit_usd","certified_destruction_cost_per_unit_usd","secondary_liquidation_recovery_pct"]],
             on="product_id", how="left").dropna(subset=["daily_holding_cost_per_unit_usd"])
 
@@ -1895,27 +1897,12 @@ elif selected_page == "⚖️ LP Cost Optimizer":
         lp_results = []
         for _, row in at_risk_inv.head(50).iterrows():
             Q = float(row["quantity_on_hand"])
-            dte = float(row["days_to_expiry"])
+            dte = max(1.0, float(row["days_to_expiry"]))
             h = float(row["daily_holding_cost_per_unit_usd"])
             d_c = float(row["certified_destruction_cost_per_unit_usd"])
             p = float(row["unit_price"])
             rec = float(row["secondary_liquidation_recovery_pct"])/100.0
             vel = max(float(row.get("daily_sales_velocity", 1.0)), 0.1)
-
-            if dte <= 0:
-                # Already Expired: mandatory disposal
-                lp_results.append({
-                    "product_id": row["product_id"],
-                    "warehouse_id": row.get("warehouse_id",""),
-                    "DTE": int(dte),
-                    "Qty": int(Q),
-                    "Dispatch": 0,
-                    "Transfer": 0,
-                    "Liquidate": 0,
-                    "Dispose": int(Q),
-                    "Net_Saving_USD": round(-d_c * Q, 2)
-                })
-                continue
 
             # Standard dispatch can take up to 100% of Q if market velocity allows
             max_dispatch = min(Q, vel * dte)
@@ -1932,6 +1919,8 @@ elif selected_page == "⚖️ LP Cost Optimizer":
             res = linprog(c, A_eq=A_eq, b_eq=b_eq, bounds=bounds, method="highs")
             if res.success:
                 x1, x2, x3, x4 = res.x
+                # Net savings = financial capital rescued by active channels minus disposal cost of any remainder
+                net_saved = (p - h * dte)*x1 + (p * 0.75 - h * dte * 0.5)*x2 + (p * rec)*x3 - (d_c + h * dte)*x4
                 lp_results.append({
                     "product_id": row["product_id"],
                     "warehouse_id": row.get("warehouse_id",""),
@@ -1941,7 +1930,7 @@ elif selected_page == "⚖️ LP Cost Optimizer":
                     "Transfer": round(x2),
                     "Liquidate": round(x3),
                     "Dispose": round(x4),
-                    "Net_Saving_USD": round(-res.fun, 2)
+                    "Net_Saving_USD": round(net_saved, 2)
                 })
 
     if lp_results:
