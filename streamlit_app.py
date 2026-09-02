@@ -2622,71 +2622,148 @@ elif selected_page == "⚖️ LP Cost Optimizer":
                 st.info("✅ All near-expiry inventory has either cleared or moved to mandatory quarantine. No active transfer or liquidation candidates detected at this time.")
             else:
                 _r_qty = _rescue_df["qty"].sum()
-                st.markdown(f"""
-                <div style="display:flex; justify-content:space-between; align-items:center; background:#0f172a; border:1px solid #1e293b; border-left:4px solid #10b981; border-radius:0.5rem; padding:0.8rem 1.2rem; margin-bottom:1rem; flex-wrap:wrap; gap:0.5rem;">
-                  <div>
-                    <span style="color:#6ee7b7; font-weight:700; font-size:0.95rem;">💡 Active Capital Preservation Pipeline</span>
-                    <div style="color:#94a3b8; font-size:0.8rem;">Inter-warehouse rebalancing, secondary market liquidation, promotional sales, and purchase order adjustments</div>
-                  </div>
-                  <div style="display:flex; gap:1.5rem; text-align:right;">
-                    <div>
-                      <div style="color:#6ee7b7; font-size:1.15rem; font-weight:700;">+{fmt_curr(_tot_r_val, compact=False, decimals=0)}</div>
-                      <div style="color:#64748b; font-size:0.72rem;">Total Rescuable Capital</div>
-                    </div>
-                    <div>
-                      <div style="color:#e2e8f0; font-size:1.15rem; font-weight:700;">{_r_qty:,}</div>
-                      <div style="color:#64748b; font-size:0.72rem;">Units Rebalanced</div>
-                    </div>
-                  </div>
-                </div>
-                """, unsafe_allow_html=True)
 
-                for _i, (_, _row) in enumerate(_rescue_df.head(8).iterrows()):
-                    _dl  = _row["days_left"]
-                    _val = _row["value_usd"]
-                    if _dl <= 10:
-                        _bc, _bg, _ul = "#ef4444", "rgba(127,29,29,0.25)", f"🔴  CRITICAL — {_dl} days to act"
-                    elif _dl <= 30:
-                        _bc, _bg, _ul = "#f59e0b", "rgba(120,53,15,0.25)", f"🟠  URGENT — {_dl} days to act"
-                    elif _dl <= 60:
-                        _bc, _bg, _ul = "#eab308", "rgba(113,63,18,0.20)", f"🟡  IMPORTANT — {_dl} days to act"
-                    else:
-                        _bc, _bg, _ul = "#10b981", "rgba(6,78,59,0.20)",   f"🟢  PLAN — {_dl} days"
-                    _vc  = "#6ee7b7" if _val >= 0 else "#fca5a5"
-                    _vt  = f"+{fmt_curr(_val, compact=False, decimals=0)}" if _val >= 0 \
-                           else f"−{fmt_curr(abs(_val), compact=False, decimals=0)}"
-                    _vl  = "Value Rescued" if _val >= 0 else "Write-off"
+                # 4 Channel Subsets
+                _ch_tr = _rescue_df[_rescue_df["action_type"] == "transfer"]
+                _ch_lq = _rescue_df[_rescue_df["action_type"] == "liquidate"]
+                _ch_po = _rescue_df[_rescue_df["action_type"] == "reduce_po"]
+                _ch_pr = _rescue_df[_rescue_df["action_type"] == "promote"]
 
+                # ── 4 CHANNEL SUMMARY TILES ──────────────────────────────────
+                st.markdown("<div style='font-size:0.9rem; font-weight:700; color:#e2e8f0; margin-bottom:0.6rem;'>🎯 Capital Recovery Strategy Breakdown:</div>", unsafe_allow_html=True)
+                _c1, _c2, _c3, _c4 = st.columns(4)
+                with _c1:
                     st.markdown(f"""
-                    <div style="background:{_bg};border-left:4px solid {_bc};
-                                padding:1rem 1.2rem;margin:0.5rem 0;border-radius:0.6rem;
-                                box-shadow:0 2px 12px rgba(0,0,0,0.35);">
-                      <div style="display:flex;justify-content:space-between;align-items:flex-start;
-                                  flex-wrap:wrap;gap:0.5rem;">
-                        <span style="color:{_bc};font-weight:bold;font-size:0.85rem;">{_ul}</span>
-                        <div style="text-align:right;">
-                          <span style="color:{_vc};font-size:1.45rem;font-weight:bold;">{_vt}</span>
-                          <span style="color:#64748b;font-size:0.75rem;margin-left:0.3rem;">{_vl}</span>
-                        </div>
-                      </div>
-                      <div style="color:white;font-size:1rem;font-weight:600;margin:0.45rem 0 0.3rem;">
-                        {_row['channel_icon']}&nbsp; {_row['action_plain']}
-                      </div>
-                      <div style="display:flex;flex-wrap:wrap;gap:1.5rem;color:#94a3b8;font-size:0.85rem;margin-bottom:0.5rem;">
-                        <span>💊 <b style="color:#e2e8f0;">{_row['Product'][:35]}</b></span>
-                        <span>📍 {_row['Location']}</span>
-                        <span>📅 Act by <b style="color:#e2e8f0;">{_row['act_by']}</b></span>
-                      </div>
-                      <div style="color:#93c5fd;font-size:0.82rem;border-top:1px solid rgba(255,255,255,0.06);padding-top:0.5rem;">
-                        💡&nbsp; <b>Expected Impact:</b>&nbsp; {_row['consequence']}
-                      </div>
+                    <div style="background:#0f172a; border:1px solid #1e293b; border-top:3px solid #3b82f6; border-radius:0.6rem; padding:0.9rem 1rem;">
+                      <div style="color:#94a3b8; font-size:0.75rem; text-transform:uppercase; font-weight:600;">🚚 Transfers</div>
+                      <div style="color:#60a5fa; font-size:1.3rem; font-weight:700; margin:0.25rem 0;">+{fmt_curr(_ch_tr['value_usd'].sum(), compact=True)}</div>
+                      <div style="color:#cbd5e1; font-size:0.75rem;">{len(_ch_tr):,} actions &bull; {_ch_tr['qty'].sum():,} units</div>
+                    </div>""", unsafe_allow_html=True)
+                with _c2:
+                    st.markdown(f"""
+                    <div style="background:#0f172a; border:1px solid #1e293b; border-top:3px solid #10b981; border-radius:0.6rem; padding:0.9rem 1rem;">
+                      <div style="color:#94a3b8; font-size:0.75rem; text-transform:uppercase; font-weight:600;">💼 Secondary Sales</div>
+                      <div style="color:#34d399; font-size:1.3rem; font-weight:700; margin:0.25rem 0;">+{fmt_curr(_ch_lq['value_usd'].sum(), compact=True)}</div>
+                      <div style="color:#cbd5e1; font-size:0.75rem;">{len(_ch_lq):,} actions &bull; {_ch_lq['qty'].sum():,} units</div>
+                    </div>""", unsafe_allow_html=True)
+                with _c3:
+                    st.markdown(f"""
+                    <div style="background:#0f172a; border:1px solid #1e293b; border-top:3px solid #f59e0b; border-radius:0.6rem; padding:0.9rem 1rem;">
+                      <div style="color:#94a3b8; font-size:0.75rem; text-transform:uppercase; font-weight:600;">🛒 PO Reductions</div>
+                      <div style="color:#fbbf24; font-size:1.3rem; font-weight:700; margin:0.25rem 0;">+{fmt_curr(_ch_po['value_usd'].sum(), compact=True)}</div>
+                      <div style="color:#cbd5e1; font-size:0.75rem;">{len(_ch_po):,} actions &bull; {_ch_po['qty'].sum():,} units</div>
+                    </div>""", unsafe_allow_html=True)
+                with _c4:
+                    st.markdown(f"""
+                    <div style="background:#0f172a; border:1px solid #1e293b; border-top:3px solid #a855f7; border-radius:0.6rem; padding:0.9rem 1rem;">
+                      <div style="color:#94a3b8; font-size:0.75rem; text-transform:uppercase; font-weight:600;">📢 Sales Drives</div>
+                      <div style="color:#c084fc; font-size:1.3rem; font-weight:700; margin:0.25rem 0;">+{fmt_curr(_ch_pr['value_usd'].sum(), compact=True)}</div>
+                      <div style="color:#cbd5e1; font-size:0.75rem;">{len(_ch_pr):,} actions &bull; {_ch_pr['qty'].sum():,} units</div>
                     </div>""", unsafe_allow_html=True)
 
-                if len(_rescue_df) > 8:
-                    with st.expander(f"View all {len(_rescue_df)} capital recovery actions ↓", expanded=False):
-                        _show = _rescue_df[["channel_icon","Product","Location","action_plain","Value_Rescue","act_by","days_left","consequence"]].copy()
-                        _show.columns = ["","Product","Location","Action Required","Value Impact","Act By","Days Left","Consequence / Benefit"]
-                        st.dataframe(_show.reset_index(drop=True), use_container_width=True, hide_index=True)
+                st.markdown("<div style='margin-top:0.8rem;'></div>", unsafe_allow_html=True)
+
+                # ── INTERACTIVE FILTER TOOLBAR ─────────────────────────────────
+                _f1, _f2, _f3 = st.columns([1.6, 1.2, 1.2])
+                with _f1:
+                    _ch_choice = st.selectbox(
+                        "Strategy Channel Filter:",
+                        ["All Recovery Strategies",
+                         f"🚚 Inter-Warehouse Transfers ({len(_ch_tr)})",
+                         f"💼 Secondary Liquidation ({len(_ch_lq)})",
+                         f"🛒 Purchase Order Trims ({len(_ch_po)})",
+                         f"📢 Commercial Sales Drives ({len(_ch_pr)})"],
+                        key="lp_ch_select"
+                    )
+                with _f2:
+                    _wh_list = ["All Facilities"] + sorted(list(_rescue_df["Location"].astype(str).unique()))
+                    _wh_choice = st.selectbox("Facility / Warehouse:", _wh_list, key="lp_wh_select")
+                with _f3:
+                    _kw_search = st.text_input("🔍 Search Drug or SKU:", "", key="lp_search_box", placeholder="Filter by product name...")
+
+                # Apply Filters
+                _filt = _rescue_df.copy()
+                if "Transfers" in _ch_choice:
+                    _filt = _filt[_filt["action_type"] == "transfer"]
+                elif "Liquidation" in _ch_choice:
+                    _filt = _filt[_filt["action_type"] == "liquidate"]
+                elif "Purchase Order" in _ch_choice:
+                    _filt = _filt[_filt["action_type"] == "reduce_po"]
+                elif "Sales Drives" in _ch_choice:
+                    _filt = _filt[_filt["action_type"] == "promote"]
+
+                if _wh_choice != "All Facilities":
+                    _filt = _filt[_filt["Location"].astype(str).str.contains(_wh_choice, case=False, na=False)]
+
+                if _kw_search.strip():
+                    _kw = _kw_search.strip().lower()
+                    _filt = _filt[
+                        _filt["Product"].astype(str).str.lower().str.contains(_kw, na=False) |
+                        _filt["action_plain"].astype(str).str.lower().str.contains(_kw, na=False)
+                    ]
+
+                st.markdown("<div style='margin-top:0.6rem;'></div>", unsafe_allow_html=True)
+
+                # ── EXECUTIVE SPOTLIGHT (TOP 3 DECISIONS IN 3 COLUMNS) ────────
+                if len(_filt) > 0:
+                    st.markdown("<div style='font-size:0.9rem; font-weight:700; color:#e2e8f0; margin-bottom:0.5rem;'>⭐ Executive High-Impact Spotlight (Top Opportunities by Rescued Value)</div>", unsafe_allow_html=True)
+                    # Pick top 3 by financial magnitude
+                    _top3 = _filt.sort_values("value_usd", ascending=False).head(3)
+                    _sp_cols = st.columns(min(3, len(_top3)))
+                    for _idx, (_, _srow) in enumerate(_top3.iterrows()):
+                        with _sp_cols[_idx % len(_sp_cols)]:
+                            _dl = _srow["days_left"]
+                            _v = _srow["value_usd"]
+                            _badge_c = "#ef4444" if _dl <= 10 else ("#f59e0b" if _dl <= 30 else "#10b981")
+                            _badge_t = f"{_dl}d left" if _dl > 0 else "Today"
+                            st.markdown(f"""
+                            <div style="background:#0f172a; border:1px solid #1e293b; border-top:3px solid #10b981;
+                                        border-radius:0.65rem; padding:0.9rem 1rem; height:100%; display:flex; flex-direction:column; justify-content:space-between; box-shadow:0 4px 12px rgba(0,0,0,0.25);">
+                              <div>
+                                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.4rem;">
+                                  <span style="font-size:0.8rem; font-weight:700; color:#94a3b8;">{_srow['channel_icon']} {_srow['action_type'].upper()}</span>
+                                  <span style="background:rgba(245,158,11,0.15); color:{_badge_c}; font-size:0.72rem; font-weight:700; padding:0.15rem 0.5rem; border-radius:0.3rem;">{_badge_t}</span>
+                                </div>
+                                <div style="color:#6ee7b7; font-size:1.35rem; font-weight:800;">+{fmt_curr(_v, compact=False, decimals=0)}</div>
+                                <div style="color:#f1f5f9; font-weight:600; font-size:0.88rem; margin:0.3rem 0 0.2rem 0; line-height:1.3;">{_srow['Product'][:38]}</div>
+                                <div style="color:#94a3b8; font-size:0.76rem; margin-bottom:0.4rem;">📍 {_srow['Location']} &bull; 🗓 {_srow['act_by']}</div>
+                              </div>
+                              <div style="border-top:1px solid rgba(255,255,255,0.06); padding-top:0.4rem; color:#cbd5e1; font-size:0.78rem;">
+                                <b>Action:</b> {_srow['action_plain'][:55]}...
+                              </div>
+                            </div>
+                            """, unsafe_allow_html=True)
+
+                    st.markdown("<div style='margin-top:1.2rem;'></div>", unsafe_allow_html=True)
+
+                    # ── STRUCTURED MASTER ACTION REGISTER (DATA GRID) ─────────
+                    st.markdown(f"<div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:0.4rem;'>"
+                                f"<span style='font-size:0.9rem; font-weight:700; color:#e2e8f0;'>📑 Master Action Register ({len(_filt):,} Matching Decisions)</span>"
+                                f"<span style='color:#94a3b8; font-size:0.78rem;'>Sortable &bull; Filterable &bull; Click column header to sort</span>"
+                                f"</div>", unsafe_allow_html=True)
+
+                    _grid = _filt[["channel_icon", "action_type", "Product", "Location", "qty", "value_usd", "act_by", "days_left", "action_plain"]].copy()
+                    _grid["Strategy"] = _grid["channel_icon"] + " " + _grid["action_type"].str.upper()
+                    _grid["Rescued Value"] = _grid["value_usd"].apply(lambda v: f"+{fmt_curr(v, compact=False, decimals=0)}")
+                    _grid["Volume"] = _grid["qty"].apply(lambda q: f"{q:,} units")
+                    _grid["Days Left"] = _grid["days_left"].apply(lambda d: f"{d} days")
+                    _out_df = _grid[["Strategy", "Product", "Location", "Volume", "Rescued Value", "act_by", "Days Left", "action_plain"]].copy()
+                    _out_df.columns = ["Strategy Channel", "Product / Drug Name", "Facility / Route", "Volume", "Value Rescued", "Deadline", "Days Left", "Operational Action"]
+
+                    st.dataframe(_out_df.reset_index(drop=True), use_container_width=True, hide_index=True)
+
+                    _c_dl, _ = st.columns([1.5, 1])
+                    with _c_dl:
+                        _csv_plan = _out_df.to_csv(index=False).encode('utf-8')
+                        st.download_button(
+                            label=f"📥 Download Filtered Action Register ({len(_filt):,} items to CSV)",
+                            data=_csv_plan,
+                            file_name=f"PharmaTrace_Recovery_Actions_{_TODAY.strftime('%Y%m%d')}.csv",
+                            mime="text/csv",
+                            use_container_width=True
+                        )
+                else:
+                    st.warning("⚠️ No decisions match the selected filter criteria. Please clear or broaden your search.")
 
         # ── TAB 2: CERTIFIED DESTRUCTION MANIFEST (CONSOLIDATED) ──────────────
         with _tab_des:
@@ -2785,8 +2862,9 @@ elif selected_page == "⚖️ LP Cost Optimizer":
                     </div>
                     """, unsafe_allow_html=True)
 
-                with st.expander("🔍 Inspect individual batch quarantine cards (Auditor Drilldown)", expanded=False):
-                    for _i, (_, _row) in enumerate(_destroy_df.iterrows()):
+                with st.expander("🔍 Inspect sample batch quarantine cards (Auditor Drilldown)", expanded=False):
+                    st.caption(f"Displaying top 20 of {len(_destroy_df):,} quarantined batches:")
+                    for _i, (_, _row) in enumerate(_destroy_df.head(20).iterrows()):
                         st.markdown(f"""
                         <div style="background:rgba(127,29,29,0.2); border-left:3px solid #ef4444; padding:0.7rem 1rem; margin:0.4rem 0; border-radius:0.4rem;">
                           <div style="display:flex; justify-content:space-between;">
