@@ -2554,7 +2554,7 @@ elif selected_page == "⚖️ LP Cost Optimizer":
             </div>""", unsafe_allow_html=True)
         with _k3:
             if len(_rescue_df) > 0:
-                _top1_rec = _rescue_df.iloc[0]
+                _top1_rec = _rescue_df.sort_values("value_usd", ascending=False).iloc[0]
                 _k3_title = "Top Capital Rescue Action"
                 _k3_val = _top1_rec['act_by']
                 _k3_sub = f"{_top1_rec['channel_icon']} {_top1_rec['Product'][:28]} (+{fmt_curr(_top1_rec['value_usd'], compact=True)})"
@@ -2737,18 +2737,52 @@ elif selected_page == "⚖️ LP Cost Optimizer":
                     st.markdown("<div style='margin-top:1.2rem;'></div>", unsafe_allow_html=True)
 
                     # ── STRUCTURED MASTER ACTION REGISTER (DATA GRID) ─────────
-                    st.markdown(f"<div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:0.4rem;'>"
+                    st.markdown("<div style='margin-top:1.2rem;'></div>", unsafe_allow_html=True)
+
+                    _s_c1, _s_c2 = st.columns([1.6, 1.2])
+                    with _s_c1:
+                        _sort_mode = st.radio(
+                            "Prioritize / Sort Queue By:",
+                            ["💰 Highest Value Rescued ($ ↓)", "⏰ Most Urgent Deadline First (Days Left ↑)", "🎯 Balanced Priority Index (Cost of Delay)"],
+                            horizontal=True,
+                            key="lp_sort_mode_select"
+                        )
+                    with _s_c2:
+                        st.markdown("""
+                        <div style='background:rgba(15,23,42,0.5); border:1px solid #334155; border-radius:0.4rem; padding:0.4rem 0.7rem; font-size:0.75rem; color:#94a3b8; margin-top:0.3rem;'>
+                          💡 <b>Rule of Thumb:</b> <em>Deadline</em> dictates <b>urgency</b> (irreversible cliff); <em>Value Rescued</em> dictates <b>financial magnitude</b>.
+                        </div>
+                        """, unsafe_allow_html=True)
+
+                    if "Highest Value" in _sort_mode:
+                        _filt = _filt.sort_values(by="value_usd", ascending=False)
+                    elif "Most Urgent" in _sort_mode:
+                        _filt = _filt.sort_values(by=["days_left", "value_usd"], ascending=[True, False])
+                    else: # Balanced Priority Index (Cost of Delay = Value / Days Left)
+                        _filt["_cod"] = _filt["value_usd"] / (_filt["days_left"].clip(lower=1))
+                        _filt = _filt.sort_values(by="_cod", ascending=False)
+
+                    st.markdown(f"<div style='display:flex; justify-content:space-between; align-items:center; margin:0.6rem 0 0.4rem 0;'>"
                                 f"<span style='font-size:0.9rem; font-weight:700; color:#e2e8f0;'>📑 Master Action Register ({len(_filt):,} Matching Decisions)</span>"
-                                f"<span style='color:#94a3b8; font-size:0.78rem;'>Sortable &bull; Filterable &bull; Click column header to sort</span>"
+                                f"<span style='color:#94a3b8; font-size:0.78rem;'>Sorted by: <b>{_sort_mode}</b> &bull; Click any header to re-sort</span>"
                                 f"</div>", unsafe_allow_html=True)
 
                     _grid = _filt[["channel_icon", "action_type", "Product", "Location", "qty", "value_usd", "act_by", "days_left", "action_plain"]].copy()
+
+                    def _urgency_badge(dl):
+                        if dl <= 10: return "🔴 CRITICAL (≤10d)"
+                        elif dl <= 30: return "🟠 URGENT (≤30d)"
+                        elif dl <= 60: return "🟡 IMPORTANT (≤60d)"
+                        return "🟢 PLANNED (>60d)"
+
+                    _grid["Urgency"] = _grid["days_left"].apply(_urgency_badge)
                     _grid["Strategy"] = _grid["channel_icon"] + " " + _grid["action_type"].str.upper()
                     _grid["Rescued Value"] = _grid["value_usd"].apply(lambda v: f"+{fmt_curr(v, compact=False, decimals=0)}")
                     _grid["Volume"] = _grid["qty"].apply(lambda q: f"{q:,} units")
                     _grid["Days Left"] = _grid["days_left"].apply(lambda d: f"{d} days")
-                    _out_df = _grid[["Strategy", "Product", "Location", "Volume", "Rescued Value", "act_by", "Days Left", "action_plain"]].copy()
-                    _out_df.columns = ["Strategy Channel", "Product / Drug Name", "Facility / Route", "Volume", "Value Rescued", "Deadline", "Days Left", "Operational Action"]
+                    
+                    _out_df = _grid[["Urgency", "Strategy", "Product", "Location", "Volume", "Rescued Value", "act_by", "Days Left", "action_plain"]].copy()
+                    _out_df.columns = ["Urgency Status", "Strategy Channel", "Product / Drug Name", "Facility / Route", "Volume", "Value Rescued", "Deadline", "Days Left", "Operational Action"]
 
                     st.dataframe(_out_df.reset_index(drop=True), use_container_width=True, hide_index=True)
 
@@ -2891,7 +2925,7 @@ elif selected_page == "⚖️ LP Cost Optimizer":
         st.markdown("<br>", unsafe_allow_html=True)
 
         # ── EXECUTIVE SUMMARY PARAGRAPH & AUDIT BRIEF ────────────────────────
-        _top_action = _rescue_df.iloc[0] if len(_rescue_df) > 0 else road.iloc[0]
+        _top_action = _rescue_df.sort_values("value_usd", ascending=False).iloc[0] if len(_rescue_df) > 0 else road.iloc[0]
         _top_val = _top_action['value_usd']
         _top_action_str = f"which rescues <b>{fmt_curr(_top_val)}</b>" if _top_val >= 0 else f"booking an unavoidable write-off of <b>{fmt_curr(abs(_top_val))}</b> to prevent regulatory non-compliance"
         
