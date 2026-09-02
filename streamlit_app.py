@@ -983,18 +983,19 @@ if selected_page == "🏠 Home & KPI Summary":
     _worst_dc_name = _dc_name(_worst_dc_id)
     _worst_dc_atrisk_val = _at_risk_by_dc.iloc[0] if not _at_risk_by_dc.empty else at_risk_value
     _worst_dc_rescuable = _worst_dc_atrisk_val * 0.65
+    _worst_dc_unavoidable = _worst_dc_atrisk_val - _worst_dc_rescuable
 
     st.markdown(f"""
     <div style='background:rgba(127,29,29,0.2); border-left:4px solid #ef4444; padding:0.9rem 1.2rem; margin-bottom:0.6rem; border-radius:0.5rem;'>
       <div style='display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap;'>
         <span style='color:#ef4444; font-weight:bold; font-size:0.85rem;'>🔴 PRIORITY 1 — IMMEDIATE DISPATCH &amp; TRANSFER</span>
-        <span style='color:#6ee7b7; font-weight:bold; font-size:1.1rem;'>+{fmt_curr(_worst_dc_rescuable)} Rescuable</span>
+        <span style='color:#6ee7b7; font-weight:bold; font-size:1.1rem;'>+{fmt_curr(_worst_dc_rescuable)} Rescuable <span style='font-size:0.75rem; color:#94a3b8; font-weight:normal;'>(65% of {fmt_curr(_worst_dc_atrisk_val)} at-risk)</span></span>
       </div>
       <div style='color:white; font-weight:600; font-size:0.95rem; margin:0.3rem 0;'>
         🚚 Rebalance at-risk inventory from {_worst_dc_name} to high-velocity distribution centers
       </div>
       <div style='color:#94a3b8; font-size:0.82rem;'>
-        <b>Action:</b> Authorize inter-warehouse transfers in <b>⚖️ LP Cost Optimizer</b> within 48 hours to avoid holding depreciation.
+        <b>Action:</b> Authorize inter-warehouse transfers in <b>⚖️ LP Cost Optimizer</b> within 48 hours to salvage <b>{fmt_curr(_worst_dc_rescuable)}</b> before <b>{fmt_curr(_worst_dc_unavoidable)}</b> expires into unavoidable write-off.
       </div>
     </div>
 
