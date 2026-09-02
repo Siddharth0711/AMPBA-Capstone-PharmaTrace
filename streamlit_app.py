@@ -2440,7 +2440,10 @@ elif selected_page == "⚖️ LP Cost Optimizer":
                         "consequence": f"Recovery drops to 0% after expiry. Window closes {_dl.strftime('%b %d')}.",
                         "channel_icon": "💼"})
 
-            if at_risk > 100 and min_dte > 90:
+            # Commercial Sales Promotion / Hospital Drive:
+            # Chronic drugs require min_dte > 120d (90d therapy + 30d safety margin); Acute drugs require min_dte > 90d
+            _min_promo_dte = 120 if is_chro else 90
+            if at_risk > 100 and min_dte > _min_promo_dte:
                 _boost = round(min(200, (at_risk/max(min_dte,1))/max(vel,0.1)*100))
                 if _boost >= 10:
                     actions.append({
@@ -2452,8 +2455,10 @@ elif selected_page == "⚖️ LP Cost Optimizer":
                         "consequence": f"Units expire with zero revenue. Requires {_boost}% velocity improvement.",
                         "channel_icon": "📢"})
 
+            # Mandatory Certified Destruction (FDA 21 CFR §211.160 / Schedule M):
+            # Pre-expiry quarantine & destruction for stock that cannot clear within 30 days (or <= 7 days immediate lock)
             _nc = max(0, Q - vel*max(min_dte, 0))
-            if (_nc > 20 and min_dte <= 30) or (min_dte <= 7 and Q > 0):
+            if (_nc > 20 and min_dte <= 30) or (min_dte <= 7 and Q > 0) or (is_chro and min_dte <= 45 and _nc > 10):
                 _dq = _nc if min_dte > 7 else Q
                 _dl = _TODAY + pd.Timedelta(days=max(1, int(min_dte)-3))
                 actions.append({
@@ -2462,7 +2467,7 @@ elif selected_page == "⚖️ LP Cost Optimizer":
                     "qty": int(_dq), "value_usd": -round(_dq*p),
                     "act_by": _dl.strftime("%b %d, %Y"),
                     "action_plain": f"Book certified destruction for {int(_dq):,} units",
-                    "consequence": f"{'⚠️ REGULATORY RISK — ' if min_dte<=7 else ''}Holding expired stock violates GMP/GDP. Per-day cost accumulates.",
+                    "consequence": f"{'⚠️ REGULATORY AUDIT RISK — ' if min_dte<=7 else ''}Holding short-dated stock (<30d) exposes firm to patient liability and GMP citations.",
                     "channel_icon": "🗑️"})
 
     # ── DISPLAY ───────────────────────────────────────────────────────────────
