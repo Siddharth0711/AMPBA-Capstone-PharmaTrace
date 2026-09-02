@@ -1953,6 +1953,9 @@ elif selected_page == "📈 Demand & Seasonality":
         u_scale = 1e6
         u_unit = "Millions"
 
+    monthly_agg = df_dem_f.groupby("year_month").agg(demanded=("quantity_demanded_units","sum"), dispatched=("quantity_dispatched_units","sum")).reset_index().sort_values("year_month")
+    monthly_agg["fill_rate"] = (monthly_agg["dispatched"] / monthly_agg["demanded"].replace(0,1) * 100).clip(0, 100)
+
     # ── ADVANCED STATISTICAL FORECASTING & SEASONALITY ENGINE ──────────────────
     # Classical Models Benchmarking: SARIMA, Holt-Winters ETS, and Additive Decomposition
     y_vals = monthly_agg["demanded"].values
