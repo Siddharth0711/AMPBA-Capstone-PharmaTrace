@@ -2403,12 +2403,14 @@ elif selected_page == "⚖️ LP Cost Optimizer":
                     "consequence": f"Excess stock deepens — adds {fmt_curr(_av, compact=False, decimals=0)} to future write-off risk",
                     "channel_icon": "🛒"})
 
-            if at_risk > 50 and min_dte > 14:
+            # Inter-Warehouse Transfer: Only viable for stock with sufficient runway (DTE >= 60d)
+            # Transferring stock with DTE < 60d incurs freight waste because destination cannot clear it before expiry
+            if at_risk > 50 and min_dte >= 60:
                 _bwh, _bnet, _bqty, _btr, _bfr = None, 0.0, 0, 5, 0.80
                 for _twh, _twv in wh_avg_vel.items():
                     if _twh == wid or _twv <= vel*1.3: continue
                     _tr, _fc2 = _freight(wid, _twh)
-                    if min_dte <= _tr+5: continue
+                    if min_dte <= _tr+30: continue
                     _tq = min(at_risk*0.60, Q*0.50); _res = min(_tq, _twv*(min_dte-_tr))
                     _net = _res*p*0.90 - _tq*_fc2 - _tq*h*_tr
                     if _net > _bnet: _bnet=_net; _bwh=_twh; _bqty=int(_tq); _btr=_tr; _bfr=_fc2
