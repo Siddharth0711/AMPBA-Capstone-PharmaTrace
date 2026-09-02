@@ -1857,20 +1857,25 @@ elif selected_page == "🌡️ Expiry Risk Heatmap":
     fig_exp, axes_exp = plt.subplots(1, 2, figsize=(20, 5.5))
     fig_exp.patch.set_facecolor("#0f1117")
 
-    # Left: Units Matrix
+    # Left: Units Composition by Risk Tier (Proper Risk Color Palette)
     ax_e1 = axes_exp[0]
     pivot_risk = inventory.pivot_table(values="quantity_on_hand", index="warehouse_id", columns="expiry_risk", aggfunc="sum", fill_value=0)
     col_order = [c for c in RISK_ORDER if c in pivot_risk.columns]
-    sns.heatmap(pivot_risk[col_order]/1000, annot=True, fmt=".1f", cmap=LinearSegmentedColormap.from_list("risk",["#10b981","#f59e0b","#ef4444"]), ax=ax_e1, cbar_kws={"label":"Units ('000)"}, linewidths=0.5, linecolor="#0f1117")
-    ax_e1.set_title("Units at Risk by DC ('000 units)", color="white", fontsize=11)
-    ax_e1.tick_params(colors="#94a3b8", axis="x", rotation=30)
-    ax_e1.tick_params(colors="#94a3b8", axis="y")
+    pivot_k = pivot_risk[col_order] / 1000.0
 
-    # Right: Valuation Exposure Bar
+    _bar_colors = [RISK_COLORS.get(c, "#888") for c in col_order]
+    pivot_k.plot(kind="barh", stacked=True, color=_bar_colors, ax=ax_e1, edgecolor="#0f1117", alpha=0.92)
+    ax_e1.set_title("Stock Composition by Expiry Risk Tier ('000 units)", color="white", fontsize=11)
+    ax_e1.set_xlabel("Units ('000)", color="#94a3b8")
+    ax_e1.set_facecolor("#0f1117"); ax_e1.tick_params(colors="#94a3b8")
+    ax_e1.legend(title="Risk Tier", fontsize=8, framealpha=0, labelcolor="#cbd5e1", bbox_to_anchor=(1.02, 1), loc="upper left")
+    for sp in ax_e1.spines.values(): sp.set_edgecolor("#1e293b")
+
+    # Right: Valuation Exposure Bar (Ranked by At-Risk Dollar Value)
     ax_e2 = axes_exp[1]
     _rv_plot = risk_val_by_dc.values/1e3 if not is_india else risk_val_by_dc.values * USD_TO_INR / 1e5
-    ax_e2.barh(risk_val_by_dc.index, _rv_plot, color="#ef4444", alpha=0.85, edgecolor="#0f1117")
-    ax_e2.set_title(f"At-Risk Value by DC ({curr_code} {'Lakhs' if is_india else 'K'})", color="white", fontsize=11)
+    ax_e2.barh(risk_val_by_dc.index, _rv_plot, color="#ef4444", alpha=0.88, edgecolor="#0f1117")
+    ax_e2.set_title(f"At-Risk Capital Exposure by DC ({curr_code} {'Lakhs' if is_india else 'K'})", color="white", fontsize=11)
     ax_e2.set_xlabel(f"Exposed Capital ({curr_code})", color="#94a3b8")
     ax_e2.set_facecolor("#0f1117"); ax_e2.tick_params(colors="#94a3b8")
     for bar, v in zip(ax_e2.patches, risk_val_by_dc.values):
