@@ -1036,9 +1036,59 @@ if selected_page == "🏠 Home & KPI Summary":
     </div>
     """, unsafe_allow_html=True)
 
-    # ── 5. DETAILED AUDIT DRAWER (EXPLICIT, NON-AMBIGUOUS COLUMNS) ───────────
+    # ── 5. DETAILED EXECUTIVE ACTION REGISTERS & AUDIT DRAWERS ───────────────
+    
+    # ── Chronic Overstock SKU Register (Action List for Priority 3) ──────────
+    _p_name_map = dict(zip(products["product_id"], products.get("generic_name", products.get("product_name", products["product_id"])))) if not products.empty else {}
+    
+    # Compute SKU-level metrics
+    _sku_grp = inventory.groupby("product_id").agg(
+        Total_Units=("quantity_on_hand", "sum"),
+        Total_Value=("inventory_value_usd", "sum"),
+        At_Risk_Value=("inventory_value_usd", lambda x: x[inventory.loc[x.index, "expiry_risk"].isin(["EXPIRED","CRITICAL (<30d)","HIGH (30-90d)"])].sum()),
+        DC_Count=("warehouse_id", "nunique")
+    ).reset_index()
+
+    _sku_grp["Generic_Name"] = _sku_grp["product_id"].map(_p_name_map).fillna(_sku_grp["product_id"])
+    _sku_grp["Monthly_Demand"] = _sku_grp["product_id"].map(_sku_dem).fillna(_sku_grp["Total_Units"]/6.0)
+    _sku_grp["Months_of_Supply"] = (_sku_grp["Total_Units"] / _sku_grp["Monthly_Demand"].replace(0, 1)).round(1)
+    
+    # Sort by Months of Supply & Trapped Value to isolate the Chronic Overstock SKUs
+    _overstock_skus_df = _sku_grp.sort_values(by=["Months_of_Supply", "Total_Value"], ascending=[False, False]).head(true_overstock_skus_count).reset_index(drop=True)
+    
+    with st.expander(f"🛒 Priority 3 Action Register: {true_overstock_skus_count} Chronic Overstock SKUs (Purchase Order Freeze List)", expanded=True):
+        st.markdown(f"The following **{true_overstock_skus_count} high-exposure products** have accumulated excessive inventory exceeding 9–15 months of national demand. **Recommended Action:** Place an immediate hold on supplier POs and manufacturing batch releases until stock normalizes to &lt;6 months of supply.")
+        
+        overstock_table_rows = []
+        for _, sr in _overstock_skus_df.iterrows():
+            mos = float(sr["Months_of_Supply"])
+            overstock_table_rows.append({
+                "SKU Code": sr["product_id"],
+                "Drug / Generic Name": sr["Generic_Name"],
+                "National Stock Units": f"{int(sr['Total_Units']):,}",
+                f"Trapped Capital ({curr_code})": fmt_curr(sr["Total_Value"], compact=False, decimals=0),
+                f"At-Risk Expiry ({curr_code})": fmt_curr(sr["At_Risk_Value"], compact=False, decimals=0),
+                "Monthly Burn Rate": f"{int(sr['Monthly_Demand']):,} units/mo",
+                "Supply Coverage": f"🔴 {mos:.1f} Months",
+                "Mandated Action": "🛑 FREEZE PURCHASE ORDERS & PRODUCTION" if mos >= 9.0 else "🟡 SLOW PROCUREMENT"
+            })
+            
+        df_show_overstock = pd.DataFrame(overstock_table_rows)
+        st.dataframe(df_show_overstock, use_container_width=True, hide_index=True)
+        
+        c_po1, c_po2 = st.columns([1, 2])
+        with c_po1:
+            csv_po = df_show_overstock.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                label="📥 Export PO Freeze List (CSV)",
+                data=csv_po,
+                file_name=f"PO_Freeze_Action_List_{datetime.now().strftime('%Y%m%d')}.csv",
+                mime="text/csv",
+                help="Export list of overstocked products for procurement and manufacturing management"
+            )
+
+    # ── Distribution Center Snapshot & Capacity Audit ─────────────────────────
     with st.expander("🔍 Network Distribution Center Snapshot & Capacity Audit (Operational Deep-Dive)", expanded=False):
-        # Aggregate with clear distinct columns for Total Value vs At-Risk Value
         _dc_total = inventory.groupby("warehouse_id").agg(
             Products=("product_id","nunique"),
             Total_Units=("quantity_on_hand","sum"),
@@ -1050,7 +1100,6 @@ if selected_page == "🏠 Home & KPI Summary":
         )
         summary = _dc_total.join(_dc_risk).fillna(0).reset_index()
 
-        # Capacity Utilization - realistic physical storage bounds
         if "capacity_units" in warehouses.columns:
             wh_cap_map = dict(zip(warehouses["warehouse_id"], warehouses["capacity_units"]))
             summary["capacity_units"] = summary["warehouse_id"].map(wh_cap_map).fillna(2500000)
@@ -1059,7 +1108,6 @@ if selected_page == "🏠 Home & KPI Summary":
         else:
             summary["Storage_Util_%"] = 82.5
 
-        # Construct clean summary table using dictionary to prevent index alignment issues
         table_rows = []
         for _, r in summary.iterrows():
             wid = r["warehouse_id"]
@@ -1078,7 +1126,6 @@ if selected_page == "🏠 Home & KPI Summary":
 
         summary_show = pd.DataFrame(table_rows).sort_values("_raw_risk_val", ascending=False).drop(columns=["_raw_risk_val"]).reset_index(drop=True)
         st.dataframe(summary_show, use_container_width=True, hide_index=True)
-
 # ─────────────────────────────────────────────────────────────────────────────
 # PAGE: INVENTORY OVERVIEW
 # ─────────────────────────────────────────────────────────────────────────────
