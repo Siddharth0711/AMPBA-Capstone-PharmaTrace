@@ -2310,14 +2310,19 @@ elif selected_page == "⚖️ LP Cost Optimizer":
         inv_lp["is_chronic"] = False
 
     # ── SKU-WH AGGREGATION ────────────────────────────────────────────────────
+    inv_lp_sorted = inv_lp.sort_values("days_to_expiry", ascending=True)
     _g = {"total_qty":("quantity_on_hand","sum"),"min_dte":("days_to_expiry","min"),
           "wt_dte":("days_to_expiry","mean"),"unit_price":("unit_price","mean"),
           "daily_velocity":("daily_velocity","mean"),"inv_value":("inventory_value_usd","sum"),
           "is_chronic":("is_chronic","first")}
+    if "fp_batch_id" in inv_lp.columns:
+        _g["batch_id"] = ("fp_batch_id", "first")
+    elif "batch_id" in inv_lp.columns:
+        _g["batch_id"] = ("batch_id", "first")
     if "pharm_class"  in inv_lp.columns: _g["pharm_class"]  = ("pharm_class","first")
     if "generic_name" in inv_lp.columns: _g["generic_name"] = ("generic_name","first")
 
-    skuwh = (inv_lp[inv_lp["days_to_expiry"] > 0]
+    skuwh = (inv_lp_sorted[inv_lp_sorted["days_to_expiry"] > 0]
              .groupby(["product_id","warehouse_id"]).agg(**_g).reset_index())
 
     _ec = [c for c in ["product_id","daily_holding_cost_per_unit_usd",
@@ -2394,6 +2399,8 @@ elif selected_page == "⚖️ LP Cost Optimizer":
             rec=float(row["secondary_liquidation_recovery_pct"])/100.0; eoq=float(row["economic_order_quantity_units"])
             vel=float(row["daily_velocity"]); at_risk=float(row["at_risk_qty"]); inv_val=float(row["inv_value"])
             over_r=float(row.get("sku_overstock_ratio",1.0)); is_chro=bool(row.get("is_chronic",False))
+            _rbid = row.get("batch_id", "")
+            _bid = str(_rbid) if pd.notna(_rbid) and str(_rbid).strip() and str(_rbid) != "nan" else f"LOT-{str(pid)[-4:]}-{str(wid)[-2:]}"
 
             if over_r > 1.5:
                 _po = min(max(0, Q - row.get("sku_6m_demand", Q*0.8)), eoq)
@@ -2401,6 +2408,7 @@ elif selected_page == "⚖️ LP Cost Optimizer":
                 actions.append({
                     "priority_score": round(0.4 + min(1.0,(over_r-1.5)/2.0)*0.4, 2),
                     "product_id": pid, "warehouse_id": wid, "action_type": "reduce_po",
+                    "batch_id": _bid,
                     "qty": int(_po), "value_usd": round(_av),
                     "act_by": (_TODAY + pd.Timedelta(days=14)).strftime("%b %d, %Y"),
                     "action_plain": f"Reduce next purchase order by {int(_po):,} units",
@@ -2424,6 +2432,7 @@ elif selected_page == "⚖️ LP Cost Optimizer":
                     actions.append({
                         "priority_score": round(min(0.95, 0.55+_bnet/max(inv_val,1)*0.4), 2),
                         "product_id": pid, "warehouse_id": f"{wid}→{_bwh}", "action_type": "transfer",
+                        "batch_id": _bid,
                         "qty": _bqty, "value_usd": round(_bnet),
                         "act_by": _dl.strftime("%b %d, %Y"),
                         "action_plain": f"Transfer {_bqty:,} units — {_wid_city} → {_bwh_city}",
@@ -2438,6 +2447,7 @@ elif selected_page == "⚖️ LP Cost Optimizer":
                     actions.append({
                         "priority_score": round(0.45+max(0,1-min_dte/180)*0.45, 2),
                         "product_id": pid, "warehouse_id": wid, "action_type": "liquidate",
+                        "batch_id": _bid,
                         "qty": int(_lq), "value_usd": round(_net),
                         "act_by": _dl.strftime("%b %d, %Y"),
                         "action_plain": f"Contact secondary buyer — sell {int(_lq):,} units at {rec*100:.0f}% recovery",
@@ -2453,6 +2463,7 @@ elif selected_page == "⚖️ LP Cost Optimizer":
                     actions.append({
                         "priority_score": round(0.35+min(1,_boost/200)*0.30, 2),
                         "product_id": pid, "warehouse_id": wid, "action_type": "promote",
+                        "batch_id": _bid,
                         "qty": int(at_risk), "value_usd": round(at_risk*p*0.80),
                         "act_by": (_TODAY + pd.Timedelta(days=14)).strftime("%b %d, %Y"),
                         "action_plain": f"Launch sales drive — clear {int(at_risk):,} units before expiry",
@@ -2468,6 +2479,7 @@ elif selected_page == "⚖️ LP Cost Optimizer":
                 actions.append({
                     "priority_score": round(min(0.99, 0.65+(1.0-min_dte/60.0)*0.34), 2),
                     "product_id": pid, "warehouse_id": wid, "action_type": "destroy",
+                    "batch_id": _bid,
                     "qty": int(_dq), "value_usd": -round(_dq*p),
                     "act_by": _dl.strftime("%b %d, %Y"),
                     "action_plain": f"Book certified destruction for {int(_dq):,} units",
@@ -2767,7 +2779,7 @@ elif selected_page == "⚖️ LP Cost Optimizer":
                                 f"<span style='color:#94a3b8; font-size:0.78rem;'>Sorted by: <b>{_sort_mode}</b> &bull; Click any header to re-sort</span>"
                                 f"</div>", unsafe_allow_html=True)
 
-                    _grid = _filt[["channel_icon", "action_type", "Product", "Location", "qty", "value_usd", "act_by", "days_left", "action_plain"]].copy()
+                    _grid = _filt[["channel_icon", "action_type", "batch_id", "Product", "Location", "qty", "value_usd", "act_by", "days_left", "action_plain"]].copy()
 
                     def _urgency_badge(dl):
                         if dl <= 10: return "🔴 CRITICAL (≤10d)"
@@ -2781,8 +2793,8 @@ elif selected_page == "⚖️ LP Cost Optimizer":
                     _grid["Volume"] = _grid["qty"].apply(lambda q: f"{q:,} units")
                     _grid["Days Left"] = _grid["days_left"].apply(lambda d: f"{d} days")
                     
-                    _out_df = _grid[["Urgency", "Strategy", "Product", "Location", "Volume", "Rescued Value", "act_by", "Days Left", "action_plain"]].copy()
-                    _out_df.columns = ["Urgency Status", "Strategy Channel", "Product / Drug Name", "Facility / Route", "Volume", "Value Rescued", "Deadline", "Days Left", "Operational Action"]
+                    _out_df = _grid[["Urgency", "batch_id", "Strategy", "Product", "Location", "Volume", "Rescued Value", "act_by", "Days Left", "action_plain"]].copy()
+                    _out_df.columns = ["Urgency Status", "Batch / Lot #", "Strategy Channel", "Product / Drug Name", "Facility / Route", "Volume", "Value Rescued", "Deadline", "Days Left", "Operational Action"]
 
                     st.dataframe(_out_df.reset_index(drop=True), use_container_width=True, hide_index=True)
 
@@ -2809,7 +2821,10 @@ elif selected_page == "⚖️ LP Cost Optimizer":
                     batches=("product_id", "count"),
                     units=("qty", "sum"),
                     loss=("value_usd", lambda x: abs(x).sum())
-                ).reset_index()
+                ).reset_index().sort_values("loss", ascending=False).reset_index(drop=True)
+
+                _tot_loss_all = _wh_grp["loss"].sum()
+                _wh_grp["risk_pct"] = (_wh_grp["loss"] / max(_tot_loss_all, 1) * 100).round(1)
 
                 # Consolidated Regulatory Quarantine Command Card
                 st.markdown(f"""
@@ -2857,23 +2872,60 @@ elif selected_page == "⚖️ LP Cost Optimizer":
                 </div>
                 """, unsafe_allow_html=True)
 
-                # Facility impact pills
-                st.markdown("<div style='font-size:0.85rem; font-weight:600; color:#e2e8f0; margin-bottom:0.4rem;'>📍 Facility Impact Breakdown:</div>", unsafe_allow_html=True)
-                _pill_cols = st.columns(min(4, max(1, len(_wh_grp))))
-                for _idx, _wrow in _wh_grp.iterrows():
-                    with _pill_cols[_idx % len(_pill_cols)]:
-                        st.markdown(f"""
-                        <div style="background:#0f172a; border:1px solid #1e293b; border-radius:0.5rem; padding:0.6rem 0.8rem; margin-bottom:0.6rem;">
-                          <div style="color:#e2e8f0; font-weight:600; font-size:0.85rem;">📍 {_wrow['Location']}</div>
-                          <div style="color:#fca5a5; font-weight:700; font-size:0.95rem; margin:0.2rem 0;">−{fmt_curr(_wrow['loss'], compact=False, decimals=0)}</div>
-                          <div style="color:#64748b; font-size:0.75rem;">{int(_wrow['units']):,} units ({int(_wrow['batches'])} lots)</div>
-                        </div>
-                        """, unsafe_allow_html=True)
+                # ── FACILITY RISK EXPOSURE DASHBOARD (CHART + RANKING TABLE) ──
+                st.markdown("<div style='font-size:0.92rem; font-weight:700; color:#e2e8f0; margin:1rem 0 0.5rem 0;'>📍 Facility Loss Exposure Breakdown & Comparative Ranking:</div>", unsafe_allow_html=True)
 
-                # Itemized manifest table
-                st.markdown("<div style='margin-top:0.8rem; font-size:0.85rem; font-weight:600; color:#e2e8f0; margin-bottom:0.4rem;'>📑 Itemized QA Certified Destruction Manifest:</div>", unsafe_allow_html=True)
-                _show_dest = _destroy_df[["Product", "Location", "qty", "Value_Rescue", "act_by", "days_left"]].copy()
-                _show_dest.columns = ["Product / Drug Name", "Facility / Warehouse", "Destruction Qty", "Booked Write-off", "Mandatory Act By", "Days Left"]
+                _f_left, _f_right = st.columns([1.1, 1.4])
+                with _f_left:
+                    st.markdown("<div style='color:#94a3b8; font-size:0.78rem; margin-bottom:0.4rem;'><b>Facility Risk Ranking:</b> Select a location to filter the manifest:</div>", unsafe_allow_html=True)
+                    _dest_fac_choice = st.selectbox(
+                        "Filter Manifest by Facility:",
+                        [f"All Facilities ({len(_wh_grp)})"] + list(_wh_grp["Location"]),
+                        key="dest_fac_selector"
+                    )
+                    # Leaderboard preview
+                    _ld_df = _wh_grp[["Location", "loss", "units", "batches", "risk_pct"]].copy()
+                    _ld_df["Write-off Impact"] = _ld_df["loss"].apply(lambda v: f"-{fmt_curr(v, compact=True)}")
+                    _ld_df["Volume"] = _ld_df["units"].apply(lambda u: f"{u:,} u")
+                    _ld_df["Lots"] = _ld_df["batches"].apply(lambda b: f"{b} lots")
+                    _ld_df["% Share"] = _ld_df["risk_pct"].apply(lambda p: f"{p:.1f}%")
+                    _ld_df = _ld_df[["Location", "Write-off Impact", "Lots", "% Share"]]
+                    _ld_df.columns = ["Facility", "Write-off", "Lots", "Share"]
+                    st.dataframe(_ld_df, use_container_width=True, hide_index=True, height=210)
+
+                with _f_right:
+                    # Clean horizontal comparison bar chart
+                    fig_wh, ax_wh = plt.subplots(figsize=(7.5, 3.8))
+                    fig_wh.patch.set_facecolor("#0f1117")
+                    ax_wh.set_facecolor("#0f1117")
+                    _wh_plt = _wh_grp.sort_values("loss", ascending=True)
+                    _y_pos = np.arange(len(_wh_plt))
+                    _bars = ax_wh.barh(_y_pos, _wh_plt["loss"]/1e6, color="#ef4444", alpha=0.85, height=0.62)
+                    ax_wh.set_yticks(_y_pos)
+                    ax_wh.set_yticklabels(_wh_plt["Location"], fontsize=9, color="#e2e8f0")
+                    ax_wh.set_xlabel(f"Write-off Exposure ({curr_code} Millions)", color="#94a3b8", fontsize=8.5)
+                    ax_wh.tick_params(colors="#94a3b8")
+                    for sp in ax_wh.spines.values(): sp.set_edgecolor("#1e293b")
+                    for b in _bars:
+                        _w = b.get_width()
+                        ax_wh.annotate(f" {curr_code}{_w:.1f}M", xy=(_w, b.get_y() + b.get_height()/2),
+                                       xytext=(3, 0), textcoords="offset points",
+                                       ha="left", va="center", fontsize=8, color="#fca5a5", fontweight="bold")
+                    plt.tight_layout()
+                    show_fig(fig_wh)
+
+                # Itemized manifest table filtered by facility
+                _filt_dest = _destroy_df.copy()
+                if not _dest_fac_choice.startswith("All Facilities"):
+                    _filt_dest = _filt_dest[_filt_dest["Location"] == _dest_fac_choice]
+
+                st.markdown(f"<div style='display:flex; justify-content:space-between; align-items:center; margin:1rem 0 0.4rem 0;'>"
+                            f"<span style='font-size:0.9rem; font-weight:700; color:#e2e8f0;'>📑 Itemized QA Certified Destruction Manifest ({len(_filt_dest):,} Batches)</span>"
+                            f"<span style='color:#94a3b8; font-size:0.78rem;'>Filtered by: <b>{_dest_fac_choice}</b> &bull; FDA 21 CFR §211 Compliant</span>"
+                            f"</div>", unsafe_allow_html=True)
+
+                _show_dest = _filt_dest[["batch_id", "Product", "Location", "qty", "Value_Rescue", "act_by", "days_left"]].copy()
+                _show_dest.columns = ["Batch / Lot #", "Product / Drug Name", "Facility / Warehouse", "Destruction Qty", "Booked Write-off", "Mandatory Act By", "Days Left"]
                 _show_dest["Regulatory Protocol"] = "FDA 21 CFR §211 Quarantine"
                 _show_dest["Disposal Status"] = "🔒 Quarantined / Pending Destruction"
                 st.dataframe(_show_dest.reset_index(drop=True), use_container_width=True, hide_index=True)
