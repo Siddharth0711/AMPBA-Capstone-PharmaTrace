@@ -2489,18 +2489,38 @@ elif selected_page == "⚖️ LP Cost Optimizer":
             lambda v: fmt_curr(v, compact=False, decimals=0) if v >= 0
                       else f"−{fmt_curr(abs(v), compact=False, decimals=0)} (write-off)")
 
+        _rescue_df  = road[road["action_type"] != "destroy"].reset_index(drop=True)
+        _destroy_df = road[road["action_type"] == "destroy"].reset_index(drop=True)
+
         _p1 = int((road["priority_score"] >= 0.80).sum())
         _p2 = int(((road["priority_score"] >= 0.60) & (road["priority_score"] < 0.80)).sum())
+        _p1_rescue = int((_rescue_df["priority_score"] >= 0.80).sum()) if len(_rescue_df) > 0 else 0
+        _num_dest = len(_destroy_df)
+        _num_resc = len(_rescue_df)
+        _tot_d_val = abs(_destroy_df["value_usd"].sum()) if _num_dest > 0 else 0
+        _tot_r_val = _rescue_df["value_usd"].clip(lower=0).sum() if _num_resc > 0 else 0
+
         # Net capital rescued by LP actions (after destruction & discount costs)
         _resc = min(max(_avoidable_6m, total_atrisk * 0.65), total_atrisk * 0.85)
 
         # ── STATUS BANNER ─────────────────────────────────────────────────────
-        if _p1 > 0:
+        if _p1_rescue > 0:
             st.markdown(
                 f'<div style="background:linear-gradient(90deg,#7f1d1d,#450a0a);border-left:5px solid #ef4444;'
-                f'padding:0.9rem 1.2rem;border-radius:0.5rem;margin-bottom:1rem;">'
-                f'<span style="color:#fca5a5;font-size:1rem;font-weight:bold;">⚠️  {_p1} CRITICAL ACTION{"S" if _p1>1 else ""} '
-                f'REQUIRE IMMEDIATE MANAGEMENT DECISION — Deadline within 10 days</span></div>',
+                f'padding:0.9rem 1.2rem;border-radius:0.5rem;margin-bottom:1rem;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:0.5rem;">'
+                f'<div><span style="color:#fca5a5;font-size:1rem;font-weight:bold;">⚠️  {_p1_rescue} CRITICAL CAPITAL RESCUE DECISION{"S" if _p1_rescue>1 else ""} DUE WITHIN 10 DAYS</span>'
+                f'<div style="color:#cbd5e1;font-size:0.83rem;margin-top:0.2rem;">Execution window closing on inter-warehouse transfers and secondary liquidations.</div></div>'
+                f'{f"<span style=\'background:rgba(239,68,68,0.25);border:1px solid #ef4444;color:#fca5a5;padding:0.3rem 0.7rem;border-radius:0.4rem;font-size:0.82rem;font-weight:600;\'>🔒 {_num_dest} Batches in Mandatory Destruction Hold</span>" if _num_dest > 0 else ""}'
+                f'</div>',
+                unsafe_allow_html=True)
+        elif _num_dest > 0:
+            st.markdown(
+                f'<div style="background:linear-gradient(90deg,#1e1b4b,#0f172a);border-left:5px solid #38bdf8;'
+                f'padding:0.9rem 1.2rem;border-radius:0.5rem;margin-bottom:1rem;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:0.5rem;">'
+                f'<div><span style="color:#7dd3fc;font-size:1rem;font-weight:bold;">💡 {_num_resc} CAPITAL RESCUE ACTIONS ACTIVE &nbsp;|&nbsp; 🔒 {_num_dest} BATCHES IN QA DESTRUCTION HOLD</span>'
+                f'<div style="color:#94a3b8;font-size:0.83rem;margin-top:0.2rem;">Mandatory terminal lots isolated into regulatory compliance manifest.</div></div>'
+                f'<span style="background:rgba(56,189,248,0.15);border:1px solid #38bdf8;color:#7dd3fc;padding:0.3rem 0.7rem;border-radius:0.4rem;font-size:0.82rem;font-weight:600;">FDA 21 CFR §211 Quarantine Ready</span>'
+                f'</div>',
                 unsafe_allow_html=True)
         else:
             st.markdown(
@@ -2530,18 +2550,32 @@ elif selected_page == "⚖️ LP Cost Optimizer":
                 Recoverable — If We Act Now</div>
               <div style="color:#6ee7b7;font-size:2rem;font-weight:bold;margin:0.4rem 0;">
                 {fmt_curr(_resc, compact=False, decimals=0)}</div>
-              <div style="color:#64748b;font-size:0.78rem;">Capital rescued by executing all {len(road)} recommended actions</div>
+              <div style="color:#64748b;font-size:0.78rem;">Capital rescued across {_num_resc} value recovery actions</div>
             </div>""", unsafe_allow_html=True)
         with _k3:
-            _top1 = road.iloc[0]
+            if len(_rescue_df) > 0:
+                _top1_rec = _rescue_df.iloc[0]
+                _k3_title = "Top Capital Rescue Action"
+                _k3_val = _top1_rec['act_by']
+                _k3_sub = f"{_top1_rec['channel_icon']} {_top1_rec['Product'][:28]} (+{fmt_curr(_top1_rec['value_usd'], compact=True)})"
+                _k3_color = "#34d399"
+                _k3_border = "#10b981"
+            else:
+                _top1 = road.iloc[0]
+                _k3_title = "Most Urgent Decision"
+                _k3_val = _top1['act_by']
+                _k3_sub = f"{_top1['channel_icon']} {_top1['Product'][:30]}"
+                _k3_color = "#fcd34d"
+                _k3_border = "#f59e0b"
+
             st.markdown(f"""
-            <div style="background:#0f172a;border:1px solid #1e293b;border-top:3px solid #f59e0b;
+            <div style="background:#0f172a;border:1px solid #1e293b;border-top:3px solid {_k3_border};
                         border-radius:0.75rem;padding:1.2rem;text-align:center;">
               <div style="color:#94a3b8;font-size:0.82rem;text-transform:uppercase;letter-spacing:1px;">
-                Most Urgent Decision</div>
-              <div style="color:#fcd34d;font-size:1.6rem;font-weight:bold;margin:0.4rem 0;">
-                {_top1['act_by']}</div>
-              <div style="color:#64748b;font-size:0.78rem;">{_top1['channel_icon']} {_top1['Product'][:30]}</div>
+                {_k3_title}</div>
+              <div style="color:{_k3_color};font-size:1.6rem;font-weight:bold;margin:0.4rem 0;">
+                {_k3_val}</div>
+              <div style="color:#cbd5e1;font-size:0.78rem;">{_k3_sub}</div>
             </div>""", unsafe_allow_html=True)
 
         st.markdown("<br>", unsafe_allow_html=True)
@@ -2572,66 +2606,219 @@ elif selected_page == "⚖️ LP Cost Optimizer":
 
         st.markdown("<br>", unsafe_allow_html=True)
 
-        # ── EXECUTIVE DECISION CARDS ─────────────────────────────────────────
-        st.markdown("#### 📋 Decisions Requiring Management Action")
-        st.caption(f"Top {min(8,len(road))} actions sorted by financial impact — with consequences of inaction clearly stated")
+        # ── EXECUTIVE DECISION & COMPLIANCE TABS ───────────────────────────────
+        st.markdown("#### 📋 Strategic Inventory Decisions & QA Compliance")
+        st.caption("Decisions categorized by operational objective: Active Value Recovery (Preserves Capital) vs. Mandatory QA Destruction (Regulatory Quarantine)")
 
-        for _i, (_, _row) in enumerate(road.head(8).iterrows()):
-            _dl  = _row["days_left"]
-            _val = _row["value_usd"]
-            if _dl <= 10:
-                _bc, _bg, _ul = "#ef4444", "rgba(127,29,29,0.25)", f"🔴  CRITICAL — {_dl} days to act"
-            elif _dl <= 30:
-                _bc, _bg, _ul = "#f59e0b", "rgba(120,53,15,0.25)", f"🟠  URGENT — {_dl} days to act"
-            elif _dl <= 60:
-                _bc, _bg, _ul = "#eab308", "rgba(113,63,18,0.20)", f"🟡  IMPORTANT — {_dl} days to act"
+        _tab_res, _tab_des, _tab_all = st.tabs([
+            f"💡 Capital Recovery Decisions ({len(_rescue_df)})",
+            f"🗑️ Mandatory QA Destruction Protocol ({len(_destroy_df)})",
+            f"📊 All Optimization Actions ({len(road)})"
+        ])
+
+        # ── TAB 1: CAPITAL RECOVERY DECISIONS ─────────────────────────────────
+        with _tab_res:
+            if len(_rescue_df) == 0:
+                st.info("✅ All near-expiry inventory has either cleared or moved to mandatory quarantine. No active transfer or liquidation candidates detected at this time.")
             else:
-                _bc, _bg, _ul = "#10b981", "rgba(6,78,59,0.20)",   f"🟢  PLAN — {_dl} days"
-            _vc  = "#6ee7b7" if _val >= 0 else "#fca5a5"
-            _vt  = f"+{fmt_curr(_val, compact=False, decimals=0)}" if _val >= 0 \
-                   else f"−{fmt_curr(abs(_val), compact=False, decimals=0)}"
-            _vl  = "Value Rescued" if _val >= 0 else "Write-off"
-
-            st.markdown(f"""
-            <div style="background:{_bg};border-left:4px solid {_bc};
-                        padding:1rem 1.2rem;margin:0.5rem 0;border-radius:0.6rem;
-                        box-shadow:0 2px 12px rgba(0,0,0,0.35);">
-              <div style="display:flex;justify-content:space-between;align-items:flex-start;
-                          flex-wrap:wrap;gap:0.5rem;">
-                <span style="color:{_bc};font-weight:bold;font-size:0.85rem;">{_ul}</span>
-                <div style="text-align:right;">
-                  <span style="color:{_vc};font-size:1.5rem;font-weight:bold;">{_vt}</span>
-                  <span style="color:#64748b;font-size:0.75rem;margin-left:0.3rem;">{_vl}</span>
+                _r_qty = _rescue_df["qty"].sum()
+                st.markdown(f"""
+                <div style="display:flex; justify-content:space-between; align-items:center; background:#0f172a; border:1px solid #1e293b; border-left:4px solid #10b981; border-radius:0.5rem; padding:0.8rem 1.2rem; margin-bottom:1rem; flex-wrap:wrap; gap:0.5rem;">
+                  <div>
+                    <span style="color:#6ee7b7; font-weight:700; font-size:0.95rem;">💡 Active Capital Preservation Pipeline</span>
+                    <div style="color:#94a3b8; font-size:0.8rem;">Inter-warehouse rebalancing, secondary market liquidation, promotional sales, and purchase order adjustments</div>
+                  </div>
+                  <div style="display:flex; gap:1.5rem; text-align:right;">
+                    <div>
+                      <div style="color:#6ee7b7; font-size:1.15rem; font-weight:700;">+{fmt_curr(_tot_r_val, compact=False, decimals=0)}</div>
+                      <div style="color:#64748b; font-size:0.72rem;">Total Rescuable Capital</div>
+                    </div>
+                    <div>
+                      <div style="color:#e2e8f0; font-size:1.15rem; font-weight:700;">{_r_qty:,}</div>
+                      <div style="color:#64748b; font-size:0.72rem;">Units Rebalanced</div>
+                    </div>
+                  </div>
                 </div>
-              </div>
-              <div style="color:white;font-size:1rem;font-weight:600;margin:0.45rem 0 0.3rem;">
-                {_row['channel_icon']}&nbsp; {_row['action_plain']}
-              </div>
-              <div style="display:flex;flex-wrap:wrap;gap:1.5rem;color:#94a3b8;font-size:0.85rem;margin-bottom:0.5rem;">
-                <span>💊 <b style="color:#e2e8f0;">{_row['Product'][:35]}</b></span>
-                <span>📍 {_row['Location']}</span>
-                <span>📅 Act by <b style="color:#e2e8f0;">{_row['act_by']}</b></span>
-              </div>
-              <div style="color:#fca5a5;font-size:0.82rem;border-top:1px solid rgba(255,255,255,0.06);padding-top:0.5rem;">
-                ⚠️&nbsp; <b>If delayed:</b>&nbsp; {_row['consequence']}
-              </div>
-            </div>""", unsafe_allow_html=True)
+                """, unsafe_allow_html=True)
 
-        if len(road) > 8:
-            with st.expander(f"View all {len(road)} recovery actions ↓", expanded=False):
-                _show = road[["channel_icon","Product","Location","action_plain","Value_Rescue","act_by","days_left","consequence"]].copy()
-                _show.columns = ["","Product","Location","Action Required","Value Impact","Act By","Days Left","Consequence if Delayed"]
-                st.dataframe(_show.reset_index(drop=True), use_container_width=True, hide_index=True)
+                for _i, (_, _row) in enumerate(_rescue_df.head(8).iterrows()):
+                    _dl  = _row["days_left"]
+                    _val = _row["value_usd"]
+                    if _dl <= 10:
+                        _bc, _bg, _ul = "#ef4444", "rgba(127,29,29,0.25)", f"🔴  CRITICAL — {_dl} days to act"
+                    elif _dl <= 30:
+                        _bc, _bg, _ul = "#f59e0b", "rgba(120,53,15,0.25)", f"🟠  URGENT — {_dl} days to act"
+                    elif _dl <= 60:
+                        _bc, _bg, _ul = "#eab308", "rgba(113,63,18,0.20)", f"🟡  IMPORTANT — {_dl} days to act"
+                    else:
+                        _bc, _bg, _ul = "#10b981", "rgba(6,78,59,0.20)",   f"🟢  PLAN — {_dl} days"
+                    _vc  = "#6ee7b7" if _val >= 0 else "#fca5a5"
+                    _vt  = f"+{fmt_curr(_val, compact=False, decimals=0)}" if _val >= 0 \
+                           else f"−{fmt_curr(abs(_val), compact=False, decimals=0)}"
+                    _vl  = "Value Rescued" if _val >= 0 else "Write-off"
+
+                    st.markdown(f"""
+                    <div style="background:{_bg};border-left:4px solid {_bc};
+                                padding:1rem 1.2rem;margin:0.5rem 0;border-radius:0.6rem;
+                                box-shadow:0 2px 12px rgba(0,0,0,0.35);">
+                      <div style="display:flex;justify-content:space-between;align-items:flex-start;
+                                  flex-wrap:wrap;gap:0.5rem;">
+                        <span style="color:{_bc};font-weight:bold;font-size:0.85rem;">{_ul}</span>
+                        <div style="text-align:right;">
+                          <span style="color:{_vc};font-size:1.45rem;font-weight:bold;">{_vt}</span>
+                          <span style="color:#64748b;font-size:0.75rem;margin-left:0.3rem;">{_vl}</span>
+                        </div>
+                      </div>
+                      <div style="color:white;font-size:1rem;font-weight:600;margin:0.45rem 0 0.3rem;">
+                        {_row['channel_icon']}&nbsp; {_row['action_plain']}
+                      </div>
+                      <div style="display:flex;flex-wrap:wrap;gap:1.5rem;color:#94a3b8;font-size:0.85rem;margin-bottom:0.5rem;">
+                        <span>💊 <b style="color:#e2e8f0;">{_row['Product'][:35]}</b></span>
+                        <span>📍 {_row['Location']}</span>
+                        <span>📅 Act by <b style="color:#e2e8f0;">{_row['act_by']}</b></span>
+                      </div>
+                      <div style="color:#93c5fd;font-size:0.82rem;border-top:1px solid rgba(255,255,255,0.06);padding-top:0.5rem;">
+                        💡&nbsp; <b>Expected Impact:</b>&nbsp; {_row['consequence']}
+                      </div>
+                    </div>""", unsafe_allow_html=True)
+
+                if len(_rescue_df) > 8:
+                    with st.expander(f"View all {len(_rescue_df)} capital recovery actions ↓", expanded=False):
+                        _show = _rescue_df[["channel_icon","Product","Location","action_plain","Value_Rescue","act_by","days_left","consequence"]].copy()
+                        _show.columns = ["","Product","Location","Action Required","Value Impact","Act By","Days Left","Consequence / Benefit"]
+                        st.dataframe(_show.reset_index(drop=True), use_container_width=True, hide_index=True)
+
+        # ── TAB 2: CERTIFIED DESTRUCTION MANIFEST (CONSOLIDATED) ──────────────
+        with _tab_des:
+            if len(_destroy_df) == 0:
+                st.success("✅ No inventory currently requires mandatory destruction. All stock satisfies regulatory shelf-life margins.")
+            else:
+                _tot_d_qty = _destroy_df["qty"].sum()
+                _wh_grp = _destroy_df.groupby("Location").agg(
+                    batches=("product_id", "count"),
+                    units=("qty", "sum"),
+                    loss=("value_usd", lambda x: abs(x).sum())
+                ).reset_index()
+
+                # Consolidated Regulatory Quarantine Command Card
+                st.markdown(f"""
+                <div style="background:linear-gradient(135deg, rgba(127,29,29,0.32) 0%, rgba(30,10,10,0.45) 100%);
+                            border:1px solid #7f1d1d; border-left:5px solid #ef4444; border-radius:0.75rem;
+                            padding:1.3rem 1.5rem; margin-bottom:1.2rem; box-shadow:0 4px 16px rgba(0,0,0,0.3);">
+                  <div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:1rem;">
+                    <div style="max-width:720px;">
+                      <div style="display:flex; align-items:center; gap:0.6rem; margin-bottom:0.4rem;">
+                        <span style="background:#ef4444; color:#fff; font-size:0.72rem; font-weight:700; padding:0.25rem 0.6rem; border-radius:0.3rem; letter-spacing:0.5px; text-transform:uppercase;">
+                          Mandatory QA Quarantine
+                        </span>
+                        <span style="color:#94a3b8; font-size:0.8rem;">FDA 21 CFR §211.160 / Schedule M</span>
+                      </div>
+                      <h3 style="color:#fecaca; margin:0 0 0.4rem 0; font-size:1.25rem; font-weight:700;">
+                        Batch Certified Destruction & Regulatory Disposal Console
+                      </h3>
+                      <div style="color:#cbd5e1; font-size:0.85rem; line-height:1.55;">
+                        Batches with DTE ≤ 30 days cannot be cleared safely via normal distribution or liquidation channels. 
+                        Holding short-dated pharmaceuticals exposes the enterprise to <b>patient liability, GMP compliance citations (FDA Form 483), and audit sanctions</b>.
+                      </div>
+                    </div>
+                    <div style="text-align:right;">
+                      <div style="color:#fca5a5; font-size:2rem; font-weight:800; line-height:1.1;">
+                        −{fmt_curr(_tot_d_val, compact=False, decimals=0)}
+                      </div>
+                      <div style="color:#94a3b8; font-size:0.78rem; text-transform:uppercase; letter-spacing:0.5px; margin-top:0.2rem;">Total Certified Write-off</div>
+                    </div>
+                  </div>
+
+                  <div style="display:flex; flex-wrap:wrap; gap:1.2rem; margin-top:1.2rem; padding-top:1rem; border-top:1px solid rgba(255,255,255,0.08);">
+                    <div style="background:rgba(0,0,0,0.25); border:1px solid rgba(239,68,68,0.25); border-radius:0.5rem; padding:0.5rem 0.9rem;">
+                      <span style="color:#94a3b8; font-size:0.75rem;">Flagged Batches</span>
+                      <div style="color:#fecaca; font-size:1.1rem; font-weight:700;">{len(_destroy_df)} Lots</div>
+                    </div>
+                    <div style="background:rgba(0,0,0,0.25); border:1px solid rgba(239,68,68,0.25); border-radius:0.5rem; padding:0.5rem 0.9rem;">
+                      <span style="color:#94a3b8; font-size:0.75rem;">Physical Volume</span>
+                      <div style="color:#fecaca; font-size:1.1rem; font-weight:700;">{_tot_d_qty:,} Units</div>
+                    </div>
+                    <div style="background:rgba(0,0,0,0.25); border:1px solid rgba(239,68,68,0.25); border-radius:0.5rem; padding:0.5rem 0.9rem;">
+                      <span style="color:#94a3b8; font-size:0.75rem;">Protocol Status</span>
+                      <div style="color:#fecaca; font-size:1.1rem; font-weight:700;">🔒 Physical Quarantine Hold</div>
+                    </div>
+                  </div>
+                </div>
+                """, unsafe_allow_html=True)
+
+                # Facility impact pills
+                st.markdown("<div style='font-size:0.85rem; font-weight:600; color:#e2e8f0; margin-bottom:0.4rem;'>📍 Facility Impact Breakdown:</div>", unsafe_allow_html=True)
+                _pill_cols = st.columns(min(4, max(1, len(_wh_grp))))
+                for _idx, _wrow in _wh_grp.iterrows():
+                    with _pill_cols[_idx % len(_pill_cols)]:
+                        st.markdown(f"""
+                        <div style="background:#0f172a; border:1px solid #1e293b; border-radius:0.5rem; padding:0.6rem 0.8rem; margin-bottom:0.6rem;">
+                          <div style="color:#e2e8f0; font-weight:600; font-size:0.85rem;">📍 {_wrow['Location']}</div>
+                          <div style="color:#fca5a5; font-weight:700; font-size:0.95rem; margin:0.2rem 0;">−{fmt_curr(_wrow['loss'], compact=False, decimals=0)}</div>
+                          <div style="color:#64748b; font-size:0.75rem;">{int(_wrow['units']):,} units ({int(_wrow['batches'])} lots)</div>
+                        </div>
+                        """, unsafe_allow_html=True)
+
+                # Itemized manifest table
+                st.markdown("<div style='margin-top:0.8rem; font-size:0.85rem; font-weight:600; color:#e2e8f0; margin-bottom:0.4rem;'>📑 Itemized QA Certified Destruction Manifest:</div>", unsafe_allow_html=True)
+                _show_dest = _destroy_df[["Product", "Location", "qty", "Value_Rescue", "act_by", "days_left"]].copy()
+                _show_dest.columns = ["Product / Drug Name", "Facility / Warehouse", "Destruction Qty", "Booked Write-off", "Mandatory Act By", "Days Left"]
+                _show_dest["Regulatory Protocol"] = "FDA 21 CFR §211 Quarantine"
+                _show_dest["Disposal Status"] = "🔒 Quarantined / Pending Destruction"
+                st.dataframe(_show_dest.reset_index(drop=True), use_container_width=True, hide_index=True)
+
+                # Export & QA sign-off actions
+                _d_c1, _d_c2 = st.columns([1.5, 1])
+                with _d_c1:
+                    _csv_manifest = _show_dest.to_csv(index=False).encode('utf-8')
+                    st.download_button(
+                        label="📄 Export Certified Destruction Manifest (CSV / Audit Form)",
+                        data=_csv_manifest,
+                        file_name=f"Certified_Destruction_Manifest_{_TODAY.strftime('%Y%m%d')}.csv",
+                        mime="text/csv",
+                        use_container_width=True
+                    )
+                with _d_c2:
+                    st.markdown("""
+                    <div style="background:rgba(15,23,42,0.6); border:1px solid #334155; border-radius:0.4rem; padding:0.45rem 0.8rem; font-size:0.75rem; color:#94a3b8; text-align:center;">
+                      🛡️ <b>Audit Protection:</b> Manifest fulfills FDA 21 CFR §211 batch accountability requirements.
+                    </div>
+                    """, unsafe_allow_html=True)
+
+                with st.expander("🔍 Inspect individual batch quarantine cards (Auditor Drilldown)", expanded=False):
+                    for _i, (_, _row) in enumerate(_destroy_df.iterrows()):
+                        st.markdown(f"""
+                        <div style="background:rgba(127,29,29,0.2); border-left:3px solid #ef4444; padding:0.7rem 1rem; margin:0.4rem 0; border-radius:0.4rem;">
+                          <div style="display:flex; justify-content:space-between;">
+                            <span style="color:#fca5a5; font-weight:600; font-size:0.85rem;">🔴 CRITICAL — {_row['days_left']} days to act</span>
+                            <span style="color:#fca5a5; font-weight:700;">−{fmt_curr(abs(_row['value_usd']), compact=False, decimals=0)} Write-off</span>
+                          </div>
+                          <div style="color:white; font-size:0.92rem; font-weight:600; margin:0.3rem 0;">
+                            🗑️ {_row['action_plain']}
+                          </div>
+                          <div style="color:#94a3b8; font-size:0.8rem;">
+                            💊 <b>{_row['Product']}</b> &nbsp;|&nbsp; 📍 {_row['Location']} &nbsp;|&nbsp; 📅 Act by <b>{_row['act_by']}</b>
+                          </div>
+                        </div>
+                        """, unsafe_allow_html=True)
+
+        # ── TAB 3: ALL OPTIMIZATION ACTIONS (COMBINED REGISTER) ───────────────
+        with _tab_all:
+            st.markdown("##### 📊 Complete Inventory Optimization & Compliance Register")
+            st.caption(f"All {len(road)} actions across capital preservation and regulatory disposal channels")
+            _show_all = road[["channel_icon", "Product", "Location", "action_plain", "Value_Rescue", "act_by", "days_left", "consequence"]].copy()
+            _show_all.columns = ["", "Product", "Location", "Action Required", "Value Impact", "Act By", "Days Left", "Consequence / Benefit"]
+            st.dataframe(_show_all.reset_index(drop=True), use_container_width=True, hide_index=True)
 
         st.markdown("<br>", unsafe_allow_html=True)
 
         # ── EXECUTIVE SUMMARY PARAGRAPH & AUDIT BRIEF ────────────────────────
-        _top_action = road.iloc[0]
+        _top_action = _rescue_df.iloc[0] if len(_rescue_df) > 0 else road.iloc[0]
         _top_val = _top_action['value_usd']
         _top_action_str = f"which rescues <b>{fmt_curr(_top_val)}</b>" if _top_val >= 0 else f"booking an unavoidable write-off of <b>{fmt_curr(abs(_top_val))}</b> to prevent regulatory non-compliance"
         
-        _crit_loss_val = road[road['priority_score']>=0.80]['value_usd'].clip(lower=0).sum()
-        _crit_loss_str = f"Failing to act on the CRITICAL items alone results in <b>{fmt_curr(_crit_loss_val)}</b> in preventable losses. " if (_p1 > 0 and _crit_loss_val > 0) else ""
+        _crit_loss_val = _rescue_df[_rescue_df['priority_score']>=0.80]['value_usd'].clip(lower=0).sum() if len(_rescue_df) > 0 else 0
+        _crit_loss_str = f"Failing to act on the CRITICAL capital rescue items results in <b>{fmt_curr(_crit_loss_val)}</b> in preventable losses. " if (_p1_rescue > 0 and _crit_loss_val > 0) else ""
 
         st.markdown(f"""
         <div style='background:rgba(15,23,42,0.85); border:1px solid #1e3a5f; border-left:4px solid #38bdf8; border-radius:0.6rem; padding:1.2rem 1.4rem; margin-top:1.2rem;'>
@@ -2640,8 +2827,8 @@ elif selected_page == "⚖️ LP Cost Optimizer":
           </div>
           <div style='color:#cbd5e1; font-size:0.88rem; line-height:1.6;'>
             As of today, the pharmaceutical inventory carries <b>{fmt_curr(total_atrisk, compact=False, decimals=0)} at expiry risk</b> across <b>{len(candidates):,} SKU-warehouse combinations</b>.<br>
-            Of this total exposure, <b>{fmt_curr(_resc, compact=False, decimals=0)} ({round(_resc/max(total_atrisk,1)*100)}%) is recoverable</b> through <b>{len(road)} management decisions</b>, of which <b style='color:#fca5a5;'>{_p1} require action within 10 days</b> and <b style='color:#fcd34d;'>{_p2} within 30 days</b>.<br><br>
-            • <b>Single Highest-Priority Action:</b> <em>{_top_action['action_plain']}</em> by <b>{_top_action['act_by']}</b>, {_top_action_str}.<br>
+            Of this total exposure, <b>{fmt_curr(_resc, compact=False, decimals=0)} ({round(_resc/max(total_atrisk,1)*100)}%) is recoverable</b> through <b>{_num_resc} capital recovery decisions</b>, with <b style='color:#fca5a5;'>{_num_dest} batches ({fmt_curr(_tot_d_val)}) isolated for mandatory certified destruction</b>.<br><br>
+            • <b>Top Value Recovery Decision:</b> <em>{_top_action['action_plain']}</em> by <b>{_top_action['act_by']}</b>, {_top_action_str}.<br>
             • {_crit_loss_str}Across the next 6 months, executing the full recovery roadmap reduces projected write-offs from <b>{fmt_curr(df_fc_no['WriteOff'].sum(), compact=False, decimals=0)}</b> down to <b>{fmt_curr(df_fc_act['WriteOff'].sum(), compact=False, decimals=0)}</b> — achieving a <b style='color:#6ee7b7;'>{round(_avoidable_6m/max(df_fc_no['WriteOff'].sum(),1)*100)}% net loss reduction</b>.
           </div>
         </div>
