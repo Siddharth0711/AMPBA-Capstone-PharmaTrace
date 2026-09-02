@@ -404,6 +404,10 @@ def build_glossary(is_in=False):
         "Demand Header":        f"24-Month historical demand & seasonal distribution.",
         "Heatmap Header":       f"Network-wide expiry risk and {c_code} capital exposure.",
         "LP Header":            f"Linear programming cost minimization under regulatory constraints.",
+        "LP Dashboard": (
+            f"**LP Cost Optimizer & Capital Recovery Engine** solves a linear programming model to maximize recovered cash and minimize write-offs. "
+            f"It evaluates batches across 4 regulatory channels: (1) Normal Dispatch, (2) Inter-Warehouse Transfer (DTE ≥ 60d), (3) Secondary Liquidation (30–90d DTE), and (4) Mandatory Certified Destruction (DTE ≤ 30d)."
+        ),
         "Freight Header":       f"Inter-warehouse freight cost matrix and route optimization.",
         "Freight Charts":       f"Pairwise transfer cost heatmap and logistics tiers.",
         "IoT Header":           f"Continuous cold-chain monitoring under {cc_statute}.",
@@ -2621,25 +2625,29 @@ elif selected_page == "⚖️ LP Cost Optimizer":
 
         st.markdown("<br>", unsafe_allow_html=True)
 
-        # ── EXECUTIVE SUMMARY PARAGRAPH ───────────────────────────────────────
-        _act_type_counts = road["action_type"].value_counts().to_dict()
+        # ── EXECUTIVE SUMMARY PARAGRAPH & AUDIT BRIEF ────────────────────────
         _top_action = road.iloc[0]
-        _exec_para = (
-            f"As of **{_TODAY.strftime('%B %d, %Y')}**, the pharmaceutical inventory carries "
-            f"**{fmt_curr(total_atrisk, compact=False, decimals=0)} at expiry risk** across "
-            f"{len(candidates):,} SKU-warehouse combinations. "
-            f"Of this, **{fmt_curr(_resc, compact=False, decimals=0)} ({round(_resc/max(total_atrisk,1)*100)}%) is recoverable** "
-            f"through {len(road)} management decisions, of which **{_p1} require action within 10 days** and "
-            f"{_p2} within 30 days. "
-            f"The single highest-priority action is: *{_top_action['action_plain']}* "
-            f"by **{_top_action['act_by']}**, which rescues **{fmt_curr(_top_action['value_usd'], compact=False, decimals=0)}**. "
-            f"{'Failing to act on the CRITICAL items alone results in a ' + fmt_curr(road[road['priority_score']>=0.80]['value_usd'].clip(lower=0).sum(), compact=False, decimals=0) + ' write-off that is entirely avoidable. ' if _p1 > 0 else ''}"
-            f"Across the next 6 months, executing the full recovery roadmap reduces projected write-offs from "
-            f"**{fmt_curr(df_fc_no['WriteOff'].sum(), compact=False, decimals=0)} to "
-            f"{fmt_curr(df_fc_act['WriteOff'].sum(), compact=False, decimals=0)}** — "
-            f"a **{round(_avoidable_6m/max(df_fc_no['WriteOff'].sum(),1)*100)}% improvement** on current trajectory."
-        )
-        st.info(_exec_para, icon="📋")
+        _top_val = _top_action['value_usd']
+        _top_action_str = f"which rescues <b>{fmt_curr(_top_val)}</b>" if _top_val >= 0 else f"booking an unavoidable write-off of <b>{fmt_curr(abs(_top_val))}</b> to prevent regulatory non-compliance"
+        
+        _crit_loss_val = road[road['priority_score']>=0.80]['value_usd'].clip(lower=0).sum()
+        _crit_loss_str = f"Failing to act on the CRITICAL items alone results in <b>{fmt_curr(_crit_loss_val)}</b> in preventable losses. " if (_p1 > 0 and _crit_loss_val > 0) else ""
+
+        st.markdown(f"""
+        <div style='background:rgba(15,23,42,0.85); border:1px solid #1e3a5f; border-left:4px solid #38bdf8; border-radius:0.6rem; padding:1.2rem 1.4rem; margin-top:1.2rem;'>
+          <div style='color:#38bdf8; font-weight:bold; font-size:1rem; margin-bottom:0.5rem;'>
+            📋 Executive Recovery Roadmap Brief — {_TODAY.strftime('%B %d, %Y')}
+          </div>
+          <div style='color:#cbd5e1; font-size:0.88rem; line-height:1.6;'>
+            As of today, the pharmaceutical inventory carries <b>{fmt_curr(total_atrisk, compact=False, decimals=0)} at expiry risk</b> across <b>{len(candidates):,} SKU-warehouse combinations</b>.<br>
+            Of this total exposure, <b>{fmt_curr(_resc, compact=False, decimals=0)} ({round(_resc/max(total_atrisk,1)*100)}%) is recoverable</b> through <b>{len(road)} management decisions</b>, of which <b style='color:#fca5a5;'>{_p1} require action within 10 days</b> and <b style='color:#fcd34d;'>{_p2} within 30 days</b>.<br><br>
+            • <b>Single Highest-Priority Action:</b> <em>{_top_action['action_plain']}</em> by <b>{_top_action['act_by']}</b>, {_top_action_str}.<br>
+            • {_crit_loss_str}Across the next 6 months, executing the full recovery roadmap reduces projected write-offs from <b>{fmt_curr(df_fc_no['WriteOff'].sum(), compact=False, decimals=0)}</b> down to <b>{fmt_curr(df_fc_act['WriteOff'].sum(), compact=False, decimals=0)}</b> — achieving a <b style='color:#6ee7b7;'>{round(_avoidable_6m/max(df_fc_no['WriteOff'].sum(),1)*100)}% net loss reduction</b>.
+          </div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        st.markdown("<div style='margin-top:0.6rem;'></div>", unsafe_allow_html=True)
         info_box("LP Dashboard", "ℹ️ How is the recovery value calculated?")
 
 
