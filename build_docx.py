@@ -36,7 +36,7 @@ def build_docx_report():
     sub_p = doc.add_paragraph()
     sub_p.paragraph_format.space_before = Pt(0)
     sub_p.paragraph_format.space_after = Pt(14)
-    r_sub = sub_p.add_run("End-to-End Enterprise Architecture, Predictive Machine Learning, Linear Programming Optimization, and Clinical Regulatory Governance Specification")
+    r_sub = sub_p.add_run("End-to-End Enterprise Architecture, Predictive Machine Learning, Linear Programming Optimization, Decision Tree Logic, and Clinical Regulatory Governance Specification")
     r_sub.font.size = Pt(13)
     r_sub.font.color.rgb = RGBColor(14, 116, 144) # Cyan
 
@@ -113,7 +113,7 @@ def build_docx_report():
     add_header_styled(doc, "Chronological Shelf-Life Horizons & Operational Protocols", level=2)
     fefo_table_data = [
         ["Zone 1: Commercial Clearance", "DTE > 90–120 Days", "100% Recovery", "Normal commercial dispatch. Operators scan GS1 DataMatrix barcodes at the gate pass terminal. The system verifies if the scanned batch is the earliest expiring batch; if valid, dispatch unlocks; otherwise, the bay gate remains locked."],
-        ["Zone 2: Rebalancing Window", "DTE 60–90 Days", "90% Recovery (Less Freight)", "Inter-Warehouse Transfer (🚚) viable. Evaluates national network to find destination warehouses with demand velocity >= 1.3x origin, ensuring stock can clear destination sales runway before expiry."],
+        ["Zone 2: Rebalancing Window", "DTE 60–90 Days", "90% Recovery (Less Freight)", "Inter-Warehouse Transfer viable. Evaluates national network to find destination warehouses with demand velocity >= 1.3x origin, ensuring stock can clear destination sales runway before expiry."],
         ["Zone 3: Secondary Liquidation", "DTE 30–60 Days", "40–65% Recovery", "Commercial transfer window closes due to destination transit times. Stock is routed to pre-approved secondary institutional buyers, avoiding total write-off and eliminating warehouse holding costs."],
         ["Zone 4: Mandatory Destruction", "DTE ≤ 30 Days (Lock ≤ 7d)", "Total Write-Off (+$0.80/u fee)", "CRITICAL COMPLIANCE THRESHOLD. Stock is legally barred from sale. Quarantined into a consolidated QA destruction manifest under FDA 21 CFR §211.160 / Schedule M to protect against patient liability and Form 483 audit citations."]
     ]
@@ -172,9 +172,9 @@ def build_docx_report():
     p_gate.paragraph_format.space_after = Pt(8)
 
     # ══════════════════════════════════════════════════════════════════════════
-    # SECTION 5: MACHINE LEARNING, HYPERPARAMETERS & EXPERIMENT TRACKING
+    # SECTION 5: MACHINE LEARNING, HYPERPARAMETERS & DECISION TREE
     # ══════════════════════════════════════════════════════════════════════════
-    add_header_styled(doc, "5. Predictive Machine Learning & Experiment Tracking", level=1)
+    add_header_styled(doc, "5. Predictive Machine Learning, Experiment Tracking & Decision Tree Architecture", level=1)
     
     p5 = doc.add_paragraph(
         "While rule-based systems flag inventory only when batches cross nominal calendar days (e.g. DTE < 30d), PharmaTrace AI deploys an ensemble Random Forest Classifier that detects 'Velocity Deficits' 60 days before critical status. Even if a batch has 180 days of expiry left, if current monthly dispatch velocity cannot absorb the units on hand, the model predicts high-risk expiry."
@@ -190,6 +190,30 @@ def build_docx_report():
         cap.runs[0].font.size = Pt(8.5)
         cap.runs[0].font.italic = True
         cap.runs[0].font.color.rgb = RGBColor(100, 116, 139)
+
+    add_header_styled(doc, "Decision Tree Example 1: Machine Learning Classifier Tree Structure", level=2)
+    p_dt1 = doc.add_paragraph(
+        "The Random Forest model consists of 120 randomized bagging decision tree estimators. Figure 5.2 demonstrates an extracted, highly interpretable decision tree from the trained forest. It illustrates the exact recursive binary partitioning logic used to split inventory samples into risk classifications based on Gini impurity reduction."
+    )
+    p_dt1.paragraph_format.space_after = Pt(8)
+
+    diag5_path = os.path.join(IMG_DIR, "diag5_ml_decision_tree.png")
+    if os.path.exists(diag5_path):
+        doc.add_picture(diag5_path, width=Inches(6.5))
+        cap = doc.add_paragraph("Figure 5.2: Decision Tree Example 1 — Random Forest Split Hierarchy and Branching Probabilities.")
+        cap.paragraph_format.space_before = Pt(4)
+        cap.paragraph_format.space_after = Pt(12)
+        cap.runs[0].font.size = Pt(8.5)
+        cap.runs[0].font.italic = True
+        cap.runs[0].font.color.rgb = RGBColor(100, 116, 139)
+
+    add_header_styled(doc, "Step-by-Step Traversal of ML Decision Tree Example", level=3)
+    p_trav = doc.add_paragraph(
+        "• Root Node: Evaluates Days-to-Expiry (days_to_expiry <= 60.5). If True, the batch enters the urgent branch.\n"
+        "• Left Internal Node (High Urgency): Tests inventory coverage (cover_days >= 45.0). If True, stock will outlast clearance runway; routed to LEAF 1 (Tier 1: Priority Pick, 96% confidence). If False, velocity can absorb stock; routed to LEAF 2 (Tier 2: Urgent Dispatch, 84% confidence).\n"
+        "• Right Internal Node (Normal Runway): Tests daily velocity (daily_velocity <= 8.5 units/day). If True (slow moving), stock is flagged as velocity deficit; routed to LEAF 3 (Tier 2: Normal Dispatch, 88% confidence). If False, routed to LEAF 4 (Tier 3: Strategic Reserve / Healthy, 98% confidence)."
+    )
+    p_trav.paragraph_format.space_after = Pt(8)
 
     add_header_styled(doc, "Algorithm Details, Input Features & Output Predictions", level=2)
     ml_spec_data = [
@@ -222,9 +246,9 @@ def build_docx_report():
     p_mlf.paragraph_format.space_after = Pt(8)
 
     # ══════════════════════════════════════════════════════════════════════════
-    # SECTION 6: LINEAR PROGRAMMING OPTIMIZATION
+    # SECTION 6: LINEAR PROGRAMMING OPTIMIZATION & LP DECISION TREE
     # ══════════════════════════════════════════════════════════════════════════
-    add_header_styled(doc, "6. Linear Programming (LP) Cost Optimizer", level=1)
+    add_header_styled(doc, "6. Linear Programming (LP) Cost Optimizer & Allocation Decision Tree", level=1)
     
     p6 = doc.add_paragraph(
         "Once batches are stratified by expiry risk, management must make capital-optimal recovery decisions. PharmaTrace AI formulates inventory rebalancing as a Simplex / Dual-Simplex Linear Programming problem solved using the high-performance SciPy HiGHS solver."
@@ -240,6 +264,30 @@ def build_docx_report():
         cap.runs[0].font.size = Pt(8.5)
         cap.runs[0].font.italic = True
         cap.runs[0].font.color.rgb = RGBColor(100, 116, 139)
+
+    add_header_styled(doc, "Decision Tree Example 2: Operational Allocation Decision Tree", level=2)
+    p_dt2 = doc.add_paragraph(
+        "To provide operational transparency to supply chain planners and warehouse supervisors, the optimization solver's internal branch-and-bound logic is mapped into a clear Operational Decision Tree (Figure 6.2). Planners can trace every SKU-warehouse decision step-by-step."
+    )
+    p_dt2.paragraph_format.space_after = Pt(8)
+
+    diag6_path = os.path.join(IMG_DIR, "diag6_lp_decision_tree.png")
+    if os.path.exists(diag6_path):
+        doc.add_picture(diag6_path, width=Inches(6.5))
+        cap = doc.add_paragraph("Figure 6.2: Decision Tree Example 2 — LP Channel Selection and FEFO Routing Decision Tree.")
+        cap.paragraph_format.space_before = Pt(4)
+        cap.paragraph_format.space_after = Pt(12)
+        cap.runs[0].font.size = Pt(8.5)
+        cap.runs[0].font.italic = True
+        cap.runs[0].font.color.rgb = RGBColor(100, 116, 139)
+
+    add_header_styled(doc, "Step-by-Step Traversal of LP Operational Decision Tree", level=3)
+    p_lptrav = doc.add_paragraph(
+        "• Root Check (Regulatory Horizon): Tests if DTE <= 30 days. If True, stock is in statutory quarantine hazard territory.\n"
+        "• Left Sub-Tree (Quarantine Path): Evaluates whether DTE <= 7 days or remaining velocity cannot clear units. If Yes, routed to ACTION 1: Mandatory Certified Destruction (100% loss booked, but prevents FDA Form 483 citations). If No (30–60d window with secondary buyer demand), routed to ACTION 2: Secondary Liquidation (salvaging 40–65% cash value).\n"
+        "• Right Sub-Tree (Commercial Runway Path): Tests if DTE >= 60 days and a partner warehouse has >= 1.3x higher velocity. If Yes and net margin after freight is positive, routed to ACTION 3: Inter-Warehouse Transfer. If No (local velocity is sufficient), routed to ACTION 4: Standard Commercial FEFO Dispatch (100% full margin revenue)."
+    )
+    p_lptrav.paragraph_format.space_after = Pt(8)
 
     add_header_styled(doc, "Mathematical Formulation & Objective Function", level=2)
     p_math = doc.add_paragraph(
@@ -272,13 +320,13 @@ def build_docx_report():
     repo_data = [
         ["Data Storage & Locations", "Raw Master: data/master_dataset/PharmaTrace_High_Volume_Master_Dataset.xlsx\nSample Template: PharmaTrace_Data_Template.xlsx\nSynthetic Generators: Embedded in launch_notebook.sh"],
         ["Clean Data Processing", "In-memory Pandas pipeline cleans, types, merges, and derives inventory metrics during runtime. Stored in memory to prevent data leakage and guarantee atomic execution."],
-        ["Results & Artifact Storage", "1. Forecast tables exported to outputs/ directory\n2. Certified Destruction Manifest exported as CSV for FDA compliance audit files\n3. Action Registers downloadable directly from UI\n4. Diagnostic diagrams saved in outputs/doc_diagrams/"],
+        ["Results & Artifact Storage", "1. Forecast tables exported to outputs/ directory\n2. Certified Destruction Manifest exported as CSV with Batch / Lot # for FDA compliance audit files\n3. Action Registers with Priority Urgency Status downloadable directly from UI\n4. Diagnostic diagrams saved in outputs/doc_diagrams/"],
         ["Notebook Pipeline Cells", "Cell 1-4: Environment & Data Ingestion\nCell 5-7: ABC-FSN Pareto Matrix & FEFO Poka-Yoke\nCell 8-10: Expiry Heatmaps & 24M Demand Forecasting\nCell 11-13: Random Forest Classifier & OOB Validation\nCell 14-15: HiGHS Linear Programming Cost Optimization"]
     ]
     style_table(doc.add_table(rows=1, cols=2), [Inches(2.2), Inches(4.3)], ["Component", "Implementation Details & File Paths"], repo_data)
 
     doc.save(DOCX_OUT)
-    print(f"Word Document generated successfully at: {DOCX_OUT}")
+    print(f"Word Document updated successfully with Decision Trees at: {DOCX_OUT}")
     return DOCX_OUT
 
 if __name__ == "__main__":

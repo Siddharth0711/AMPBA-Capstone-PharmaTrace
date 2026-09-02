@@ -101,8 +101,8 @@ def build_pdf_report():
         'H1',
         parent=styles['Normal'],
         fontName='Helvetica-Bold',
-        fontSize=14,
-        leading=18,
+        fontSize=13,
+        leading=17,
         textColor=colors.HexColor('#0b2c5e'),
         spaceBefore=14,
         spaceAfter=6,
@@ -113,8 +113,8 @@ def build_pdf_report():
         'H2',
         parent=styles['Normal'],
         fontName='Helvetica-Bold',
-        fontSize=11,
-        leading=14,
+        fontSize=10.5,
+        leading=13.5,
         textColor=colors.HexColor('#0e7490'),
         spaceBefore=10,
         spaceAfter=4,
@@ -125,8 +125,8 @@ def build_pdf_report():
         'Body',
         parent=styles['Normal'],
         fontName='Helvetica',
-        fontSize=9,
-        leading=13,
+        fontSize=8.5,
+        leading=12,
         textColor=colors.HexColor('#1e293b'),
         spaceAfter=6
     )
@@ -156,8 +156,8 @@ def build_pdf_report():
         'TH',
         parent=styles['Normal'],
         fontName='Helvetica-Bold',
-        fontSize=8,
-        leading=10,
+        fontSize=7.5,
+        leading=9.5,
         textColor=colors.white
     )
 
@@ -165,8 +165,8 @@ def build_pdf_report():
         'TB',
         parent=styles['Normal'],
         fontName='Helvetica',
-        fontSize=7.5,
-        leading=10,
+        fontSize=7,
+        leading=9.5,
         textColor=colors.HexColor('#1e293b')
     )
 
@@ -174,7 +174,7 @@ def build_pdf_report():
 
     # Title & Metadata
     story.append(Paragraph("PHARMATRACE AI", title_style))
-    story.append(Paragraph("End-to-End Enterprise Architecture, Predictive Machine Learning, Linear Programming Optimization, and Clinical Regulatory Governance Specification", sub_style))
+    story.append(Paragraph("End-to-End Enterprise Architecture, Predictive Machine Learning, Linear Programming Optimization, Decision Tree Logic, and Clinical Regulatory Governance Specification", sub_style))
     story.append(Paragraph(
         "<b>Academic Institution:</b> Indian School of Business (ISB) — AMPBA Capstone Module 3<br/>"
         "<b>Corporate Sponsor:</b> Innodatatics Inc. &bull; <b>Regulatory Standards:</b> US FDA 21 CFR §211 / CDSCO Schedule M<br/>"
@@ -257,7 +257,7 @@ def build_pdf_report():
     fefo_rows = [
         [Paragraph("Zone / Horizon", tbl_header_style), Paragraph("DTE Horizon", tbl_header_style), Paragraph("Recovery", tbl_header_style), Paragraph("Regulatory Protocol &amp; Operational Action", tbl_header_style)],
         [Paragraph("Zone 1: Commercial Clearance", tbl_body_style), Paragraph("DTE > 90–120d", tbl_body_style), Paragraph("100% Price", tbl_body_style), Paragraph("Standard commercial dispatch. Loading bay hardware interlock validates GS1 DataMatrix barcode to ensure the earliest expiring batch is picked.", tbl_body_style)],
-        [Paragraph("Zone 2: Rebalancing Window", tbl_body_style), Paragraph("DTE 60–90d", tbl_body_style), Paragraph("90% - Freight", tbl_body_style), Paragraph("Inter-Warehouse Transfer (🚚) viable. Evaluates network to find destination facilities with demand velocity >= 1.3x origin, ensuring stock clears before expiry.", tbl_body_style)],
+        [Paragraph("Zone 2: Rebalancing Window", tbl_body_style), Paragraph("DTE 60–90d", tbl_body_style), Paragraph("90% - Freight", tbl_body_style), Paragraph("Inter-Warehouse Transfer viable. Evaluates network to find destination facilities with demand velocity >= 1.3x origin, ensuring stock clears before expiry.", tbl_body_style)],
         [Paragraph("Zone 3: Secondary Liquidation", tbl_body_style), Paragraph("DTE 30–60d", tbl_body_style), Paragraph("40–65% Price", tbl_body_style), Paragraph("Transfer runway closes. Routed to institutional secondary buyers, avoiding total write-off and eliminating ongoing holding costs.", tbl_body_style)],
         [Paragraph("Zone 4: Mandatory Destruction", tbl_body_style), Paragraph("DTE ≤ 30d (Lock ≤ 7d)", tbl_body_style), Paragraph("Write-Off (-$0.80/u)", tbl_body_style), Paragraph("CRITICAL AUDIT CLIFF. Stock legally barred from sale. Quarantined into certified destruction manifest per FDA 21 CFR §211.160 / Schedule M.", tbl_body_style)]
     ]
@@ -342,9 +342,9 @@ def build_pdf_report():
     story.append(Spacer(1, 14))
 
     # ══════════════════════════════════════════════════════════════════════════
-    # SECTION 5: MACHINE LEARNING & MLFLOW
+    # SECTION 5: MACHINE LEARNING & DECISION TREE EXAMPLE 1
     # ══════════════════════════════════════════════════════════════════════════
-    story.append(Paragraph("5. Machine Learning Expiry Risk Classifier &amp; MLflow Tracking", h1_style))
+    story.append(Paragraph("5. Machine Learning Expiry Risk Classifier &amp; Decision Tree Example", h1_style))
     story.append(Paragraph(
         "PharmaTrace AI deploys an ensemble Random Forest Classifier that detects 'Velocity Deficits' 60 days before critical status. Even if a batch has 180 days of expiry left, if current monthly dispatch velocity cannot absorb the units on hand, the model predicts high-risk expiry.",
         body_style
@@ -352,8 +352,19 @@ def build_pdf_report():
 
     diag3_path = os.path.join(IMG_DIR, "diag3_ml_pipeline.png")
     if os.path.exists(diag3_path):
-        story.append(RLImage(diag3_path, width=504, height=220))
+        story.append(RLImage(diag3_path, width=504, height=210))
         story.append(Paragraph("Figure 5.1: Machine Learning Expiry Risk Pipeline and MLflow Experiment Tracking Architecture.", caption_style))
+
+    story.append(Paragraph("Decision Tree Example 1: Machine Learning Classifier Tree Structure", h2_style))
+    story.append(Paragraph(
+        "The Random Forest model consists of 120 randomized bagging decision tree estimators. Figure 5.2 demonstrates an extracted, highly interpretable decision tree from the trained forest. It illustrates the exact recursive binary partitioning logic used to split inventory samples into risk classifications based on Gini impurity reduction.",
+        body_style
+    ))
+
+    diag5_path = os.path.join(IMG_DIR, "diag5_ml_decision_tree.png")
+    if os.path.exists(diag5_path):
+        story.append(RLImage(diag5_path, width=504, height=270))
+        story.append(Paragraph("Figure 5.2: Decision Tree Example 1 — Random Forest Split Hierarchy and Branching Probabilities.", caption_style))
 
     story.append(Paragraph("Hyperparameter Optimization &amp; MLflow Registry", h2_style))
     ml_rows = [
@@ -378,9 +389,9 @@ def build_pdf_report():
     story.append(Spacer(1, 14))
 
     # ══════════════════════════════════════════════════════════════════════════
-    # SECTION 6: LINEAR PROGRAMMING OPTIMIZATION
+    # SECTION 6: LINEAR PROGRAMMING OPTIMIZATION & DECISION TREE EXAMPLE 2
     # ══════════════════════════════════════════════════════════════════════════
-    story.append(Paragraph("6. Linear Programming (LP) Cost Optimizer", h1_style))
+    story.append(Paragraph("6. Linear Programming (LP) Cost Optimizer &amp; Allocation Decision Tree", h1_style))
     story.append(Paragraph(
         "Once batches are stratified by expiry risk, inventory rebalancing is modeled as a Simplex Linear Programming optimization problem solved using the SciPy HiGHS solver. It allocates units across 4 channels to maximize recovered capital.",
         body_style
@@ -388,8 +399,19 @@ def build_pdf_report():
 
     diag4_path = os.path.join(IMG_DIR, "diag4_lp_optimizer.png")
     if os.path.exists(diag4_path):
-        story.append(RLImage(diag4_path, width=504, height=220))
+        story.append(RLImage(diag4_path, width=504, height=210))
         story.append(Paragraph("Figure 6.1: Linear Programming Multi-Channel Asset Allocation and Solvers.", caption_style))
+
+    story.append(Paragraph("Decision Tree Example 2: Operational Allocation Decision Tree", h2_style))
+    story.append(Paragraph(
+        "To provide operational transparency to supply chain planners and warehouse supervisors, the optimization solver's internal branch-and-bound logic is mapped into a clear Operational Decision Tree (Figure 6.2). Planners can trace every SKU-warehouse decision step-by-step.",
+        body_style
+    ))
+
+    diag6_path = os.path.join(IMG_DIR, "diag6_lp_decision_tree.png")
+    if os.path.exists(diag6_path):
+        story.append(RLImage(diag6_path, width=504, height=270))
+        story.append(Paragraph("Figure 6.2: Decision Tree Example 2 — LP Channel Selection and FEFO Routing Decision Tree.", caption_style))
 
     story.append(Paragraph("Mathematical Model Formulation", h2_style))
     story.append(Paragraph(
@@ -435,7 +457,7 @@ def build_pdf_report():
     story.append(t6)
 
     doc.build(story, canvasmaker=NumberedCanvas)
-    print(f"PDF Document generated successfully at: {PDF_OUT}")
+    print(f"PDF Document updated successfully with Decision Trees at: {PDF_OUT}")
     return PDF_OUT
 
 if __name__ == "__main__":
