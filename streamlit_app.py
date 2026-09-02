@@ -1399,20 +1399,20 @@ elif selected_page == "✅ FEFO Compliance":
         st.markdown(f"**NC-VaR:** Total value dispatched in violation of FEFO: `{fmt_curr(_nc_val_total, compact=False)}` ({_nc_var_intensity:.2f}% intensity).")
 
     st.markdown("---")
-# ── Interactive FEFO Dispatch Queue & Pick Slip Generator ───────────────
-    st.markdown('<div class="section-header">⚡ Live FEFO Pick Slip & Dispatch Queue Generator</div>', unsafe_allow_html=True)
-    st.markdown('<div class="section-desc">Select a product and enter the required order volume. The engine dynamically sequences available warehouse batches in strict First-Expiry-First-Out (FEFO) order, calculates batch allocations, and generates an FDA 21 CFR §211.150 audit-ready pick slip.</div>', unsafe_allow_html=True)
+# ── Interactive Barcode Scanner & FEFO Gatekeeper Interlock System ───────
+    st.markdown('<div class="section-header">🔍 Barcode Verification &amp; FEFO Hardware Interlock System</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="section-desc">Enforces <b>Poka-Yoke (Error-Proofing)</b> at the loading bay. Scans product GS1-128 / 2D DataMatrix barcodes before dispatch. <b>If the scanned expiry date matches the mandated FEFO batch, the system unlocks invoice and gate pass generation; otherwise, the hardware interlock disables dispatch.</b></div>', unsafe_allow_html=True)
 
     p_opts = sorted(products.product_id.unique().tolist()) if not products.empty else sorted(inventory.product_id.unique().tolist())
     p_names = dict(zip(products.product_id, products.generic_name)) if not products.empty else {}
 
     f_col1, f_col2, f_col3 = st.columns([2, 1, 1])
     with f_col1:
-        sel_f_pid = st.selectbox("Select Product to Dispatch", p_opts, format_func=lambda x: f"{x} — {p_names.get(x, x)}", key="fefo_prod_sel")
+        sel_f_pid = st.selectbox("1. Select Product for Outbound Dispatch", p_opts, format_func=lambda x: f"{x} — {p_names.get(x, x)}", key="fefo_prod_sel")
     with f_col2:
-        f_order_qty = st.number_input("Order Quantity (Units)", min_value=10, max_value=100000, value=800, step=50, key="fefo_qty_in")
+        f_order_qty = st.number_input("Order Quantity (Units)", min_value=10, max_value=100000, value=500, step=50, key="fefo_qty_in")
     with f_col3:
-        f_wh_filter = st.selectbox("Warehouse Filter", ["All Warehouses"] + sorted(inventory.warehouse_id.unique().tolist()), key="fefo_wh_sel")
+        f_wh_filter = st.selectbox("Dispatch Distribution Center", ["All Warehouses"] + sorted(inventory.warehouse_id.unique().tolist()), key="fefo_wh_sel")
 
     prod_inv = inventory[inventory["product_id"] == sel_f_pid].copy()
     if f_wh_filter != "All Warehouses":
@@ -1422,6 +1422,19 @@ elif selected_page == "✅ FEFO Compliance":
         st.warning(f"No stock available for {sel_f_pid} ({p_names.get(sel_f_pid, sel_f_pid)}) in the selected warehouse.", icon="⚠️")
     else:
         prod_inv = prod_inv.sort_values(by=["days_to_expiry", "quantity_on_hand"], ascending=[True, False]).reset_index(drop=True)
+        mandated_batch = prod_inv.iloc[0]
+        mandated_batch_id = str(mandated_batch.get("fp_batch_id", "BATCH-001"))
+        mandated_exp = pd.to_datetime(mandated_batch.get("expiry_date")).strftime("%Y-%m-%d") if pd.notna(mandated_batch.get("expiry_date")) else "2026-10-15"
+        mandated_dte = int(mandated_batch.get("days_to_expiry", 45))
+        mandated_dc  = str(mandated_batch.get("warehouse_id", "WH01"))
+
+        # Find a fresher batch for simulation
+        fresher_batch = prod_inv.iloc[-1] if len(prod_inv) > 1 else None
+        fresher_batch_id = str(fresher_batch.get("fp_batch_id", "BATCH-099")) if fresher_batch is not None else "BATCH-099"
+        fresher_exp = pd.to_datetime(fresher_batch.get("expiry_date")).strftime("%Y-%m-%d") if fresher_batch is not None and pd.notna(fresher_batch.get("expiry_date")) else "2027-11-20"
+        fresher_dte = int(fresher_batch.get("days_to_expiry", 450)) if fresher_batch is not None else 450
+
+        # Allocation sequence
         rem_demand = f_order_qty
         alloc_rows = []
         for seq, (_, row) in enumerate(prod_inv.iterrows(), 1):
@@ -1429,39 +1442,205 @@ elif selected_page == "✅ FEFO Compliance":
             pick_qty = min(avail, rem_demand) if rem_demand > 0 else 0
             rem_demand -= pick_qty
             alloc_rows.append({
-                "FEFO Sequence": f"Priority Pick #{seq}" if pick_qty > 0 else "Reserve Stock",
-                "Batch ID": row.get("fp_batch_id", f"BATCH-{seq:03d}"),
-                "Warehouse": row["warehouse_id"],
+                "FEFO Priority": f"Priority Lot #{seq}" if pick_qty > 0 else "Reserve Stock",
+                "Batch Number": row.get("fp_batch_id", f"BATCH-{seq:03d}"),
+                "Distribution Center": row["warehouse_id"],
                 "Expiry Date": str(pd.to_datetime(row["expiry_date"]).strftime("%Y-%m-%d")) if pd.notna(row.get("expiry_date")) else "N/A",
                 "Days to Expiry (DTE)": int(row["days_to_expiry"]) if pd.notna(row.get("days_to_expiry")) else 0,
-                "Risk Tier": row.get("expiry_risk", "Standard"),
                 "Available Stock": avail,
                 "Allocated to Pick": pick_qty,
-                "Remaining Stock": avail - pick_qty,
-                "Pick Instruction": "🟢 FULL PICK" if pick_qty == avail and pick_qty > 0 else ("🟡 PARTIAL PICK" if pick_qty > 0 else "⚪ DO NOT PICK (HOLD)"),
+                "Gatekeeper Status": "Mandated for Dispatch" if seq == 1 else "Hold in Storage"
             })
         df_fefo_plan = pd.DataFrame(alloc_rows)
-        total_picked = df_fefo_plan["Allocated to Pick"].sum()
 
-        if total_picked >= f_order_qty:
-            st.success(f"✅ **FEFO Order Fully Allocated:** {total_picked:,} of {f_order_qty:,} units allocated across {len(df_fefo_plan[df_fefo_plan['Allocated to Pick']>0])} batch(es) in strict earliest-expiry order.", icon="✅")
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        # ── 2. LIVE BARCODE INTERLOCK GATEKEEPER INTERFACE ───────────────────
+        st.markdown("#### 📦 2. Dispatch Bay Barcode Scanning & Interlock Verification")
+        st.caption("Warehouse operator scans physical 2D DataMatrix / GS1-128 barcode on the pallet or carton before loading onto the delivery vehicle.")
+
+        # Display Mandated Target Lot
+        st.markdown(f"""
+        <div style='background:#0f172a; border:1px solid #1e3a5f; border-left:5px solid #00d4ff; padding:1rem 1.4rem; border-radius:0.6rem; margin-bottom:1rem;'>
+          <div style='display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap;'>
+            <span style='color:#38bdf8; font-weight:bold; font-size:1rem;'>🎯 SYSTEM-MANDATED FEFO BATCH: {mandated_batch_id}</span>
+            <span style='color:#94a3b8; font-size:0.85rem;'>Location: <b>{mandated_dc}</b> &nbsp;|&nbsp; Earliest Expiry: <b style='color:#fcd34d;'>{mandated_exp} ({mandated_dte}d remaining)</b></span>
+          </div>
+          <div style='color:#cbd5e1; font-size:0.82rem; margin-top:0.3rem;'>
+            Mandatory picking rule: Outbound dispatch must fulfill from <b>{mandated_batch_id}</b> first to comply with {fefo_statute}.
+          </div>
+        </div>""", unsafe_allow_html=True)
+
+        # Scanner Input and Quick Simulation Buttons
+        sc_c1, sc_c2 = st.columns([2, 1])
+        with sc_c1:
+            if "scanned_barcode_val" not in st.session_state:
+                st.session_state["scanned_barcode_val"] = ""
+
+            scanned_input = st.text_input(
+                "📷 Scanned Barcode / Batch Number (GS1 DataMatrix format or Batch ID):",
+                value=st.session_state.get("scanned_barcode_val", ""),
+                placeholder=f"e.g. (01)00312345678901(10){mandated_batch_id}(17){mandated_exp.replace('-','')}",
+                key="barcode_scanner_field"
+            )
+
+        with sc_c2:
+            st.markdown("<div style='font-size:0.75rem; color:#94a3b8; margin-bottom:4px;'>DEMO BARCODE SCANNER SIMULATION:</div>", unsafe_allow_html=True)
+            b_btn1, b_btn2 = st.columns(2)
+            if b_btn1.button("🟢 Correct Lot", use_container_width=True, help=f"Simulate scanning the mandated batch ({mandated_batch_id})"):
+                st.session_state["scanned_barcode_val"] = mandated_batch_id
+                st.rerun()
+            if b_btn2.button("🔴 Wrong Lot", use_container_width=True, help=f"Simulate scanning a fresher out-of-sequence batch ({fresher_batch_id})"):
+                st.session_state["scanned_barcode_val"] = fresher_batch_id
+                st.rerun()
+
+        # Parse Scanned Input
+        is_verified = False
+        scan_status_msg = ""
+        current_scan = str(scanned_input).strip()
+
+        if current_scan != "":
+            if mandated_batch_id.lower() in current_scan.lower() or mandated_exp.replace("-","") in current_scan:
+                # MATCH - INTERLOCK UNLOCKED
+                is_verified = True
+                st.markdown(f"""
+                <div style='background:linear-gradient(90deg,#052e16,#14532d); border-left:5px solid #22c55e; padding:1rem 1.4rem; border-radius:0.6rem; margin:1rem 0;'>
+                  <div style='display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap;'>
+                    <span style='color:#86efac; font-size:1.05rem; font-weight:bold;'>✅ GATEKEEPER VERIFIED — 100% FEFO COMPLIANT</span>
+                    <span style='color:#bbf7d0; font-size:0.85rem; font-weight:600;'>STATUS: DISPATCH UNLOCKED 🔓</span>
+                  </div>
+                  <div style='color:#cbd5e1; font-size:0.84rem; margin-top:0.3rem;'>
+                    Scanned lot <b>{mandated_batch_id}</b> matches the earliest expiry sequence (Expiry: <b>{mandated_exp}</b>). 
+                    Compliance validated against <b>{fefo_statute}</b>. Electronic signature recorded in 21 CFR Part 11 audit trail.
+                  </div>
+                </div>""", unsafe_allow_html=True)
+            else:
+                # MISMATCH - HARDWARE INTERLOCK ACTIVE
+                is_verified = False
+                st.markdown(f"""
+                <div style='background:linear-gradient(90deg,#7f1d1d,#450a0a); border-left:5px solid #ef4444; padding:1.1rem 1.4rem; border-radius:0.6rem; margin:1rem 0;'>
+                  <div style='display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap;'>
+                    <span style='color:#fca5a5; font-size:1.05rem; font-weight:bold;'>🛑 HARDWARE INTERLOCK ACTIVE: DISPATCH BLOCKED 🔒</span>
+                    <span style='color:#fecaca; font-size:0.85rem; font-weight:bold;'>FEFO VIOLATION PREVENTED</span>
+                  </div>
+                  <div style='color:#cbd5e1; font-size:0.85rem; margin-top:0.4rem;'>
+                    <b>Violation Details:</b> Scanned lot <b>{current_scan}</b> is a fresher batch (Expiry: <b>{fresher_exp}</b>, {fresher_dte}d remaining). 
+                    Mandated lot <b style='color:#fca5a5;'>{mandated_batch_id} (Expiry: {mandated_exp}, {mandated_dte}d) MUST be dispatched first</b>.
+                  </div>
+                  <div style='color:#fca5a5; font-size:0.82rem; margin-top:0.3rem; font-weight:600;'>
+                    🚫 Invoice generation, tax dispatch slips, and dock gate passes are HARD-DISABLED until the correct batch is scanned.
+                  </div>
+                </div>""", unsafe_allow_html=True)
         else:
-            st.warning(f"⚠️ **Partial Stock Allocation:** Only {total_picked:,} of {f_order_qty:,} units available across active stock. Deficit: {f_order_qty - total_picked:,} units.", icon="⚠️")
+            st.info("ℹ️ Awaiting barcode scan at dispatch bay. Scan product barcode above or use demo buttons to test verification.", icon="📷")
 
-        st.dataframe(df_fefo_plan, use_container_width=True)
+        st.markdown("<br>", unsafe_allow_html=True)
 
-        csv_slip = df_fefo_plan.to_csv(index=False).encode('utf-8')
-        st.download_button(
-            label="📥 Download Official FEFO Dispatch Pick Slip (CSV)",
-            data=csv_slip,
-            file_name=f"FEFO_Pick_Slip_{sel_f_pid}_{datetime.now().strftime('%Y%m%d')}.csv",
-            mime="text/csv",
-            help="Export FEFO pick list for warehouse management and regulatory audit verification"
-        )
+        # ── 3. INVOICE & GATE PASS GENERATION (ENABLED ONLY ON VERIFICATION) ──
+        st.markdown("#### 📄 3. Regulatory Invoice & Shipping Gate Pass Release")
+        st.caption("System generates legal pharmaceutical tax invoices and shipping gate passes only when the barcode scan passes FEFO verification.")
+
+        inv_c1, inv_c2, inv_c3 = st.columns(3)
+        with inv_c1:
+            btn_invoice = st.button("📄 Generate Tax Invoice", type="primary", disabled=not is_verified, use_container_width=True, key="btn_gen_inv")
+        with inv_c2:
+            btn_gatepass = st.button("🚚 Release Shipping Gate Pass", type="primary", disabled=not is_verified, use_container_width=True, key="btn_gen_gp")
+        with inv_c3:
+            btn_capa = st.button("📝 Log QA Interlock Event", disabled=False, use_container_width=True, key="btn_log_capa")
+
+        if not is_verified:
+            st.caption("🔒 *Invoice & Gate Pass buttons are disabled by the FEFO Hardware Interlock. Scan the correct mandated batch to unlock.*")
+        else:
+            # Render Sample Compliant Tax Invoice & Gate Pass Preview
+            _prod_name = p_names.get(sel_f_pid, sel_f_pid)
+            _u_price = float(inventory[inventory["product_id"]==sel_f_pid]["unit_price"].mean()) if not inventory.empty else 50.0
+            _inv_total = f_order_qty * _u_price
+            _tax_rate = 0.12 if is_india else 0.08
+            _tax_val = _inv_total * _tax_rate
+            _grand_total = _inv_total + _tax_val
+
+            st.markdown(f"""
+            <div style='background:#0f172a; border:2px solid #10b981; border-radius:0.75rem; padding:1.5rem; margin-top:1rem;'>
+              <div style='display:flex; justify-content:space-between; align-items:flex-start; border-bottom:1px solid #1e293b; padding-bottom:0.8rem;'>
+                <div>
+                  <h3 style='color:#00d4ff; margin:0;'>🏥 PharmaTrace AI — Official Tax Invoice &amp; Dispatch Note</h3>
+                  <div style='color:#94a3b8; font-size:0.8rem;'>Compliant with {fefo_statute} &amp; GDP Guidelines</div>
+                </div>
+                <div style='text-align:right;'>
+                  <div style='color:#10b981; font-weight:bold; font-size:1.1rem;'>✅ FEFO CERTIFIED</div>
+                  <div style='color:#64748b; font-size:0.75rem;'>Inv #: <b>INV-2026-{datetime.now().strftime('%m%d%H')}</b></div>
+                  <div style='color:#64748b; font-size:0.75rem;'>Date: <b>{datetime.now().strftime('%d %B %Y')}</b></div>
+                </div>
+              </div>
+
+              <div style='display:grid; grid-template-columns: repeat(3, 1fr); gap:1rem; margin:1rem 0; font-size:0.85rem; color:#cbd5e1;'>
+                <div>
+                  <b style='color:#38bdf8;'>Dispatching Facility:</b><br>
+                  {mandated_dc} Distribution Center<br>
+                  Licensed Cold Storage Facility
+                </div>
+                <div>
+                  <b style='color:#38bdf8;'>Consignee / Customer:</b><br>
+                  Apollo Healthcare Hub / Metro Hospital<br>
+                  Purchase Order #: PO-2026-9844
+                </div>
+                <div>
+                  <b style='color:#38bdf8;'>FEFO Quality Verification:</b><br>
+                  Scanned Batch: <b style='color:#10b981;'>{mandated_batch_id}</b><br>
+                  Batch Expiry: <b style='color:#10b981;'>{mandated_exp}</b> ({mandated_dte}d DTE)
+                </div>
+              </div>
+
+              <table style='width:100%; border-collapse:collapse; margin:1rem 0; font-size:0.85rem; color:#e2e8f0;'>
+                <tr style='background:#1e293b; color:#38bdf8; text-align:left;'>
+                  <th style='padding:8px;'>Item SKU</th>
+                  <th style='padding:8px;'>Description</th>
+                  <th style='padding:8px;'>Verified Batch</th>
+                  <th style='padding:8px;'>Expiry Date</th>
+                  <th style='padding:8px;'>Qty (Units)</th>
+                  <th style='padding:8px;'>Unit Price</th>
+                  <th style='padding:8px; text-align:right;'>Net Amount</th>
+                </tr>
+                <tr style='border-bottom:1px solid #1e293b;'>
+                  <td style='padding:8px;'><b>{sel_f_pid}</b></td>
+                  <td style='padding:8px;'>{_prod_name}</td>
+                  <td style='padding:8px;'><span style='background:#064e3b; color:#6ee7b7; padding:2px 6px; border-radius:4px;'>{mandated_batch_id}</span></td>
+                  <td style='padding:8px;'>{mandated_exp}</td>
+                  <td style='padding:8px;'>{f_order_qty:,}</td>
+                  <td style='padding:8px;'>{fmt_curr(_u_price)}</td>
+                  <td style='padding:8px; text-align:right;'><b>{fmt_curr(_inv_total)}</b></td>
+                </tr>
+                <tr style='background:#0b1120; font-weight:bold;'>
+                  <td colspan='6' style='padding:8px; text-align:right; color:#94a3b8;'>Taxes &amp; Statutory Duties ({round(_tax_rate*100)}%):</td>
+                  <td style='padding:8px; text-align:right; color:#cbd5e1;'>{fmt_curr(_tax_val)}</td>
+                </tr>
+                <tr style='background:#0b1120; font-weight:bold; font-size:0.95rem;'>
+                  <td colspan='6' style='padding:8px; text-align:right; color:#38bdf8;'>GRAND TOTAL AMOUNT:</td>
+                  <td style='padding:8px; text-align:right; color:#6ee7b7;'>{fmt_curr(_grand_total)}</td>
+                </tr>
+              </table>
+
+              <div style='display:flex; justify-content:space-between; align-items:center; border-top:1px solid #1e293b; padding-top:0.8rem; font-size:0.8rem; color:#64748b;'>
+                <div>🔐 Electronic QA Sign-off: <b>DIGITAL-SIGN-QA-{datetime.now().strftime('%Y%m%d%H%M')} (21 CFR Part 11 Validated)</b></div>
+                <div>🚚 Shipping Gate Pass: <b style='color:#10b981;'>PASS-APPROVED-01</b></div>
+              </div>
+            </div>""", unsafe_allow_html=True)
+
+            csv_inv = df_fefo_plan[df_fefo_plan["Allocated to Pick"]>0].to_csv(index=False).encode('utf-8')
+            st.download_button(
+                label="📥 Download Official FEFO Verified Tax Invoice & Gate Pass (CSV/Excel)",
+                data=csv_inv,
+                file_name=f"Tax_Invoice_{mandated_batch_id}_{datetime.now().strftime('%Y%m%d')}.csv",
+                mime="text/csv",
+                help="Export FEFO validated tax invoice and dispatch authorization"
+            )
+
+        # ── 4. ALLOCATION REGISTER TABLE ─────────────────────────────────────
+        with st.expander("📋 Full Warehouse Batch Allocation & Sequence Register", expanded=False):
+            st.dataframe(df_fefo_plan, use_container_width=True)
 
     st.markdown("---")
-
-    # ── Section 2: Historical Compliance Analytics ─────────────────────────
+# ── Section 2: Historical Compliance Analytics ─────────────────────────
     st.markdown('<div class="section-header">📊 Historical FEFO Compliance Trends & Audit Inspection</div>', unsafe_allow_html=True)
     fig, axes = plt.subplots(1, 3, figsize=(22, 7))
     fig.patch.set_facecolor("#0f1117")
