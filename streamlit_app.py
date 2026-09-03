@@ -4009,8 +4009,15 @@ elif selected_page == "🏷️ Manufacturing Yield & Supplier Risk":
     if not products.empty and "product_id" in products.columns:
         p_sub = products[["product_id", "generic_name", "dosage_form", "unit_price"]].drop_duplicates(subset=["product_id"])
         mo_merged = mo_merged.merge(p_sub, on="product_id", how="left")
-    mo_merged["generic_name"] = mo_merged.get("generic_name", mo_merged["product_id"])
-    mo_merged["unit_price"] = mo_merged.get("unit_price", 25.0).fillna(25.0)
+    if "generic_name" not in mo_merged.columns:
+        mo_merged["generic_name"] = mo_merged["product_id"] if "product_id" in mo_merged.columns else "Product"
+    else:
+        mo_merged["generic_name"] = mo_merged["generic_name"].fillna(mo_merged["product_id"] if "product_id" in mo_merged.columns else "Product")
+
+    if "unit_price" not in mo_merged.columns:
+        mo_merged["unit_price"] = 25.0
+    else:
+        mo_merged["unit_price"] = pd.to_numeric(mo_merged["unit_price"], errors="coerce").fillna(25.0)
 
     # Compute operational yield metrics
     mo_merged["planned_qty"] = pd.to_numeric(mo_merged["planned_qty"], errors="coerce").fillna(10000)
@@ -4564,15 +4571,21 @@ elif selected_page == "🔄 Reverse Logistics & Certified Disposal":
     ret_df = extended_tables.get("returns", pd.DataFrame())
     dsp_df = extended_tables.get("disposal", pd.DataFrame())
     doc_df = extended_tables.get("compliance_documents", pd.DataFrame())
+    batches_df = extended_tables.get("finished_product_batches", pd.DataFrame())
 
     if ret_df.empty:
         # Fallback simulation
         rng_r = np.random.default_rng(99)
         n_r = 500
+        _avail_bids = (
+            batches_df["fp_batch_id"].dropna().tolist()
+            if not batches_df.empty and "fp_batch_id" in batches_df.columns
+            else [f"FPB{i:04d}" for i in range(1, 101)]
+        )
         ret_df = pd.DataFrame({
             "return_id": [f"RTN{i:06d}" for i in range(1, n_r+1)],
             "return_no": [f"RMA-2025-{i:05d}" for i in range(1, n_r+1)],
-            "fp_batch_id": [f"FPB{rng_r.integers(1, 100):06d}" for _ in range(n_r)],
+            "fp_batch_id": rng_r.choice(_avail_bids, size=n_r),
             "warehouse_id": rng_r.choice(["WH001","WH002","WH003","WH004","WH005","WH006","WH007","WH008"], size=n_r),
             "return_reason": rng_r.choice(["recall", "expired", "damaged", "overstock", "quality_issue"], size=n_r, p=[0.55, 0.22, 0.08, 0.08, 0.07]),
             "quantity": rng_r.integers(50, 600, size=n_r),
@@ -4606,34 +4619,35 @@ elif selected_page == "🔄 Reverse Logistics & Certified Disposal":
 
     st.markdown("---")
 
-    # ── MODULE 5 TABS: EXECUTIVE REVERSE LOGISTICS & PREDICTIVE ML SUITE ────
     tab_rev_ops, tab_rev_ml, tab_rcl_ml, tab_dsp_ml = st.tabs([
-        "📊 Reverse Operations & Manifests",
-        "🤖 Returns Root-Cause Classifier",
+        "📋 Reverse Operations & Manifests",
+        "🎯 Returns Root-Cause Classifier",
         "🔬 Recall NLP Reason & Severity Predictor",
         "🔥 Hazardous Disposal Routing Model"
     ])
 
-    # ── TAB 1: REVERSE OPERATIONS & MANIFESTS ───────────────────────────────
+    # ── TAB 1: REVERSE OPERATIONS & AUDIT MANIFESTS ──────────────────────────
     with tab_rev_ops:
-        fig_r, axes_r = plt.subplots(1, 2, figsize=(20, 6))
+        st.markdown("### 📋 Reverse Supply Chain Operations & Disposal Accounting")
+        st.markdown("Tracks inbound return merchandise authorizations (RMAs), quarantine inspections, carrier damage attribution, and certified disposal certificates.")
+
+        fig_r, axes_r = plt.subplots(1, 2, figsize=(16, 5))
         fig_r.patch.set_facecolor("#0f1117")
 
-        # Left: RMA Root Causes
+        # Left: Return Reasons Breakdown
         ax_r1 = axes_r[0]
         ax_r1.set_facecolor("#1a1d27")
-        reason_counts = ret_df["return_reason"].value_counts()
-        cols_reason = ["#ef4444" if "recall" in str(r) else ("#f59e0b" if "expired" in str(r) else "#00d4ff") for r in reason_counts.index]
-        bars_r1 = ax_r1.barh([str(r).replace("_"," ").title() for r in reason_counts.index], reason_counts.values, color=cols_reason, alpha=0.85)
-        ax_r1.set_title("Customer Return (RMA) Root-Cause Distribution", color="#00d4ff", fontweight="bold")
-        ax_r1.set_xlabel("Number of Authorized RMAs", color="#ccc")
+        reason_counts = ret_df["return_reason"].value_counts() if not ret_df.empty and "return_reason" in ret_df.columns else pd.Series({"recall": 275, "expired": 110})
+        bars_r1 = ax_r1.barh([str(r).replace("_"," ").title() for r in reason_counts.index], reason_counts.values, color="#00d4ff", alpha=0.85)
+        ax_r1.set_title("Customer & Hospital Return Reasons (RMA Influx)", color="#00d4ff", fontweight="bold")
+        ax_r1.set_xlabel("RMA Count", color="#ccc")
         for bar, val in zip(bars_r1, reason_counts.values):
             ax_r1.text(val + max(reason_counts.values)*0.01, bar.get_y() + bar.get_height()/2, f"{val:,} ({val/len(ret_df)*100:.1f}%)", va="center", fontsize=8.5, color="#cbd5e1")
 
         # Right: EPA/DEA Certified Disposal Methods
         ax_r2 = axes_r[1]
         ax_r2.set_facecolor("#1a1d27")
-        disp_counts = dsp_df["disposal_method"].value_counts()
+        disp_counts = dsp_df["disposal_method"].value_counts() if not dsp_df.empty and "disposal_method" in dsp_df.columns else pd.Series({"incineration": 300, "chemical_neutralization": 100})
         bars_r2 = ax_r2.bar([str(m).replace("_"," ").title()[:18] for m in disp_counts.index], disp_counts.values, color="#7c3aed", alpha=0.85)
         ax_r2.set_title("Certified Destruction Methods (EPA / DEA Hazardous Waste)", color="#00d4ff", fontweight="bold")
         ax_r2.set_ylabel("Disposal Run Count", color="#ccc")
@@ -4675,26 +4689,51 @@ elif selected_page == "🔄 Reverse Logistics & Certified Disposal":
 
     # ── TAB 2: RETURNS ROOT-CAUSE PREDICTIVE CLASSIFIER ─────────────────────
     with tab_rev_ml:
-        st.markdown("### 🤖 Supervised Machine Learning: Return Root-Cause Classifier")
+        st.markdown("### 🎯 Returns Root-Cause Classifier")
         st.markdown("Predicts why incoming stock is likely to be returned (e.g., *Recall*, *Expiry*, *Transit Damage*, *Overstock*, *Cold-Chain Excursion*) based on lot attributes, pricing, warehouse DC, and dosage form.")
 
         batches_df = extended_tables.get("finished_product_batches", pd.DataFrame())
         df_ret_ml = ret_df.copy()
         if not batches_df.empty and "fp_batch_id" in batches_df.columns and "fp_batch_id" in df_ret_ml.columns:
-            df_ret_ml = df_ret_ml.merge(batches_df[["fp_batch_id", "product_id", "batch_qty", "qc_status", "recall_flag"]], on="fp_batch_id", how="left")
+            b_cols = [c for c in ["fp_batch_id", "product_id", "batch_qty", "qc_status", "recall_flag"] if c in batches_df.columns]
+            df_ret_ml = df_ret_ml.merge(batches_df[b_cols], on="fp_batch_id", how="left")
         if "product_id" in df_ret_ml.columns and not products.empty and "product_id" in products.columns:
             p_cols = [c for c in ["product_id", "dosage_form", "route", "shelf_life_months", "unit_price"] if c in products.columns]
             df_ret_ml = df_ret_ml.merge(products[p_cols], on="product_id", how="left")
 
-        df_ret_ml["shelf_life_months"] = pd.to_numeric(df_ret_ml.get("shelf_life_months"), errors="coerce").fillna(24)
-        df_ret_ml["unit_price"] = pd.to_numeric(df_ret_ml.get("unit_price"), errors="coerce").fillna(50)
-        df_ret_ml["quantity"] = pd.to_numeric(df_ret_ml.get("quantity"), errors="coerce").fillna(100)
-        df_ret_ml["dosage_form"] = df_ret_ml.get("dosage_form", "Tablet").fillna("Tablet")
-        df_ret_ml["warehouse_id"] = df_ret_ml.get("warehouse_id", "WH001").fillna("WH001")
+        if "shelf_life_months" not in df_ret_ml.columns:
+            df_ret_ml["shelf_life_months"] = 24.0
+        else:
+            df_ret_ml["shelf_life_months"] = pd.to_numeric(df_ret_ml["shelf_life_months"], errors="coerce").fillna(24.0)
+
+        if "unit_price" not in df_ret_ml.columns:
+            df_ret_ml["unit_price"] = 50.0
+        else:
+            df_ret_ml["unit_price"] = pd.to_numeric(df_ret_ml["unit_price"], errors="coerce").fillna(50.0)
+
+        if "quantity" not in df_ret_ml.columns:
+            df_ret_ml["quantity"] = 100.0
+        else:
+            df_ret_ml["quantity"] = pd.to_numeric(df_ret_ml["quantity"], errors="coerce").fillna(100.0)
+
+        if "dosage_form" not in df_ret_ml.columns:
+            df_ret_ml["dosage_form"] = "Tablet"
+        else:
+            df_ret_ml["dosage_form"] = df_ret_ml["dosage_form"].fillna("Tablet")
+
+        if "warehouse_id" not in df_ret_ml.columns:
+            df_ret_ml["warehouse_id"] = "WH001"
+        else:
+            df_ret_ml["warehouse_id"] = df_ret_ml["warehouse_id"].fillna("WH001")
+
+        if "return_reason" not in df_ret_ml.columns:
+            df_ret_ml["return_reason"] = "recall"
+        else:
+            df_ret_ml["return_reason"] = df_ret_ml["return_reason"].fillna("recall")
 
         X_ret = pd.concat([
             df_ret_ml[["quantity", "shelf_life_months", "unit_price"]],
-            pd.get_dummies(df_ret_ml[["dosage_form", "warehouse_id"]], drop_first=True)
+            pd.get_dummies(df_ret_ml[["dosage_form", "warehouse_id"]], drop_first=True, dtype=float)
         ], axis=1)
         y_ret = df_ret_ml["return_reason"].astype(str)
 
@@ -4720,12 +4759,12 @@ elif selected_page == "🔄 Reverse Logistics & Certified Disposal":
 
         sim_row_ret = pd.DataFrame([{
             "quantity": sim_ret_qty,
-            "shelf_life_months": 24,
+            "shelf_life_months": 24.0,
             "unit_price": sim_ret_price,
             "dosage_form": sim_ret_df,
             "warehouse_id": sim_ret_wh
         }])
-        sim_row_enc = pd.get_dummies(sim_row_ret).reindex(columns=X_ret.columns, fill_value=0)
+        sim_row_enc = pd.get_dummies(sim_row_ret, dtype=float).reindex(columns=X_ret.columns, fill_value=0)
         sim_ret_pred = clf_ret.predict(sim_row_enc)[0]
         sim_ret_prob = clf_ret.predict_proba(sim_row_enc).max() * 100
 
@@ -4746,11 +4785,23 @@ elif selected_page == "🔄 Reverse Logistics & Certified Disposal":
 
         rcl_df_full = extended_tables.get("recalls", pd.DataFrame())
         if rcl_df_full.empty:
+            rng_rc = np.random.default_rng(42)
+            sample_reasons = [
+                "CGMP Deviations: Intermittent exposure to temperature excursion during cold-chain storage.",
+                "Foreign Matter: Glass particulate matter observed in reconstituted solution vials.",
+                "Subpotency / Dissolution: Active pharmaceutical ingredient failed 6-month stability dissolution testing.",
+                "Chemical Contamination: Nitrosamine impurity (NDMA) detected above acceptable daily intake limit.",
+                "Packaging & Labeling: Carton missing primary NDC barcode and dosage concentration warning.",
+                "Microbial Contamination: Potential Burkholderia cepacia contamination detected in sterility testing.",
+                "cGMP Deviations: Manufacturing equipment cleaning validation failure during facility inspection.",
+                "Analytical Out of Specification: Degradant peak exceeded allowable chromatographic threshold."
+            ]
+            _avail_pids = products["product_id"].dropna().tolist() if not products.empty and "product_id" in products.columns else [f"P{i:03d}" for i in range(1, 13)]
             rcl_df_full = pd.DataFrame({
                 "recall_id": [f"RCL{i:05d}" for i in range(1, 1001)],
-                "product_id": [f"PRD{((i%12)+1):04d}" for i in range(1000)],
-                "classification": np.random.choice(["Class I", "Class II", "Class III"], size=1000, p=[0.10, 0.65, 0.25]),
-                "reason_for_recall": ["CGMP Deviations: Intermittent exposure to temperature excursion during storage."]*1000
+                "product_id": rng_rc.choice(_avail_pids, size=1000),
+                "classification": rng_rc.choice(["Class I", "Class II", "Class III"], size=1000, p=[0.10, 0.65, 0.25]),
+                "reason_for_recall": rng_rc.choice(sample_reasons, size=1000)
             })
 
         def categorize_recall_reason(text):
@@ -4780,15 +4831,35 @@ elif selected_page == "🔄 Reverse Logistics & Certified Disposal":
             p_sub_rcl = products[["product_id", "dosage_form", "route", "unit_price", "shelf_life_months"]].drop_duplicates(subset=["product_id"])
             rcl_df_full = rcl_df_full.merge(p_sub_rcl, on="product_id", how="left")
 
-        rcl_df_full["unit_price"] = pd.to_numeric(rcl_df_full.get("unit_price"), errors="coerce").fillna(45)
-        rcl_df_full["shelf_life_months"] = pd.to_numeric(rcl_df_full.get("shelf_life_months"), errors="coerce").fillna(24)
-        rcl_df_full["dosage_form"] = rcl_df_full.get("dosage_form", "Tablet").fillna("Tablet")
-        rcl_df_full["route"] = rcl_df_full.get("route", "Oral").fillna("Oral")
+        if "unit_price" not in rcl_df_full.columns:
+            rcl_df_full["unit_price"] = 45.0
+        else:
+            rcl_df_full["unit_price"] = pd.to_numeric(rcl_df_full["unit_price"], errors="coerce").fillna(45.0)
+
+        if "shelf_life_months" not in rcl_df_full.columns:
+            rcl_df_full["shelf_life_months"] = 24.0
+        else:
+            rcl_df_full["shelf_life_months"] = pd.to_numeric(rcl_df_full["shelf_life_months"], errors="coerce").fillna(24.0)
+
+        if "dosage_form" not in rcl_df_full.columns:
+            rcl_df_full["dosage_form"] = "Tablet"
+        else:
+            rcl_df_full["dosage_form"] = rcl_df_full["dosage_form"].fillna("Tablet")
+
+        if "route" not in rcl_df_full.columns:
+            rcl_df_full["route"] = "Oral"
+        else:
+            rcl_df_full["route"] = rcl_df_full["route"].fillna("Oral")
+
+        if "classification" not in rcl_df_full.columns:
+            rcl_df_full["classification"] = "Class II"
+        else:
+            rcl_df_full["classification"] = rcl_df_full["classification"].fillna("Class II")
 
         # Model: Predict Class I vs Class II vs Class III
         X_rcl = pd.concat([
             rcl_df_full[["unit_price", "shelf_life_months"]],
-            pd.get_dummies(rcl_df_full[["dosage_form", "route", "reason_category"]], drop_first=True)
+            pd.get_dummies(rcl_df_full[["dosage_form", "route", "reason_category"]], drop_first=True, dtype=float)
         ], axis=1)
         y_rcl = rcl_df_full["classification"].astype(str)
 
@@ -4813,7 +4884,7 @@ elif selected_page == "🔄 Reverse Logistics & Certified Disposal":
         col_r1, col_r2, col_r3 = st.columns(3)
         col_r1.metric("Recall Severity Model Accuracy", f"{acc_rcl:.1f}%", "FDA Class I/II/III Target")
         col_r2.metric("Class I Severe Rate", f"{len(rcl_df_full[rcl_df_full['classification']=='Class I'])/len(rcl_df_full)*100:.1f}%", "Life-Threatening Risk")
-        col_r3.metric("Leading Quality Defect", cat_counts.index[0], "Primary Root Cause")
+        col_r3.metric("Leading Quality Defect", cat_counts.index[0] if len(cat_counts) > 0 else "N/A", "Primary Root Cause")
 
         # Interactive Recall Severity Simulator
         st.markdown("#### 🚨 Interactive FDA Recall Severity Predictor")
@@ -4825,12 +4896,12 @@ elif selected_page == "🔄 Reverse Logistics & Certified Disposal":
 
         sim_row_rcl = pd.DataFrame([{
             "unit_price": 65.0,
-            "shelf_life_months": 24,
+            "shelf_life_months": 24.0,
             "dosage_form": sim_form,
             "route": sim_route,
             "reason_category": sim_defect_cat
         }])
-        sim_row_rcl_enc = pd.get_dummies(sim_row_rcl).reindex(columns=X_rcl.columns, fill_value=0)
+        sim_row_rcl_enc = pd.get_dummies(sim_row_rcl, dtype=float).reindex(columns=X_rcl.columns, fill_value=0)
         sim_rcl_pred = clf_rcl.predict(sim_row_rcl_enc)[0]
         sim_rcl_prob = clf_rcl.predict_proba(sim_row_rcl_enc).max() * 100
 
@@ -4850,9 +4921,29 @@ elif selected_page == "🔄 Reverse Logistics & Certified Disposal":
         st.markdown("Predicts and mandates the certified destruction method (*Incineration*, *Witnessed High-Temp Incineration*, *Chemical Neutralization*, *Reverse Distribution*) in compliance with EPA RCRA and DEA Title 21 regulations.")
 
         dsp_df_ml = dsp_df.copy()
+        if "quantity" not in dsp_df_ml.columns:
+            dsp_df_ml["quantity"] = 100.0
+        else:
+            dsp_df_ml["quantity"] = pd.to_numeric(dsp_df_ml["quantity"], errors="coerce").fillna(100.0)
+
+        if "disposal_reason" not in dsp_df_ml.columns:
+            dsp_df_ml["disposal_reason"] = "expired"
+        else:
+            dsp_df_ml["disposal_reason"] = dsp_df_ml["disposal_reason"].fillna("expired")
+
+        if "warehouse_id" not in dsp_df_ml.columns:
+            dsp_df_ml["warehouse_id"] = "WH001"
+        else:
+            dsp_df_ml["warehouse_id"] = dsp_df_ml["warehouse_id"].fillna("WH001")
+
+        if "disposal_method" not in dsp_df_ml.columns:
+            dsp_df_ml["disposal_method"] = "incineration"
+        else:
+            dsp_df_ml["disposal_method"] = dsp_df_ml["disposal_method"].fillna("incineration")
+
         X_dsp = pd.concat([
             dsp_df_ml[["quantity"]],
-            pd.get_dummies(dsp_df_ml[["disposal_reason", "warehouse_id"]], drop_first=True)
+            pd.get_dummies(dsp_df_ml[["disposal_reason", "warehouse_id"]], drop_first=True, dtype=float)
         ], axis=1)
         y_dsp = dsp_df_ml["disposal_method"].astype(str)
 
@@ -4880,7 +4971,7 @@ elif selected_page == "🔄 Reverse Logistics & Certified Disposal":
             "disposal_reason": sim_dsp_rsn,
             "warehouse_id": sim_dsp_wh
         }])
-        sim_row_dsp_enc = pd.get_dummies(sim_row_dsp).reindex(columns=X_dsp.columns, fill_value=0)
+        sim_row_dsp_enc = pd.get_dummies(sim_row_dsp, dtype=float).reindex(columns=X_dsp.columns, fill_value=0)
         sim_dsp_pred = clf_dsp.predict(sim_row_dsp_enc)[0]
         sim_dsp_prob = clf_dsp.predict_proba(sim_row_dsp_enc).max() * 100
 
@@ -4894,10 +4985,15 @@ elif selected_page == "🔄 Reverse Logistics & Certified Disposal":
         """, unsafe_allow_html=True)
 
     # ── AI Strategic Insight Box ─────────────────────────────────────────────
+    cat_top1 = cat_counts.index[0] if len(cat_counts) > 0 else "Quality Defect"
+    cat_cnt1 = cat_counts.iloc[0] if len(cat_counts) > 0 else 0
+    cat_top2 = cat_counts.index[1] if len(cat_counts) > 1 else "Packaging Defect"
+    cat_cnt2 = cat_counts.iloc[1] if len(cat_counts) > 1 else 0
+
     ai_bullets_m5 = [
         f"♻️ <b>Reverse Logistics Integrity:</b> <b>{_tot_returns:,} returns</b> were audited across all 8 warehouses. <b>{_reconcile_rate:.1f}%</b> have been reconciled against certified disposal records with 0 unverified missing units.",
         f"🤖 <b>Predictive Returns & Recall ML:</b> Trained 3 specialized Random Forest models predicting <b>Return Causes ({acc_ret:.1f}% accuracy)</b>, <b>FDA Recall Severity ({acc_rcl:.1f}% accuracy)</b>, and <b>EPA Disposal Routing ({acc_dsp:.1f}% accuracy)</b>.",
-        f"🔬 <b>Recall Reason Taxonomy:</b> 346 raw defect descriptions were categorized into 8 core cGMP failures, led by Chemical Impurities ({cat_counts.iloc[0]} events) and Foreign Particulates ({cat_counts.iloc[1]} events).",
+        f"🔬 <b>Recall Reason Taxonomy:</b> Categorized quality defect descriptions into core cGMP failure taxonomy, led by {cat_top1} ({cat_cnt1} events) and {cat_top2} ({cat_cnt2} events).",
         f"💡 <b>Supply Chain VP Action Plan:</b> (1) Pre-allocate witnessed incineration slots for controlled substance lots, (2) Automate hospital RMA return pickups within 48 hours of recall notification, (3) Use predictive return classifiers to proactively flag high-risk shipments."
     ]
     ai_insight("Reverse Logistics, Recall NLP & Certified Disposal Intelligence", ai_bullets_m5, icon="🔄", color="#10b981")
