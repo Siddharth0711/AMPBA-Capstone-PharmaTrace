@@ -3992,8 +3992,8 @@ elif selected_page == "🏷️ Manufacturing Yield & Supplier Risk":
             "product_id": rng_m.choice(products["product_id"].unique() if not products.empty else ["P001"], size=n_m),
             "planned_qty": rng_m.integers(5000, 25000, size=n_m),
             "produced_qty": (rng_m.integers(5000, 25000, size=n_m) * rng_m.uniform(0.94, 0.995, size=n_m)).astype(int),
-            "start_date": pd.date_range("2025-01-01", periods=n_m, freq="4H"),
-            "end_date": pd.date_range("2025-01-05", periods=n_m, freq="4H"),
+            "start_date": pd.date_range("2025-01-01", periods=n_m, freq="4h"),
+            "end_date": pd.date_range("2025-01-05", periods=n_m, freq="4h"),
             "status": rng_m.choice(["completed", "in_progress", "qc_hold"], size=n_m, p=[0.90, 0.07, 0.03])
         })
         sup_df = pd.DataFrame({
@@ -4576,7 +4576,7 @@ elif selected_page == "🔄 Reverse Logistics & Certified Disposal":
             "warehouse_id": rng_r.choice(["WH001","WH002","WH003","WH004","WH005","WH006","WH007","WH008"], size=n_r),
             "return_reason": rng_r.choice(["recall", "expired", "damaged", "overstock", "quality_issue"], size=n_r, p=[0.55, 0.22, 0.08, 0.08, 0.07]),
             "quantity": rng_r.integers(50, 600, size=n_r),
-            "return_date": pd.date_range("2025-01-01", periods=n_r, freq="12H")
+            "return_date": pd.date_range("2025-01-01", periods=n_r, freq="12h")
         })
         dsp_df = pd.DataFrame({
             "disposal_id": [f"DSP{i:06d}" for i in range(1, n_r+1)],
