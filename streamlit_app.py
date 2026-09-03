@@ -791,6 +791,7 @@ def load_all_data(src):
     return products, warehouses, inventory, df_demand, df_txns, df_econ, df_freight, df_iot, supp_loaded, extended_tables
 
 
+@st.cache_data(show_spinner="Loading enterprise dataset…")
 def load_local_legacy():
     """Fallback: load from original separate files (local dev mode)."""
     import pandas as pd
@@ -798,7 +799,7 @@ def load_local_legacy():
     available_local = xl_local.sheet_names
 
     def read_loc(sheet):
-        return pd.read_excel(LOCAL_MASTER, sheet_name=sheet) if sheet in available_local else pd.DataFrame()
+        return xl_local.parse(sheet) if sheet in available_local else pd.DataFrame()
 
     products   = read_loc("products")
     warehouses = read_loc("warehouses")
@@ -4679,9 +4680,9 @@ elif selected_page == "🔄 Reverse Logistics & Certified Disposal":
 
         batches_df = extended_tables.get("finished_product_batches", pd.DataFrame())
         df_ret_ml = ret_df.copy()
-        if not batches_df.empty and "fp_batch_id" in batches_df.columns:
+        if not batches_df.empty and "fp_batch_id" in batches_df.columns and "fp_batch_id" in df_ret_ml.columns:
             df_ret_ml = df_ret_ml.merge(batches_df[["fp_batch_id", "product_id", "batch_qty", "qc_status", "recall_flag"]], on="fp_batch_id", how="left")
-        if not products.empty and "product_id" in products.columns:
+        if "product_id" in df_ret_ml.columns and not products.empty and "product_id" in products.columns:
             p_cols = [c for c in ["product_id", "dosage_form", "route", "shelf_life_months", "unit_price"] if c in products.columns]
             df_ret_ml = df_ret_ml.merge(products[p_cols], on="product_id", how="left")
 
@@ -4747,6 +4748,7 @@ elif selected_page == "🔄 Reverse Logistics & Certified Disposal":
         if rcl_df_full.empty:
             rcl_df_full = pd.DataFrame({
                 "recall_id": [f"RCL{i:05d}" for i in range(1, 1001)],
+                "product_id": [f"PRD{((i%12)+1):04d}" for i in range(1000)],
                 "classification": np.random.choice(["Class I", "Class II", "Class III"], size=1000, p=[0.10, 0.65, 0.25]),
                 "reason_for_recall": ["CGMP Deviations: Intermittent exposure to temperature excursion during storage."]*1000
             })
@@ -4773,8 +4775,8 @@ elif selected_page == "🔄 Reverse Logistics & Certified Disposal":
 
         rcl_df_full["reason_category"] = rcl_df_full["reason_for_recall"].apply(categorize_recall_reason)
         
-        # Merge product details for rich modeling
-        if not products.empty and "product_id" in products.columns:
+        # Merge product details for rich modeling safely
+        if "product_id" in rcl_df_full.columns and not products.empty and "product_id" in products.columns:
             p_sub_rcl = products[["product_id", "dosage_form", "route", "unit_price", "shelf_life_months"]].drop_duplicates(subset=["product_id"])
             rcl_df_full = rcl_df_full.merge(p_sub_rcl, on="product_id", how="left")
 
