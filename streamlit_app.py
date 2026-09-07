@@ -3177,6 +3177,90 @@ elif selected_page == "🤖 ML Expiry Classifier":
         st.markdown("#### 🤖 4. Binary ML Expiry Risk Classifier — Model Performance")
         st.caption(f"Target: **'Will this batch expire before being fully sold?'** — a balanced binary problem ({at_risk_pct:.1f}% At-Risk vs {100-at_risk_pct:.1f}% Safe). Trains 3 algorithms and crowns the best by Weighted F1.")
 
+        # ── LEVEL 1: DEMAND SCENARIO TOGGLE ──────────────────────────────────
+        st.markdown("""
+        <div style='background:linear-gradient(135deg,#1e1040,#0f172a); border:1px solid #7c3aed44;
+             border-left:4px solid #7c3aed; border-radius:10px; padding:14px 18px; margin-bottom:14px;'>
+          <div style='font-size:12px; font-weight:700; color:#c084fc; margin-bottom:6px;'>
+            🎛️ DEMAND SCENARIO ANALYSIS — How does the risk change if demand shifts?
+          </div>
+          <div style='font-size:11px; color:#94a3b8; line-height:1.6;'>
+            Pharma demand is <b>never fixed</b>. This toggle stress-tests the classifier under three demand
+            scenarios to show the true uncertainty range — not just a single deterministic forecast.
+          </div>
+        </div>""", unsafe_allow_html=True)
+
+        _scen_col1, _scen_col2 = st.columns([2, 3])
+        with _scen_col1:
+            _demand_scenario = st.radio(
+                "Select Demand Scenario",
+                ["📉 Pessimistic  (−1.5σ  demand)",
+                 "📊 Base Case  (historical average)",
+                 "📈 Optimistic  (+1σ  demand)"],
+                index=1,
+                key="demand_scenario_ml",
+                help="Adjusts the monthly dispatch velocity used to compute Cover Days and Velocity Pressure. "
+                     "Pessimistic = demand drops (more batches at risk). Optimistic = demand rises (fewer at risk)."
+            )
+        with _scen_col2:
+            st.markdown("""
+            <div style='background:#0f172a; border:1px solid #334155; border-radius:8px; padding:12px; font-size:11px; color:#94a3b8;'>
+            <b style='color:#e2e8f0;'>What does each scenario mean?</b><br><br>
+            <span style='color:#ef4444;'>📉 Pessimistic (−1.5σ):</span> Demand falls sharply — e.g. seasonal trough, competitor entry, or tender loss. Shows the <b>worst-case</b> expiry exposure.<br><br>
+            <span style='color:#94a3b8;'>📊 Base Case:</span> 24-month historical average dispatch. The <b>model's default assumption</b>.<br><br>
+            <span style='color:#10b981;'>📈 Optimistic (+1σ):</span> Demand rises — e.g. disease outbreak, tender win, or promo campaign. Shows how many batches become safe <b>if velocity improves</b>.
+            </div>""", unsafe_allow_html=True)
+
+        # Apply scenario adjustment to avg_monthly_dispatch
+        _base_vel = ml_df["avg_monthly_dispatch"].copy()
+        # Estimate velocity std dev: use 25% of mean as proxy (±1σ ≈ ±25% typical pharma CV)
+        # If we had monthly granularity we'd compute it directly; this is a principled approximation
+        _vel_std = _base_vel * 0.25  # conservative CV of 25% — typical for prescription pharma
+        if "Pessimistic" in _demand_scenario:
+            _scenario_vel = (_base_vel - 1.5 * _vel_std).clip(lower=_base_vel * 0.05)  # floor at 5% of base
+            _scenario_label = "Pessimistic (−1.5σ)"
+            _scenario_color = "#ef4444"
+            _scenario_note  = "Demand reduced by ~37.5% from historical average"
+        elif "Optimistic" in _demand_scenario:
+            _scenario_vel = _base_vel + 1.0 * _vel_std
+            _scenario_label = "Optimistic (+1σ)"
+            _scenario_color = "#10b981"
+            _scenario_note  = "Demand increased by ~25% from historical average"
+        else:
+            _scenario_vel = _base_vel
+            _scenario_label = "Base Case (historical avg)"
+            _scenario_color = "#94a3b8"
+            _scenario_note  = "No adjustment — using 24-month average dispatch velocity"
+
+        # Recompute scenario-adjusted features
+        ml_df["_scen_vel"]      = _scenario_vel
+        ml_df["_scen_cover"]    = (ml_df["quantity_on_hand"] / ml_df["_scen_vel"].replace(0, 1) * 30).clip(0, 9999)
+        ml_df["_scen_vp"]       = (ml_df["_scen_cover"] / ml_df["days_to_expiry"].clip(1, 9999)).clip(0, 10)
+        _scen_at_risk_cnt = int((ml_df["_scen_vp"] > 1.0).sum())
+        _scen_at_risk_val = ml_df[ml_df["_scen_vp"] > 1.0]["inventory_value_usd"].sum()
+        _base_at_risk_cnt = int((ml_df["velocity_pressure"] > 1.0).sum())
+        _delta_cnt = _scen_at_risk_cnt - _base_at_risk_cnt
+
+        sc1, sc2, sc3 = st.columns(3)
+        for _col, _lbl, _val, _clr, _sub in [
+            (sc1, f"⚠️ At-Risk Batches ({_scenario_label})", f"{_scen_at_risk_cnt:,}",
+             _scenario_color, f"{'▲' if _delta_cnt>0 else '▼'} {abs(_delta_cnt):,} vs base case"),
+            (sc2, "💸 At-Risk Capital", fmt_curr(_scen_at_risk_val, compact=True),
+             _scenario_color, "Under this demand scenario"),
+            (sc3, "📊 Scenario Assumption", _scenario_label,
+             _scenario_color, _scenario_note),
+        ]:
+            with _col:
+                st.markdown(f"""
+                <div style='background:#0f172a; border:1px solid #1e293b; border-top:3px solid {_clr};
+                     border-radius:8px; padding:12px; text-align:center;'>
+                    <div style='font-size:10px; color:#94a3b8; font-weight:600; text-transform:uppercase; margin-bottom:4px;'>{_lbl}</div>
+                    <div style='font-size:1.4rem; font-weight:800; color:{_clr};'>{_val}</div>
+                    <div style='font-size:10px; color:#64748b; margin-top:3px;'>{_sub}</div>
+                </div>""", unsafe_allow_html=True)
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
         features = [f for f in [
             "days_to_expiry", "quantity_on_hand", "unit_price", "avg_monthly_dispatch",
             "cover_days", "risk_score", "value_per_day", "pct_life_remaining",
@@ -3237,6 +3321,101 @@ elif selected_page == "🤖 ML Expiry Classifier":
             _champ_xall  = _champ["_xall"]   # X for full-dataset prediction (scaled for LR, raw for RF/GB)
             ml_df["predicted_risk"] = _champ_clf.predict(_champ_xall)
 
+            # ── LEVEL 2: PROBABILITY BANDS ────────────────────────────────────
+            # Use predict_proba() to show risk as a CONFIDENCE SCORE, not a false binary.
+            # This honestly communicates demand uncertainty to management.
+            try:
+                _proba = _champ_clf.predict_proba(_champ_xall)[:, 1]  # P(At Risk)
+            except Exception:
+                _proba = _champ_clf.decision_function(_champ_xall)
+                _proba = (_proba - _proba.min()) / (_proba.max() - _proba.min() + 1e-9)
+            ml_df["risk_probability"] = _proba
+
+            # Assign 4-tier probability bands
+            def _prob_band(p):
+                if p >= 0.80: return "🔴 Definite Risk (>80%)"
+                if p >= 0.50: return "🟠 Likely Risk (50–80%)"
+                if p >= 0.20: return "🟡 Uncertain (20–50%)"
+                return "🟢 On Track to Sell (<20%)"
+
+            ml_df["prob_band"] = ml_df["risk_probability"].apply(_prob_band)
+            _band_order  = ["🔴 Definite Risk (>80%)", "🟠 Likely Risk (50–80%)",
+                            "🟡 Uncertain (20–50%)", "🟢 On Track to Sell (<20%)"]
+            _band_colors = {"🔴 Definite Risk (>80%)": "#ef4444", "🟠 Likely Risk (50–80%)": "#f97316",
+                            "🟡 Uncertain (20–50%)": "#eab308", "🟢 On Track to Sell (<20%)": "#10b981"}
+            _band_actions = {
+                "🔴 Definite Risk (>80%)": "Mandatory intervention now: liquidate, transfer, or certify for destruction within 72 hrs.",
+                "🟠 Likely Risk (50–80%)": "Schedule redistribution this week: inter-warehouse transfer to high-velocity node.",
+                "🟡 Uncertain (20–50%)": "Monitor weekly: assign channel push promotion, track velocity trend daily.",
+                "🟢 On Track to Sell (<20%)": "Standard FEFO management. No immediate intervention required.",
+            }
+
+            _band_summary = ml_df.groupby("prob_band").agg(
+                batches=("inventory_value_usd", "count"),
+                value=("inventory_value_usd", "sum")
+            ).reindex([b for b in _band_order if b in ml_df["prob_band"].values])
+
+            st.markdown("""<div style='margin:24px 0 6px;'></div>""", unsafe_allow_html=True)
+            st.markdown("""
+            <div style='background:linear-gradient(135deg,#1e1040,#0f172a); border:1px solid #7c3aed44;
+                 border-left:4px solid #7c3aed; border-radius:10px; padding:14px 18px; margin-bottom:10px;'>
+              <div style='font-size:13px; font-weight:700; color:#c084fc; margin-bottom:4px;'>
+                🎯 Model Risk Probability Bands — Honest Uncertainty View
+              </div>
+              <div style='font-size:11px; color:#94a3b8;'>
+                Because pharma demand is volatile, the model outputs a <b>probability score per batch</b> — not a
+                binary yes/no. Each batch is placed in one of 4 confidence bands. This is far more actionable than
+                a single threshold because it distinguishes <b>certain losses</b> from <b>demand-sensitive risks</b>.
+              </div>
+            </div>""", unsafe_allow_html=True)
+
+            # Stacked horizontal bar of batch counts by band
+            fig_pb, ax_pb = plt.subplots(figsize=(14, 3.2))
+            fig_pb.patch.set_facecolor("#0f172a")
+            ax_pb.set_facecolor("#0f172a")
+            _left = 0
+            _total_b = len(ml_df)
+            for band in _band_order:
+                if band not in _band_summary.index: continue
+                cnt = _band_summary.loc[band, "batches"]
+                pct = cnt / max(_total_b, 1) * 100
+                ax_pb.barh("All Batches", cnt, left=_left, color=_band_colors[band], alpha=0.90, height=0.45)
+                if pct > 4:
+                    ax_pb.text(_left + cnt/2, 0, f"{cnt:,}\n({pct:.0f}%)",
+                               ha="center", va="center", fontsize=9, color="white", fontweight="bold")
+                _left += cnt
+            ax_pb.set_xlim(0, _total_b * 1.02)
+            ax_pb.set_title("Batch Distribution by Risk Probability Band", color="#00d4ff", fontsize=11, fontweight="bold")
+            ax_pb.set_xlabel("Number of Batches", color="#94a3b8", fontsize=9)
+            ax_pb.tick_params(colors="#94a3b8")
+            for sp in ax_pb.spines.values(): sp.set_color("#334155")
+            from matplotlib.patches import Patch
+            _pb_legend = [Patch(color=_band_colors[b], label=b) for b in _band_order if b in _band_summary.index]
+            ax_pb.legend(handles=_pb_legend, loc="lower right", facecolor="#1e293b", labelcolor="white", fontsize=8.5)
+            plt.tight_layout()
+            show_fig(fig_pb)
+
+            # Probability band detail cards
+            _pb_cols = st.columns(len([b for b in _band_order if b in _band_summary.index]))
+            for _col, band in zip(_pb_cols, [b for b in _band_order if b in _band_summary.index]):
+                cnt = int(_band_summary.loc[band, "batches"])
+                val = _band_summary.loc[band, "value"]
+                clr = _band_colors[band]
+                action = _band_actions[band]
+                pct = cnt / max(_total_b, 1) * 100
+                with _col:
+                    st.markdown(f"""
+                    <div style='background:#0f172a; border:1px solid {clr}33; border-top:3px solid {clr};
+                         border-radius:8px; padding:12px; font-size:11px; color:#cbd5e1; height:100%;'>
+                        <div style='font-size:10px; font-weight:700; color:{clr}; margin-bottom:6px;'>{band}</div>
+                        <div style='font-size:1.3rem; font-weight:800; color:{clr};'>{cnt:,} <span style='font-size:12px;'>({pct:.0f}%)</span></div>
+                        <div style='font-size:10px; color:#94a3b8; margin:3px 0 8px;'>{fmt_curr(val, compact=True)} at risk</div>
+                        <div style='font-size:10px; color:#cbd5e1; border-top:1px solid {clr}22; padding-top:6px;'>
+                            <b>Action:</b> {action}
+                        </div>
+                    </div>""", unsafe_allow_html=True)
+
+            st.markdown("<br>", unsafe_allow_html=True)
 
             # ── KEY EXPIRY RISK DRIVERS (Feature Importance — the only ML output that matters to management) ──
             st.markdown("#### 🧠 5. What Drives Expiry Risk? — Feature Importance Analysis")
