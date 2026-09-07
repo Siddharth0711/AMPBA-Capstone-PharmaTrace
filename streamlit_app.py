@@ -3239,45 +3239,52 @@ elif selected_page == "🤖 ML Expiry Classifier":
 
         # ─── Learning Curves — Bias-Variance Tradeoff ──────────────────────
         with st.expander("📉 Learning Curves — Bias-Variance Tradeoff Analysis (Champion Model)", expanded=False):
-            st.caption("Learning curves show how training and cross-validation performance evolve as training data grows. Convergence of the two lines indicates low variance (no overfitting). A persistent gap indicates high variance (overfitting). Flat low scores indicate high bias (underfitting).")
-            _lc_X = X if champion_name != "Logistic Regression (L2)" else X_scaled
-            _train_sizes, _train_scores, _val_scores = learning_curve(
-                champion_clf.__class__(**champion_clf.get_params()),
-                _lc_X, y,
-                cv=StratifiedKFold(n_splits=5, shuffle=True, random_state=42),
-                scoring="f1_weighted",
-                train_sizes=np.linspace(0.1, 1.0, 8),
-                n_jobs=-1
-            )
-            _train_mean = _train_scores.mean(axis=1) * 100
-            _train_std  = _train_scores.std(axis=1)  * 100
-            _val_mean   = _val_scores.mean(axis=1)   * 100
-            _val_std    = _val_scores.std(axis=1)    * 100
+            st.caption("Learning curves show how training and cross-validation performance evolve as training data grows. Convergence of the two lines indicates low variance (no overfitting). A persistent gap indicates high variance (overfitting).")
+            st.info("⏱️ Learning curves require ~30 additional model fits. Click the button below to run on demand — results are cached for the session.")
+            _lc_key = "lc_computed_v1"
+            if st.button("▶️ Compute Learning Curves", key="btn_lc_run"):
+                st.session_state[_lc_key] = True
+            if st.session_state.get(_lc_key, False):
+                _lc_X = X if champion_name != "Logistic Regression (L2)" else X_scaled
+                _train_sizes, _train_scores, _val_scores = learning_curve(
+                    champion_clf.__class__(**champion_clf.get_params()),
+                    _lc_X, y,
+                    cv=StratifiedKFold(n_splits=3, shuffle=True, random_state=42),
+                    scoring="f1_weighted",
+                    train_sizes=np.linspace(0.15, 1.0, 6),
+                    n_jobs=-1
+                )
+                _train_mean = _train_scores.mean(axis=1) * 100
+                _train_std  = _train_scores.std(axis=1)  * 100
+                _val_mean   = _val_scores.mean(axis=1)   * 100
+                _val_std    = _val_scores.std(axis=1)    * 100
 
-            fig_lc, ax_lc = plt.subplots(figsize=(11, 4.5))
-            fig_lc.patch.set_facecolor("#0f172a")
-            ax_lc.set_facecolor("#0f172a")
-            ax_lc.plot(_train_sizes, _train_mean, "o-", color="#7c3aed", lw=2.5, label="Training Score")
-            ax_lc.fill_between(_train_sizes, _train_mean - _train_std, _train_mean + _train_std, alpha=0.15, color="#7c3aed")
-            ax_lc.plot(_train_sizes, _val_mean, "s-", color="#10b981", lw=2.5, label="Cross-Validation Score")
-            ax_lc.fill_between(_train_sizes, _val_mean - _val_std, _val_mean + _val_std, alpha=0.15, color="#10b981")
-            ax_lc.set_xlabel("Training Set Size (batches)", color="#94a3b8", fontsize=10)
-            ax_lc.set_ylabel("Weighted F1-Score (%)", color="#94a3b8", fontsize=10)
-            ax_lc.set_title(f"Learning Curve — {champion_name} (Bias-Variance Tradeoff)", color="#00d4ff", fontsize=11, fontweight="bold")
-            ax_lc.legend(facecolor="#1e293b", labelcolor="white", fontsize=10)
-            ax_lc.tick_params(colors="#94a3b8")
-            for sp in ax_lc.spines.values(): sp.set_color("#334155")
-            plt.tight_layout()
-            show_fig(fig_lc)
-            # Narrative: auto-detect curve pattern
-            _gap = abs(_train_mean[-1] - _val_mean[-1])
-            if _gap < 3:
-                _lc_narrative = f"✅ **Low Variance (Well-fitted):** Training and CV scores converge tightly (gap = {_gap:.1f}%). The {champion_name} generalizes correctly without overfitting. Adding more data unlikely to improve performance significantly."
-            elif _train_mean[-1] > _val_mean[-1] + 5:
-                _lc_narrative = f"⚠️ **Moderate Variance (Mild Overfitting):** Training score ({_train_mean[-1]:.1f}%) is {_gap:.1f}% above CV score ({_val_mean[-1]:.1f}%). Consider reducing `max_depth` or adding regularization."
-            else:
-                _lc_narrative = f"📊 **Model Analysis:** Training F1: {_train_mean[-1]:.1f}% | CV F1: {_val_mean[-1]:.1f}% | Gap: {_gap:.1f}%."
-            st.markdown(f"<div style='background:#1e293b; border-left:4px solid #6366f1; border-radius:6px; padding:10px 14px; font-size:11px; color:#cbd5e1;'>{_lc_narrative}</div>", unsafe_allow_html=True)
+                fig_lc, ax_lc = plt.subplots(figsize=(11, 4.5))
+                fig_lc.patch.set_facecolor("#0f172a")
+                ax_lc.set_facecolor("#0f172a")
+                ax_lc.plot(_train_sizes, _train_mean, "o-", color="#7c3aed", lw=2.5, label="Training Score")
+                ax_lc.fill_between(_train_sizes, _train_mean - _train_std, _train_mean + _train_std, alpha=0.15, color="#7c3aed")
+                ax_lc.plot(_train_sizes, _val_mean, "s-", color="#10b981", lw=2.5, label="Cross-Validation Score")
+                ax_lc.fill_between(_train_sizes, _val_mean - _val_std, _val_mean + _val_std, alpha=0.15, color="#10b981")
+                ax_lc.set_xlabel("Training Set Size (batches)", color="#94a3b8", fontsize=10)
+                ax_lc.set_ylabel("Weighted F1-Score (%)", color="#94a3b8", fontsize=10)
+                ax_lc.set_title(f"Learning Curve — {champion_name} (Bias-Variance Tradeoff)", color="#00d4ff", fontsize=11, fontweight="bold")
+                ax_lc.legend(facecolor="#1e293b", labelcolor="white", fontsize=10)
+                ax_lc.tick_params(colors="#94a3b8")
+                for sp in ax_lc.spines.values(): sp.set_color("#334155")
+                plt.tight_layout()
+
+                show_fig(fig_lc)
+                # Narrative: auto-detect curve pattern
+                _gap = abs(_train_mean[-1] - _val_mean[-1])
+                if _gap < 3:
+                    _lc_narrative = f"✅ **Low Variance (Well-fitted):** Training and CV scores converge tightly (gap = {_gap:.1f}%). The {champion_name} generalizes correctly without overfitting."
+                elif _train_mean[-1] > _val_mean[-1] + 5:
+                    _lc_narrative = f"⚠️ **Moderate Variance (Mild Overfitting):** Training score ({_train_mean[-1]:.1f}%) is {_gap:.1f}% above CV score ({_val_mean[-1]:.1f}%). Consider reducing `max_depth`."
+                else:
+                    _lc_narrative = f"📊 **Model Analysis:** Training F1: {_train_mean[-1]:.1f}% | CV F1: {_val_mean[-1]:.1f}% | Gap: {_gap:.1f}%."
+                st.markdown(f"<div style='background:#1e293b; border-left:4px solid #6366f1; border-radius:6px; padding:10px 14px; font-size:11px; color:#cbd5e1;'>{_lc_narrative}</div>", unsafe_allow_html=True)
+
 
         # ─── Academic Methodology Expander ───────────────────────────────────
         with st.expander("📚 Academic Methodology & Model Governance Rationale (Viva-Ready)", expanded=False):
