@@ -2187,9 +2187,15 @@ elif selected_page == "🌡️ Expiry Risk Heatmap":
         cols_rag_show = [c for c in ["fp_batch_id", "batch_id", "product_id", "generic_name", "warehouse_id",
                                      "quantity_on_hand", "days_to_expiry", "rag_status", "inventory_value_usd", "qc_status"] if c in inv_rag_sub.columns]
         df_disp = inv_rag_sub[cols_rag_show].sort_values("days_to_expiry", ascending=True).head(500).copy()
+        if "days_to_expiry" in df_disp.columns:
+            df_disp["Days to Expiry (DTE)"] = df_disp["days_to_expiry"].apply(
+                lambda d: f"🔴 {int(d)}d (EXPIRED)" if d < 0 else f"+{int(d)}d remaining"
+            )
+            df_disp = df_disp.drop(columns=["days_to_expiry"])
         if "inventory_value_usd" in df_disp.columns:
             df_disp[f"Valuation ({curr_code})"] = df_disp["inventory_value_usd"].apply(lambda v: fmt_curr(v))
             df_disp = df_disp.drop(columns=["inventory_value_usd"])
+        st.caption("💡 **Why are some values negative?** `Days to Expiry (DTE) = Expiry Date − Today's Date`. Negative numbers (e.g. **-717d**) indicate batches that have **already passed their expiry date** (expired 717 days ago) and are in the 🔴 Red zone quarantined for certified destruction under FDA 21 CFR §211. Batches with positive shelf-life (+106d to +1,127d) appear below or when filtering by Amber, Yellow, or Green zones.")
         st.dataframe(df_disp, use_container_width=True, hide_index=True)
 
         # Direct Action Bridge to LP Optimizer
@@ -2809,9 +2815,15 @@ elif selected_page == "🤖 ML Expiry Classifier":
         cols_rag_show = [c for c in ["fp_batch_id", "batch_id", "product_id", "generic_name", "warehouse_id",
                                      "quantity_on_hand", "days_to_expiry", "rag_status", "inventory_value_usd", "qc_status"] if c in inv_rag_sub.columns]
         df_disp_rag = inv_rag_sub[cols_rag_show].sort_values("days_to_expiry", ascending=True).head(500).copy()
+        if "days_to_expiry" in df_disp_rag.columns:
+            df_disp_rag["Days to Expiry (DTE)"] = df_disp_rag["days_to_expiry"].apply(
+                lambda d: f"🔴 {int(d)}d (EXPIRED)" if d < 0 else f"+{int(d)}d remaining"
+            )
+            df_disp_rag = df_disp_rag.drop(columns=["days_to_expiry"])
         if "inventory_value_usd" in df_disp_rag.columns:
             df_disp_rag[f"Valuation ({curr_code})"] = df_disp_rag["inventory_value_usd"].apply(lambda v: fmt_curr(v, compact=False, decimals=0))
             df_disp_rag = df_disp_rag.drop(columns=["inventory_value_usd"])
+        st.caption("💡 **Why are some values negative?** `Days to Expiry (DTE) = Expiry Date − Today's Date`. Negative numbers (e.g. **-717d**) indicate batches that have **already passed their expiry date** (expired 717 days ago) and are in the 🔴 Red zone quarantined for certified destruction under FDA 21 CFR §211. Batches with positive shelf-life (+106d to +1,127d) appear below or when filtering by Amber, Yellow, or Green zones.")
         st.dataframe(df_disp_rag, use_container_width=True, hide_index=True)
 
         # 4. Bridge to Strategic Engine #2 (LP Cost Optimizer)
