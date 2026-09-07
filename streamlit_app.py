@@ -773,9 +773,22 @@ with st.sidebar:
     st.markdown("---")
 
     # Auto-detect local data (developer mode)
+    LOCAL_CLEANED  = r"/Users/babitakironvedantam/Desktop/CAPSTONE FINAL/PharmaTrace AI - DATA/master_dataset/PharmaTrace_Master_Dataset_Production_Extended_Cleaned.xlsx"
+    LOCAL_REPO_CLN = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "PharmaTrace_Master_Dataset_Production_Extended_Cleaned.xlsx")
     LOCAL_EXTENDED = r"/Users/babitakironvedantam/Desktop/CAPSTONE FINAL/PharmaTrace AI - DATA/master_dataset/PharmaTrace_Master_Dataset_Production_Extended.xlsx"
     LOCAL_REPO_EXT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "PharmaTrace_Master_Dataset_Production_Extended.xlsx")
-    LOCAL_MASTER   = LOCAL_EXTENDED if os.path.exists(LOCAL_EXTENDED) else (LOCAL_REPO_EXT if os.path.exists(LOCAL_REPO_EXT) else r"/Users/babitakironvedantam/Desktop/CAPSTONE FINAL/PharmaTrace AI - DATA/master_dataset/PharmaTrace_Master_Dataset.xlsx")
+    
+    if os.path.exists(LOCAL_CLEANED):
+        LOCAL_MASTER = LOCAL_CLEANED
+    elif os.path.exists(LOCAL_REPO_CLN):
+        LOCAL_MASTER = LOCAL_REPO_CLN
+    elif os.path.exists(LOCAL_EXTENDED):
+        LOCAL_MASTER = LOCAL_EXTENDED
+    elif os.path.exists(LOCAL_REPO_EXT):
+        LOCAL_MASTER = LOCAL_REPO_EXT
+    else:
+        LOCAL_MASTER = r"/Users/babitakironvedantam/Desktop/CAPSTONE FINAL/PharmaTrace AI - DATA/master_dataset/PharmaTrace_Master_Dataset.xlsx"
+        
     LOCAL_ADD      = r"/Users/babitakironvedantam/Desktop/CAPSTONE FINAL/AI Modules/additional data"
     use_local = os.path.exists(LOCAL_MASTER)
     SAMPLE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sample_data.xlsx")
@@ -783,7 +796,10 @@ with st.sidebar:
     if uploaded_file:
         st.success("✅ File uploaded & active", icon="📊")
     elif use_local:
-        st.success("✅ Extended production dataset auto-detected (19 Tables)", icon="💾")
+        if "Cleaned" in LOCAL_MASTER:
+            st.success("✅ Cleaned & validated dataset auto-detected (24 Sheets · Balanced RAG)", icon="✨")
+        else:
+            st.success("✅ Extended production dataset auto-detected (19 Tables)", icon="💾")
     elif use_sample:
         st.info("📊 Demo data — upload your file to analyse your own data", icon="🔬")
     else:
@@ -2968,40 +2984,66 @@ elif selected_page == "🤖 ML Expiry Classifier":
 
         st.markdown("<br>", unsafe_allow_html=True)
 
-        # ── Root Cause: velocity pressure distribution ────────────────────────
+        # ── Root Cause: simplified 3-panel chart ─────────────────────────────
         fig_rc, axes_rc = plt.subplots(1, 3, figsize=(19, 5))
         fig_rc.patch.set_facecolor("#0f172a")
         fig_rc.suptitle("Root Cause Analysis: Why Batches Expire — Key Signals", fontsize=12, color="#00d4ff", fontweight="bold")
 
-        # Plot 1: Velocity Pressure Distribution
-        at_risk_vp = ml_df[ml_df["financial_loss_risk"]==1]["velocity_pressure"].clip(0,5)
-        safe_vp    = ml_df[ml_df["financial_loss_risk"]==0]["velocity_pressure"].clip(0,5)
-        axes_rc[0].set_facecolor("#0f172a")
-        axes_rc[0].hist(safe_vp,    bins=30, color="#10b981", alpha=0.7, label="✅ Safe (Will Sell)",       density=True)
-        axes_rc[0].hist(at_risk_vp, bins=30, color="#ef4444", alpha=0.7, label="⚠️ At Risk (Will Expire)", density=True)
-        axes_rc[0].axvline(1.0, color="#f59e0b", lw=2.5, linestyle="--", label="Risk Threshold (VP=1.0)")
-        axes_rc[0].set_title("Velocity Pressure Distribution\n(Cover Days ÷ Days to Expiry)", color="white", fontsize=10, fontweight="bold")
-        axes_rc[0].set_xlabel("Velocity Pressure (×)", color="#94a3b8", fontsize=9)
-        axes_rc[0].legend(fontsize=8.5, facecolor="#1e293b", labelcolor="white")
-        axes_rc[0].tick_params(colors="#94a3b8")
-        for _sp in axes_rc[0].spines.values(): _sp.set_color("#334155")
+        # ── Chart 1: Safe vs At-Risk horizontal bar (simple, clear) ──────────
+        ax1 = axes_rc[0]
+        ax1.set_facecolor("#0f172a")
+        _total_batches = len(ml_df)
+        _risk_cnt  = int((ml_df["financial_loss_risk"] == 1).sum())
+        _safe_cnt_  = _total_batches - _risk_cnt
+        _risk_pct_  = _risk_cnt  / max(_total_batches, 1) * 100
+        _safe_pct_  = _safe_cnt_ / max(_total_batches, 1) * 100
+        _risk_val_  = ml_df[ml_df["financial_loss_risk"]==1]["inventory_value_usd"].sum()
+        _safe_val_  = ml_df[ml_df["financial_loss_risk"]==0]["inventory_value_usd"].sum()
+        _categories = ["Will Sell\nBefore Expiry", "Will Expire\nBefore Selling"]
+        _counts     = [_safe_cnt_, _risk_cnt]
+        _bar_colors = ["#10b981", "#ef4444"]
+        _bars1 = ax1.barh(_categories, _counts, color=_bar_colors, alpha=0.88, height=0.5)
+        for bar, cnt, pct in zip(_bars1, _counts, [_safe_pct_, _risk_pct_]):
+            ax1.text(bar.get_width() + max(_counts)*0.01, bar.get_y() + bar.get_height()/2,
+                     f"{cnt:,}  ({pct:.0f}%)", va="center", ha="left",
+                     fontsize=10, color="white", fontweight="bold")
+        ax1.set_title("Batch Outcome Forecast\n(Will stock sell before it expires?)",
+                      color="white", fontsize=10, fontweight="bold")
+        ax1.set_xlabel("Number of Batches", color="#94a3b8", fontsize=9)
+        ax1.tick_params(colors="#94a3b8", labelsize=9)
+        ax1.set_xlim(0, max(_counts) * 1.35)
+        for sp in ax1.spines.values(): sp.set_color("#334155")
+        # Value annotation below bars
+        ax1.text(0.5, -0.18,
+                 f"Safe: {fmt_curr(_safe_val_, compact=True)}   |   At Risk: {fmt_curr(_risk_val_, compact=True)}",
+                 transform=ax1.transAxes, ha="center", fontsize=9, color="#94a3b8")
 
-        # Plot 2: DTE vs Cover Days scatter (sample for speed)
-        _samp = ml_df.sample(min(800, len(ml_df)), random_state=42)
-        _colors_rc = ["#ef4444" if r==1 else "#10b981" for r in _samp["financial_loss_risk"]]
-        axes_rc[1].set_facecolor("#0f172a")
-        axes_rc[1].scatter(_samp["days_to_expiry"].clip(0,730), _samp["cover_days"].clip(0,730),
-                           c=_colors_rc, alpha=0.55, s=15)
-        _max_dte = min(730, _samp["days_to_expiry"].max())
-        axes_rc[1].plot([0, _max_dte], [0, _max_dte], color="#f59e0b", lw=2, linestyle="--", label="Cover = DTE (Cliff Line)")
-        axes_rc[1].set_title("Cover Days vs. Days to Expiry\n(Above line = will expire before selling)", color="white", fontsize=10, fontweight="bold")
-        axes_rc[1].set_xlabel("Days to Expiry (DTE)", color="#94a3b8", fontsize=9)
-        axes_rc[1].set_ylabel("Stock Coverage (days)", color="#94a3b8", fontsize=9)
-        axes_rc[1].legend(fontsize=8.5, facecolor="#1e293b", labelcolor="white")
-        axes_rc[1].tick_params(colors="#94a3b8")
-        for _sp in axes_rc[1].spines.values(): _sp.set_color("#334155")
+        # ── Chart 2: At-Risk batch count by expiry window (simple buckets) ────
+        ax2 = axes_rc[1]
+        ax2.set_facecolor("#0f172a")
+        _bins  = [0, 30, 90, 180, 365, 9999]
+        _labels_b = ["< 30 days\n(Critical)", "30–90 days\n(High)",
+                     "90–180 days\n(Medium)", "180–365 days\n(Monitor)", "> 1 Year\n(Slow-Mover)"]
+        _bin_colors = ["#ef4444", "#f97316", "#f59e0b", "#eab308", "#6b7280"]
+        _risk_df = ml_df[ml_df["financial_loss_risk"]==1].copy()
+        _risk_df["_bucket"] = pd.cut(_risk_df["days_to_expiry"].clip(0, 9999),
+                                     bins=_bins, labels=_labels_b, right=False)
+        _bucket_cnt = _risk_df.groupby("_bucket", observed=True)["inventory_value_usd"].agg(["count","sum"])
+        _bars2 = ax2.bar(_bucket_cnt.index, _bucket_cnt["count"],
+                         color=_bin_colors[:len(_bucket_cnt)], alpha=0.88, width=0.6)
+        for bar, row in zip(_bars2, _bucket_cnt.itertuples()):
+            if row.count > 0:
+                ax2.text(bar.get_x() + bar.get_width()/2, bar.get_height() + max(_bucket_cnt["count"])*0.015,
+                         f"{row.count:,}", ha="center", va="bottom",
+                         fontsize=9, color="white", fontweight="bold")
+        ax2.set_title("At-Risk Batches by Expiry Window\n(how urgent is the problem?)",
+                      color="white", fontsize=10, fontweight="bold")
+        ax2.set_ylabel("Number of At-Risk Batches", color="#94a3b8", fontsize=9)
+        ax2.tick_params(axis="x", colors="#94a3b8", labelsize=8.5)
+        ax2.tick_params(axis="y", colors="#94a3b8")
+        for sp in ax2.spines.values(): sp.set_color("#334155")
 
-        # Plot 3: At-Risk Value by RAG Zone
+        # ── Chart 3: At-Risk Value by RAG Zone (unchanged) ────────────────────
         if "rag_status" in ml_df.columns:
             _rag_risk = ml_df[ml_df["financial_loss_risk"]==1].groupby("rag_status")["inventory_value_usd"].sum()
             _rag_colors = [RAG_COLORS.get(r, "#888") for r in _rag_risk.index]
@@ -3029,16 +3071,18 @@ elif selected_page == "🤖 ML Expiry Classifier":
         with ic1:
             st.markdown(f"""
             <div style='background:#1c0a0a; border:1px solid #ef444440; border-top:3px solid #ef4444; border-radius:8px; padding:12px; font-size:11.5px; color:#cbd5e1;'>
-                <div style='color:#ef4444; font-weight:700; margin-bottom:6px;'>📊 Chart 1: Velocity Pressure Distribution</div>
-                <b>What it says:</b> {_vp_above1_pct:.1f}% of batches have Velocity Pressure > 1.0 — meaning their stock coverage already exceeds their remaining shelf life. These batches are <b>mathematically certain to expire</b> at current sales velocity, no matter what.<br><br>
-                <b>Action:</b> Every batch to the right of the yellow threshold line is a confirmed write-off unless velocity is increased immediately.
+                <div style='color:#ef4444; font-weight:700; margin-bottom:6px;'>📊 Chart 1: Batch Outcome Forecast</div>
+                <b>What it says:</b> Of all active batches, <b>{_risk_cnt:,} ({_risk_pct_:.0f}%)</b> are forecast to expire before being fully sold — representing <b>{fmt_curr(at_risk_val, compact=True)}</b> of capital at risk. The remaining {_safe_cnt_:,} batches are on track to sell in time.<br><br>
+                <b>Action:</b> Every red batch needs an immediate intervention — price reduction, inter-warehouse transfer, or secondary liquidation — or it becomes a write-off.
             </div>""", unsafe_allow_html=True)
         with ic2:
+            _crit_cnt = int((ml_df[ml_df["financial_loss_risk"]==1]["days_to_expiry"].clip(0,9999) < 30).sum())
+            _high_cnt = int(((ml_df[ml_df["financial_loss_risk"]==1]["days_to_expiry"].clip(0,9999) >= 30) & (ml_df[ml_df["financial_loss_risk"]==1]["days_to_expiry"].clip(0,9999) < 90)).sum())
             st.markdown(f"""
-            <div style='background:#080d18; border:1px solid #3b82f640; border-top:3px solid #3b82f6; border-radius:8px; padding:12px; font-size:11.5px; color:#cbd5e1;'>
-                <div style='color:#3b82f6; font-weight:700; margin-bottom:6px;'>📊 Chart 2: Cover Days vs Days to Expiry</div>
-                <b>What it says:</b> <b>{_cliff_batches:,} batches ({fmt_curr(_cliff_val, compact=True)})</b> sit above the yellow diagonal "Cliff Line." Everything above the cliff line will expire before being fully sold — physical impossibility, not a sales problem.<br><br>
-                <b>Action:</b> These batches need either inter-warehouse transfer to a faster location OR immediate liquidation. Pushing sales harder won't work.
+            <div style='background:#080d18; border:1px solid #f9731640; border-top:3px solid #f97316; border-radius:8px; padding:12px; font-size:11.5px; color:#cbd5e1;'>
+                <div style='color:#f97316; font-weight:700; margin-bottom:6px;'>📊 Chart 2: At-Risk Batches by Expiry Window</div>
+                <b>What it says:</b> <b>{_crit_cnt:,} batches expire within 30 days</b> (critical — hours to act). Another <b>{_high_cnt:,} expire within 30–90 days</b>. These two buckets are the highest-priority intervention targets.<br><br>
+                <b>Action:</b> Batches under 30 days need same-day liquidation or certified destruction. Batches 30–90 days need inter-warehouse transfer to a higher-velocity location.
             </div>""", unsafe_allow_html=True)
         with ic3:
             _rag_risk_pct = _red_amber_val / max(ml_df["inventory_value_usd"].sum(), 1) * 100
