@@ -172,6 +172,94 @@ def expiry_risk_fn(d):
     return "LOW (>180d)"
 
 
+def pharma_rag_classifier(d):
+    """Pharmaceutical Residual Shelf Life (RSL) 4-Color RAG Matrix (24M baseline):
+    🟢 Green (> 12 Months): > 365 days | No Risk | Standard Flow & FEFO Picking (Export/Tenders)
+    🟡 Yellow (7 to 12 Months): 210 to 365 days | Low / Monitor | Early Warning (Domestic Retail Focus)
+    🟠 Amber (4 to 6 Months): 90 to 210 days | Medium / Critical | Active Intervention (<180d Distributor Rejection Zone)
+    🔴 Red (< 3 Months / Expired): < 90 days | High / Loss | Liquidation, Commercial Recall & Certified Destruction
+    """
+    if pd.isna(d):
+        return "Unknown"
+    if d < 90:
+        return "🔴 Red (<3M / Expired)"
+    elif d <= 210:
+        return "🟠 Amber (4-6M)"
+    elif d <= 365:
+        return "🟡 Yellow (7-12M)"
+    else:
+        return "🟢 Green (>12M)"
+
+
+RAG_ORDER = ["🟢 Green (>12M)", "🟡 Yellow (7-12M)", "🟠 Amber (4-6M)", "🔴 Red (<3M / Expired)"]
+RAG_COLORS = {
+    "🟢 Green (>12M)": "#10b981",
+    "🟡 Yellow (7-12M)": "#eab308",
+    "🟠 Amber (4-6M)": "#f97316",
+    "🔴 Red (<3M / Expired)": "#ef4444",
+    "Unknown": "#6b7280"
+}
+
+RAG_METADATA = {
+    "🟢 Green (>12M)": {
+        "status": "Green",
+        "emoji": "🟢",
+        "color": "#10b981",
+        "bg_color": "rgba(16, 185, 129, 0.12)",
+        "border_color": "#10b981",
+        "rsl": "> 12 Months",
+        "days_window": "> 365 Days",
+        "risk_level": "No Risk",
+        "strategy": "Standard Flow. Normal distribution via standard FEFO protocols. Eligible for international export, government tenders, and major distributors.",
+        "action_title": "Maintain Velocity",
+        "action_desc": "Enforce strict ERP-driven FEFO (First-Expired, First-Out) picking.",
+        "priority": "Prioritize these batches for international shipping, long-distance transit, or government tenders that require a strict minimum of 60% to 70% residual shelf life at port entry."
+    },
+    "🟡 Yellow (7-12M)": {
+        "status": "Yellow",
+        "emoji": "🟡",
+        "color": "#eab308",
+        "bg_color": "rgba(234, 179, 8, 0.12)",
+        "border_color": "#eab308",
+        "rsl": "7 to 12 Months",
+        "days_window": "210 to 365 Days",
+        "risk_level": "Low / Monitor",
+        "strategy": "Early Warning. Product is losing eligibility for strict export markets or specific tenders. Switch focus exclusively to high-velocity domestic retail channels.",
+        "action_title": "Early Warning & Domestic Rerouting",
+        "action_desc": "Reroute away from strict export/tender channels to high-velocity domestic retail.",
+        "priority": "Expedited retail distribution and promotional allocation before product enters the critical Amber status (<180d)."
+    },
+    "🟠 Amber (4-6M)": {
+        "status": "Amber",
+        "emoji": "🟠",
+        "color": "#f97316",
+        "bg_color": "rgba(249, 115, 22, 0.12)",
+        "border_color": "#f97316",
+        "rsl": "4 to 6 Months",
+        "days_window": "90 to 210 Days",
+        "risk_level": "Medium / Critical",
+        "strategy": "Active Intervention. The product is nearing the dreaded <180 days mark. It will be rejected by standard distributors. Must be rerouted to immediate-use channels.",
+        "action_title": "Active Intervention & Immediate-Use Channels",
+        "action_desc": "Immediate direct allocation to hospitals/clinics and institutional buyers before crossing distributor rejection threshold (<180 days).",
+        "priority": "Dynamic price discounting, fast-turnaround clinical networks, or inter-warehouse transfers to high-velocity metropolitan hubs."
+    },
+    "🔴 Red (<3M / Expired)": {
+        "status": "Red",
+        "emoji": "🔴",
+        "color": "#ef4444",
+        "bg_color": "rgba(239, 68, 68, 0.12)",
+        "border_color": "#ef4444",
+        "rsl": "< 3 Months / Expired",
+        "days_window": "< 90 Days",
+        "risk_level": "High / Loss",
+        "strategy": "Liquidation or Write-off. Immediate recall from standard commercial sales. Transfer to charity, heavy liquidation, or initiate the controlled destruction workflow.",
+        "action_title": "Liquidation & Certified Destruction",
+        "action_desc": "Instant ERP commercial sales stop and immediate quarantine.",
+        "priority": "Transfer to certified secondary market liquidators, donate to eligible charity programs, or initiate official FDA/CDSCO certified hazardous destruction."
+    }
+}
+
+
 def ai_insight(title, bullets, icon="🧠", color="#7c3aed"):
     """Render a styled AI Insight card with bullet-point analysis and recommendations."""
     bullet_html = "".join(
@@ -748,6 +836,7 @@ def load_all_data(src):
     inventory["is_cold_chain"]      = inventory["dosage_form"].str.upper().str.contains("INJECTION|SOLUTION|VACCINE", na=False)
     inventory["is_controlled"]      = inventory["dea_schedule"].notna()
     inventory["expiry_risk"]        = inventory["days_to_expiry"].apply(expiry_risk_fn)
+    inventory["rag_status"]         = inventory["days_to_expiry"].apply(pharma_rag_classifier)
 
     # ── Supplementary sheets ──────────────────────────────────────────────
     df_demand  = read("monthly_demand")
@@ -876,6 +965,7 @@ def load_local_legacy():
     inventory["is_cold_chain"]      = inventory["dosage_form"].str.upper().str.contains("INJECTION|SOLUTION|VACCINE", na=False)
     inventory["is_controlled"]      = inventory["dea_schedule"].notna()
     inventory["expiry_risk"]        = inventory["days_to_expiry"].apply(expiry_risk_fn)
+    inventory["rag_status"]         = inventory["days_to_expiry"].apply(pharma_rag_classifier)
 
     ADD = LOCAL_ADD
     df_demand  = pd.read_excel(os.path.join(ADD, "01_Pharma_Compliant_Monthly_Demand_24M.xlsx")) if os.path.exists(os.path.join(ADD, "01_Pharma_Compliant_Monthly_Demand_24M.xlsx")) else read_loc("monthly_demand")
@@ -1068,6 +1158,29 @@ if selected_page == "🏠 Home & KPI Summary":
         <div style='background:linear-gradient(90deg,#052e16,#14532d); border-left:5px solid #22c55e; padding:1rem 1.4rem; border-radius:0.6rem; margin-bottom:1.2rem;'>
           <span style='color:#86efac; font-size:1.05rem; font-weight:bold;'>✅ ENTERPRISE SUPPLY CHAIN HEALTHY — Network Operating at {fefo_rate:.1f}% FEFO Compliance</span>
         </div>""", unsafe_allow_html=True)
+
+    # ── 1b. 4-COLOR RAG MATRIX EXECUTIVE OVERVIEW STRIP ─────────────────────
+    if "rag_status" in inventory.columns:
+        _rag_counts = inventory["rag_status"].value_counts()
+        _rag_vals = inventory.groupby("rag_status")["inventory_value_usd"].sum()
+        
+        st.markdown("<div style='font-size:11px; font-weight:700; color:#94a3b8; text-transform:uppercase; letter-spacing:0.08em; margin: 4px 0 8px;'>🚦 Pharmaceutical RAG Residual Shelf Life (RSL) Status Overview</div>", unsafe_allow_html=True)
+        rag_cols = st.columns(4)
+        for col, r_key in zip(rag_cols, RAG_ORDER):
+            meta = RAG_METADATA[r_key]
+            c_cnt = int(_rag_counts.get(r_key, 0))
+            c_val = float(_rag_vals.get(r_key, 0.0))
+            with col:
+                st.markdown(f"""
+                <div style='background:#0f172a; border:1px solid #1e293b; border-left:4px solid {meta["color"]}; border-radius:8px; padding:10px 14px; margin-bottom:12px;'>
+                    <div style='display:flex; justify-content:space-between; align-items:center;'>
+                        <span style='color:{meta["color"]}; font-size:12px; font-weight:700;'>{meta["emoji"]} {meta["status"]} ({meta["rsl"]})</span>
+                        <span style='color:#64748b; font-size:10px; font-weight:600;'>{meta["risk_level"]}</span>
+                    </div>
+                    <div style='color:white; font-size:1.25rem; font-weight:800; margin:3px 0;'>{fmt_curr(c_val)}</div>
+                    <div style='color:#94a3b8; font-size:11px;'><b>{c_cnt:,}</b> active batches &bull; {meta["action_title"]}</div>
+                </div>
+                """, unsafe_allow_html=True)
 
     # ── 2. EXACTLY 3 PRIMARY VITAL SIGNS ──────────────────────────────────────
     k1, k2, k3 = st.columns(3)
@@ -1930,129 +2043,289 @@ elif selected_page == "✅ FEFO Compliance":
 # PAGE: EXPIRY RISK EARLY-WARNING RADAR
 # ─────────────────────────────────────────────────────────────────────────────
 elif selected_page == "🌡️ Expiry Risk Heatmap":
-    st.markdown('<div class="section-header">🌡️ Expiry Risk Early-Warning Radar</div>', unsafe_allow_html=True)
-    st.markdown('<div class="section-desc">Identifies near-expiry batches across all distribution centers 30–180 days in advance, providing the operational bridge directly into the LP Cost Optimizer.</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-header">🌡️ Expiry Risk Early-Warning Radar &amp; RAG Tracking Matrix</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-desc">Four-color Residual Shelf Life (RSL) tracking system and early-warning radar — maps color codes to operational action zones before products reach distributor rejection thresholds (&lt;180d) or unsellable write-offs.</div>', unsafe_allow_html=True)
 
-    _exp_val   = inventory[inventory["expiry_risk"]=="EXPIRED"]["inventory_value_usd"].sum()
-    _crit_val  = inventory[inventory["expiry_risk"]=="CRITICAL (<30d)"]["inventory_value_usd"].sum()
-    _high_val  = inventory[inventory["expiry_risk"]=="HIGH (30-90d)"]["inventory_value_usd"].sum()
-    _med_val   = inventory[inventory["expiry_risk"]=="MEDIUM (90-180d)"]["inventory_value_usd"].sum()
-    _tot_at_risk = _exp_val + _crit_val + _high_val
+    tab_rag, tab_radar = st.tabs([
+        "🚦 4-Color RAG Matrix & Action Planning",
+        "📊 DC Expiry Radar & Heatmap"
+    ])
 
-    at_risk_df = inventory[inventory["expiry_risk"].isin(["EXPIRED","CRITICAL (<30d)","HIGH (30-90d)"])]
-    risk_val_by_dc = at_risk_df.groupby("warehouse_id")["inventory_value_usd"].sum().sort_values(ascending=True)
-    _worst_dc = risk_val_by_dc.idxmax() if not risk_val_by_dc.empty else "None"
-    _worst_dc_val = risk_val_by_dc.max() if not risk_val_by_dc.empty else 0
-
-    # 1. Executive Verdict Banner
-    if _tot_at_risk > 0:
-        st.markdown(f"""
-        <div style='background:linear-gradient(90deg,#7f1d1d,#450a0a); border-left:5px solid #ef4444; padding:0.9rem 1.3rem; border-radius:0.6rem; margin-bottom:1.2rem;'>
-          <div style='display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap;'>
-            <span style='color:#fca5a5; font-size:1.05rem; font-weight:bold;'>⚠️ EXPIRY RADAR: {fmt_curr(_tot_at_risk)} Value Exposed to Expiry Overhang</span>
-            <span style='color:#fecaca; font-size:0.88rem; font-weight:600;'>Primary Exposure Hotspot: {_worst_dc} ({fmt_curr(_worst_dc_val)})</span>
-          </div>
-          <div style='color:#cbd5e1; font-size:0.82rem; margin-top:0.3rem;'>
-            Critical Window (&lt;30d): <b style='color:#fca5a5;'>{fmt_curr(_crit_val)}</b> &nbsp;|&nbsp; 
-            30–90d Horizon: <b style='color:#fcd34d;'>{fmt_curr(_high_val)}</b> &nbsp;|&nbsp; 
-            Expired (Mandatory Destruction): <b style='color:#ef4444;'>{fmt_curr(_exp_val)}</b>
-          </div>
-        </div>""", unsafe_allow_html=True)
-    else:
-        st.markdown(f"""
-        <div style='background:linear-gradient(90deg,#052e16,#14532d); border-left:5px solid #22c55e; padding:0.9rem 1.3rem; border-radius:0.6rem; margin-bottom:1.2rem;'>
-          <span style='color:#86efac; font-size:1.05rem; font-weight:bold;'>✅ NO CRITICAL EXPIRY EXPOSURE — All active batches have &gt;90 days shelf-life remaining</span>
-        </div>""", unsafe_allow_html=True)
-
-    # 2. Top 3 Vital Signs
-    ek1, ek2, ek3 = st.columns(3)
-    with ek1:
-        st.markdown(f"""
-        <div style='background:#0f172a; border:1px solid #1e293b; border-top:3px solid #7f1d1d; border-radius:0.75rem; padding:1.1rem; text-align:center;'>
-          <div style='color:#94a3b8; font-size:0.8rem; text-transform:uppercase; letter-spacing:1px;'>Expired Stock (Zero Salvage)</div>
-          <div style='color:#fca5a5; font-size:1.9rem; font-weight:bold; margin:0.3rem 0;'>{fmt_curr(_exp_val, compact=False, decimals=0)}</div>
-          <div style='color:#64748b; font-size:0.76rem;'>Immediate QA certified destruction required</div>
-        </div>""", unsafe_allow_html=True)
-    with ek2:
-        st.markdown(f"""
-        <div style='background:#0f172a; border:1px solid #1e293b; border-top:3px solid #ef4444; border-radius:0.75rem; padding:1.1rem; text-align:center;'>
-          <div style='color:#94a3b8; font-size:0.8rem; text-transform:uppercase; letter-spacing:1px;'>Critical Window (&lt;30 Days)</div>
-          <div style='color:#fca5a5; font-size:1.9rem; font-weight:bold; margin:0.3rem 0;'>{fmt_curr(_crit_val, compact=False, decimals=0)}</div>
-          <div style='color:#64748b; font-size:0.76rem;'>Urgent emergency dispatch or secondary liquidation</div>
-        </div>""", unsafe_allow_html=True)
-    with ek3:
-        st.markdown(f"""
-        <div style='background:#0f172a; border:1px solid #1e293b; border-top:3px solid #f59e0b; border-radius:0.75rem; padding:1.1rem; text-align:center;'>
-          <div style='color:#94a3b8; font-size:0.8rem; text-transform:uppercase; letter-spacing:1px;'>30–90 Day Cascade Risk</div>
-          <div style='color:#fcd34d; font-size:1.9rem; font-weight:bold; margin:0.3rem 0;'>{fmt_curr(_high_val, compact=False, decimals=0)}</div>
-          <div style='color:#64748b; font-size:0.76rem;'>Inter-warehouse transfer &amp; sales velocity acceleration</div>
-        </div>""", unsafe_allow_html=True)
-
-    st.markdown("<br>", unsafe_allow_html=True)
-
-    # 3. Dominant Visual: 2-Panel Spacious Radar
-    st.markdown("#### 📊 Expiry Risk Radar — Distribution Center Heatmap & Valuation Exposure")
-    fig_exp, axes_exp = plt.subplots(1, 2, figsize=(20, 5.5))
-    fig_exp.patch.set_facecolor("#0f1117")
-
-    # Left: Units Composition by Risk Tier (Proper Risk Color Palette)
-    ax_e1 = axes_exp[0]
-    pivot_risk = inventory.pivot_table(values="quantity_on_hand", index="warehouse_id", columns="expiry_risk", aggfunc="sum", fill_value=0)
-    col_order = [c for c in RISK_ORDER if c in pivot_risk.columns]
-    pivot_k = pivot_risk[col_order] / 1000.0
-
-    _bar_colors = [RISK_COLORS.get(c, "#888") for c in col_order]
-    pivot_k.plot(kind="barh", stacked=True, color=_bar_colors, ax=ax_e1, edgecolor="#0f1117", alpha=0.92)
-    ax_e1.set_title("Stock Composition by Expiry Risk Tier ('000 units)", color="white", fontsize=11)
-    ax_e1.set_xlabel("Units ('000)", color="#94a3b8")
-    ax_e1.set_facecolor("#0f1117"); ax_e1.tick_params(colors="#94a3b8")
-    ax_e1.legend(title="Risk Tier", fontsize=8, framealpha=0, labelcolor="#cbd5e1", bbox_to_anchor=(1.02, 1), loc="upper left")
-    for sp in ax_e1.spines.values(): sp.set_edgecolor("#1e293b")
-
-    # Right: Valuation Exposure Bar (Ranked by At-Risk Dollar Value)
-    ax_e2 = axes_exp[1]
-    _rv_plot = risk_val_by_dc.values/1e3 if not is_india else risk_val_by_dc.values * USD_TO_INR / 1e5
-    ax_e2.barh(risk_val_by_dc.index, _rv_plot, color="#ef4444", alpha=0.88, edgecolor="#0f1117")
-    ax_e2.set_title(f"At-Risk Capital Exposure by DC ({curr_code} {'Lakhs' if is_india else 'K'})", color="white", fontsize=11)
-    ax_e2.set_xlabel(f"Exposed Capital ({curr_code})", color="#94a3b8")
-    ax_e2.set_facecolor("#0f1117"); ax_e2.tick_params(colors="#94a3b8")
-    for bar, v in zip(ax_e2.patches, risk_val_by_dc.values):
-        ax_e2.text(bar.get_width() + (max(_rv_plot)*0.02 if len(_rv_plot)>0 else 1), bar.get_y()+bar.get_height()/2, f"{fmt_curr(v)}", va="center", fontsize=8.5, color="white")
-    for sp in ax_e2.spines.values(): sp.set_edgecolor("#1e293b")
-
-    plt.tight_layout(); show_fig(fig_exp)
-
-    st.markdown("<br>", unsafe_allow_html=True)
-
-    # 4. Direct Action Bridge to LP Optimizer
-    st.markdown(f"""
-    <div style='background:rgba(16,185,129,0.15); border-left:4px solid #10b981; padding:1rem 1.4rem; border-radius:0.5rem;'>
-      <div style='display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap;'>
-        <div>
-          <span style='color:#6ee7b7; font-weight:bold; font-size:0.95rem;'>🚀 EXECUTION BRIDGE: Automated Recovery Optimization</span>
-          <div style='color:#cbd5e1; font-size:0.85rem; margin-top:0.2rem;'>
-            Convert this <b>{fmt_curr(_tot_at_risk)}</b> at-risk exposure into concrete dispatch, transfer, and liquidation decisions with specified deadlines.
-          </div>
+    with tab_rag:
+        st.markdown("""
+        <div style='background:rgba(15, 23, 42, 0.85); border:1px solid #1e293b; border-radius:10px; padding:16px 20px; margin-bottom:18px;'>
+            <div style='font-size:14px; font-weight:700; color:#00d4ff; margin-bottom:6px;'>
+                🚦 Pharmaceutical Residual Shelf Life (RSL) 4-Color RAG Tracking System
+            </div>
+            <div style='font-size:13px; color:#cbd5e1; line-height:1.6;'>
+                To effectively implement a <b>RAG (Red, Amber, Yellow, Green)</b> tracking system for pharmaceutical expiry management,
+                color codes map to specific <b>Residual Shelf Life (RSL)</b> thresholds. Because pharma supply chains involve transit, distributor storage,
+                and retail shelf time, thresholds must be aggressive enough to trigger actions <i>before</i> the product becomes unsellable or crosses distributor rejection limits (&lt;180 days).
+            </div>
         </div>
-      </div>
-    </div>""", unsafe_allow_html=True)
+        """, unsafe_allow_html=True)
 
-    c_btn1, c_btn2 = st.columns([1, 2])
-    with c_btn1:
-        if st.button("⚖️ Open Capital Recovery & LP Optimizer →", type="primary", use_container_width=True):
+        # 4 Vital Signs KPI Cards for RAG Matrix
+        rag_counts = inventory["rag_status"].value_counts() if "rag_status" in inventory.columns else pd.Series()
+        rag_values = inventory.groupby("rag_status")["inventory_value_usd"].sum() if "rag_status" in inventory.columns else pd.Series()
+        total_inv_val = inventory["inventory_value_usd"].sum()
+
+        r_c1, r_c2, r_c3, r_c4 = st.columns(4)
+        for col, r_key in zip([r_c1, r_c2, r_c3, r_c4], RAG_ORDER):
+            meta = RAG_METADATA[r_key]
+            cnt = int(rag_counts.get(r_key, 0))
+            val = float(rag_values.get(r_key, 0.0))
+            pct = (val / total_inv_val * 100) if total_inv_val > 0 else 0
+            with col:
+                st.markdown(f"""
+                <div style='background:#0f172a; border:1px solid #1e293b; border-top:4px solid {meta["color"]}; border-radius:10px; padding:14px; text-align:center;'>
+                    <div style='color:{meta["color"]}; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:0.08em;'>{meta["emoji"]} {meta["status"]} ZONE</div>
+                    <div style='color:white; font-size:11px; margin-top:2px;'>RSL: <b>{meta["rsl"]}</b></div>
+                    <div style='color:{meta["color"]}; font-size:1.65rem; font-weight:800; margin:6px 0 2px;'>{fmt_curr(val, compact=True)}</div>
+                    <div style='color:#94a3b8; font-size:11px;'><b>{cnt:,}</b> batches &bull; <b>{pct:.1f}%</b> of portfolio</div>
+                    <div style='background:{meta["bg_color"]}; color:{meta["color"]}; font-size:10px; font-weight:600; padding:3px 8px; border-radius:12px; margin-top:8px; display:inline-block;'>
+                        Risk: {meta["risk_level"]}
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        # 1. The RAG Matrix Structure Table (Directly matching blueprint Table 1)
+        st.markdown("#### 1. The RAG Matrix Structure (Standard 24-Month Shelf-Life Product)")
+        st.caption("Note: Thresholds adapted based on typical 24-month maximum shelf life across export, tender, and domestic retail channels.")
+
+        matrix_rows = []
+        for r_key in RAG_ORDER:
+            m = RAG_METADATA[r_key]
+            c = int(rag_counts.get(r_key, 0))
+            v = float(rag_values.get(r_key, 0.0))
+            matrix_rows.append({
+                "Status": f"{m['emoji']} {m['status']}",
+                "Remaining Shelf Life": m["rsl"],
+                "Risk Level": m["risk_level"],
+                "Active Batches": f"{c:,}",
+                f"Total Valuation ({curr_code})": fmt_curr(v, compact=False, decimals=0),
+                "Operational Interpretation & Strategy": m["strategy"],
+            })
+        df_rag_table = pd.DataFrame(matrix_rows)
+        st.dataframe(df_rag_table, use_container_width=True, hide_index=True)
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        # 2. Action Planning: What to Do in Each Zone (Directly matching blueprint Section 2)
+        st.markdown("#### 2. Action Planning: What to Do in Each Zone")
+
+        ap1, ap2 = st.columns(2)
+        with ap1:
+            m_g = RAG_METADATA["🟢 Green (>12M)"]
+            st.markdown(f"""
+            <div style='background:#0f172a; border:1px solid #1e293b; border-left:4px solid {m_g["color"]}; border-radius:8px; padding:16px; margin-bottom:14px;'>
+                <div style='color:{m_g["color"]}; font-size:14px; font-weight:700; margin-bottom:8px;'>
+                    {m_g["emoji"]} Green Zone: {m_g["action_title"]}
+                </div>
+                <div style='font-size:12px; color:#cbd5e1; line-height:1.6;'>
+                    &bull; <b>Action:</b> {m_g["action_desc"]}<br>
+                    &bull; <b>Priority:</b> {m_g["priority"]}
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+            m_a = RAG_METADATA["🟠 Amber (4-6M)"]
+            st.markdown(f"""
+            <div style='background:#0f172a; border:1px solid #1e293b; border-left:4px solid {m_a["color"]}; border-radius:8px; padding:16px; margin-bottom:14px;'>
+                <div style='color:{m_a["color"]}; font-size:14px; font-weight:700; margin-bottom:8px;'>
+                    {m_a["emoji"]} Amber Zone: {m_a["action_title"]}
+                </div>
+                <div style='font-size:12px; color:#cbd5e1; line-height:1.6;'>
+                    &bull; <b>Action:</b> {m_a["action_desc"]}<br>
+                    &bull; <b>Priority:</b> {m_a["priority"]}
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        with ap2:
+            m_y = RAG_METADATA["🟡 Yellow (7-12M)"]
+            st.markdown(f"""
+            <div style='background:#0f172a; border:1px solid #1e293b; border-left:4px solid {m_y["color"]}; border-radius:8px; padding:16px; margin-bottom:14px;'>
+                <div style='color:{m_y["color"]}; font-size:14px; font-weight:700; margin-bottom:8px;'>
+                    {m_y["emoji"]} Yellow Zone: {m_y["action_title"]}
+                </div>
+                <div style='font-size:12px; color:#cbd5e1; line-height:1.6;'>
+                    &bull; <b>Action:</b> {m_y["action_desc"]}<br>
+                    &bull; <b>Priority:</b> {m_y["priority"]}
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+            m_r = RAG_METADATA["🔴 Red (<3M / Expired)"]
+            st.markdown(f"""
+            <div style='background:#0f172a; border:1px solid #1e293b; border-left:4px solid {m_r["color"]}; border-radius:8px; padding:16px; margin-bottom:14px;'>
+                <div style='color:{m_r["color"]}; font-size:14px; font-weight:700; margin-bottom:8px;'>
+                    {m_r["emoji"]} Red Zone: {m_r["action_title"]}
+                </div>
+                <div style='font-size:12px; color:#cbd5e1; line-height:1.6;'>
+                    &bull; <b>Action:</b> {m_r["action_desc"]}<br>
+                    &bull; <b>Priority:</b> {m_r["priority"]}
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        # 3. Interactive Batch Explorer by RAG Tier
+        st.markdown("#### 🔎 Interactive Batch Explorer by RAG Action Tier")
+        sel_rag_filter = st.selectbox(
+            "Filter Batches by RAG Zone:",
+            ["All RAG Tiers"] + RAG_ORDER,
+            key="rag_zone_filter"
+        )
+        inv_rag_sub = inventory.copy()
+        if sel_rag_filter != "All RAG Tiers":
+            inv_rag_sub = inv_rag_sub[inv_rag_sub["rag_status"] == sel_rag_filter]
+
+        cols_rag_show = [c for c in ["fp_batch_id", "batch_id", "product_id", "generic_name", "warehouse_id",
+                                     "quantity_on_hand", "days_to_expiry", "rag_status", "inventory_value_usd", "qc_status"] if c in inv_rag_sub.columns]
+        df_disp = inv_rag_sub[cols_rag_show].sort_values("days_to_expiry", ascending=True).head(500).copy()
+        if "inventory_value_usd" in df_disp.columns:
+            df_disp[f"Valuation ({curr_code})"] = df_disp["inventory_value_usd"].apply(lambda v: fmt_curr(v))
+            df_disp = df_disp.drop(columns=["inventory_value_usd"])
+        st.dataframe(df_disp, use_container_width=True, hide_index=True)
+
+        # Direct Action Bridge to LP Optimizer
+        amber_red_total = float(rag_values.get("🟠 Amber (4-6M)", 0.0) + rag_values.get("🔴 Red (<3M / Expired)", 0.0))
+        st.markdown(f"""
+        <div style='background:rgba(16,185,129,0.15); border-left:4px solid #10b981; padding:1rem 1.4rem; border-radius:0.5rem; margin-top:14px;'>
+            <span style='color:#6ee7b7; font-weight:bold; font-size:0.95rem;'>🚀 LP RECOVERY BRIDGE: Feed Amber &amp; Red Tiers into Cost Optimization</span>
+            <div style='color:#cbd5e1; font-size:0.85rem; margin-top:0.2rem;'>
+                Transfer <b>{fmt_curr(amber_red_total)}</b> in Amber &amp; Red batches directly into the LP Cost Optimizer to compute exact secondary liquidation discounts, hospital direct reallocation, and salvage values.
+            </div>
+        </div>""", unsafe_allow_html=True)
+        if st.button("⚖️ Launch LP Cost Optimizer for Amber / Red Batches →", type="primary", key="btn_rag_lp"):
             st.session_state["_pending_nav"] = "⚖️ LP Cost Optimizer"
             st.rerun()
 
-    # 5. Collapsible Summary Drawer
-    with st.expander("🔍 Risk Category Register & Unit Breakdown", expanded=False):
-        risk_summary = inventory.groupby("expiry_risk").agg(
-            Products=("product_id","nunique"),
-            Total_Units=("quantity_on_hand","sum"),
-            Total_Value_USD=("inventory_value_usd","sum")
-        ).reindex([r for r in RISK_ORDER if r in inventory["expiry_risk"].unique()]).round(0)
-        risk_summary[f"Total Value ({curr_code})"] = risk_summary["Total_Value_USD"].apply(lambda v: fmt_curr(v, compact=False, decimals=0))
-        risk_summary = risk_summary.drop(columns=["Total_Value_USD"])
-        st.dataframe(risk_summary, use_container_width=True)
+    with tab_radar:
+        _exp_val   = inventory[inventory["expiry_risk"]=="EXPIRED"]["inventory_value_usd"].sum()
+        _crit_val  = inventory[inventory["expiry_risk"]=="CRITICAL (<30d)"]["inventory_value_usd"].sum()
+        _high_val  = inventory[inventory["expiry_risk"]=="HIGH (30-90d)"]["inventory_value_usd"].sum()
+        _med_val   = inventory[inventory["expiry_risk"]=="MEDIUM (90-180d)"]["inventory_value_usd"].sum()
+        _tot_at_risk = _exp_val + _crit_val + _high_val
+
+        at_risk_df = inventory[inventory["expiry_risk"].isin(["EXPIRED","CRITICAL (<30d)","HIGH (30-90d)"])]
+        risk_val_by_dc = at_risk_df.groupby("warehouse_id")["inventory_value_usd"].sum().sort_values(ascending=True)
+        _worst_dc = risk_val_by_dc.idxmax() if not risk_val_by_dc.empty else "None"
+        _worst_dc_val = risk_val_by_dc.max() if not risk_val_by_dc.empty else 0
+
+        # 1. Executive Verdict Banner
+        if _tot_at_risk > 0:
+            st.markdown(f"""
+            <div style='background:linear-gradient(90deg,#7f1d1d,#450a0a); border-left:5px solid #ef4444; padding:0.9rem 1.3rem; border-radius:0.6rem; margin-bottom:1.2rem;'>
+              <div style='display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap;'>
+                <span style='color:#fca5a5; font-size:1.05rem; font-weight:bold;'>⚠️ EXPIRY RADAR: {fmt_curr(_tot_at_risk)} Value Exposed to Expiry Overhang</span>
+                <span style='color:#fecaca; font-size:0.88rem; font-weight:600;'>Primary Exposure Hotspot: {_worst_dc} ({fmt_curr(_worst_dc_val)})</span>
+              </div>
+              <div style='color:#cbd5e1; font-size:0.82rem; margin-top:0.3rem;'>
+                Critical Window (&lt;30d): <b style='color:#fca5a5;'>{fmt_curr(_crit_val)}</b> &nbsp;|&nbsp; 
+                30–90d Horizon: <b style='color:#fcd34d;'>{fmt_curr(_high_val)}</b> &nbsp;|&nbsp; 
+                Expired (Mandatory Destruction): <b style='color:#ef4444;'>{fmt_curr(_exp_val)}</b>
+              </div>
+            </div>""", unsafe_allow_html=True)
+        else:
+            st.markdown(f"""
+            <div style='background:linear-gradient(90deg,#052e16,#14532d); border-left:5px solid #22c55e; padding:0.9rem 1.3rem; border-radius:0.6rem; margin-bottom:1.2rem;'>
+              <span style='color:#86efac; font-size:1.05rem; font-weight:bold;'>✅ NO CRITICAL EXPIRY EXPOSURE — All active batches have &gt;90 days shelf-life remaining</span>
+            </div>""", unsafe_allow_html=True)
+
+        # 2. Top 3 Vital Signs
+        ek1, ek2, ek3 = st.columns(3)
+        with ek1:
+            st.markdown(f"""
+            <div style='background:#0f172a; border:1px solid #1e293b; border-top:3px solid #7f1d1d; border-radius:0.75rem; padding:1.1rem; text-align:center;'>
+              <div style='color:#94a3b8; font-size:0.8rem; text-transform:uppercase; letter-spacing:1px;'>Expired Stock (Zero Salvage)</div>
+              <div style='color:#fca5a5; font-size:1.9rem; font-weight:bold; margin:0.3rem 0;'>{fmt_curr(_exp_val, compact=False, decimals=0)}</div>
+              <div style='color:#64748b; font-size:0.76rem;'>Immediate QA certified destruction required</div>
+            </div>""", unsafe_allow_html=True)
+        with ek2:
+            st.markdown(f"""
+            <div style='background:#0f172a; border:1px solid #1e293b; border-top:3px solid #ef4444; border-radius:0.75rem; padding:1.1rem; text-align:center;'>
+              <div style='color:#94a3b8; font-size:0.8rem; text-transform:uppercase; letter-spacing:1px;'>Critical Window (&lt;30 Days)</div>
+              <div style='color:#fca5a5; font-size:1.9rem; font-weight:bold; margin:0.3rem 0;'>{fmt_curr(_crit_val, compact=False, decimals=0)}</div>
+              <div style='color:#64748b; font-size:0.76rem;'>Urgent emergency dispatch or secondary liquidation</div>
+            </div>""", unsafe_allow_html=True)
+        with ek3:
+            st.markdown(f"""
+            <div style='background:#0f172a; border:1px solid #1e293b; border-top:3px solid #f59e0b; border-radius:0.75rem; padding:1.1rem; text-align:center;'>
+              <div style='color:#94a3b8; font-size:0.8rem; text-transform:uppercase; letter-spacing:1px;'>30–90 Day Cascade Risk</div>
+              <div style='color:#fcd34d; font-size:1.9rem; font-weight:bold; margin:0.3rem 0;'>{fmt_curr(_high_val, compact=False, decimals=0)}</div>
+              <div style='color:#64748b; font-size:0.76rem;'>Inter-warehouse transfer &amp; sales velocity acceleration</div>
+            </div>""", unsafe_allow_html=True)
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        # 3. Dominant Visual: 2-Panel Spacious Radar
+        st.markdown("#### 📊 Expiry Risk Radar — Distribution Center Heatmap & Valuation Exposure")
+        fig_exp, axes_exp = plt.subplots(1, 2, figsize=(20, 5.5))
+        fig_exp.patch.set_facecolor("#0f1117")
+
+        # Left: Units Composition by Risk Tier
+        ax_e1 = axes_exp[0]
+        pivot_risk = inventory.pivot_table(values="quantity_on_hand", index="warehouse_id", columns="expiry_risk", aggfunc="sum", fill_value=0)
+        col_order = [c for c in RISK_ORDER if c in pivot_risk.columns]
+        pivot_k = pivot_risk[col_order] / 1000.0
+
+        _bar_colors = [RISK_COLORS.get(c, "#888") for c in col_order]
+        pivot_k.plot(kind="barh", stacked=True, color=_bar_colors, ax=ax_e1, edgecolor="#0f1117", alpha=0.92)
+        ax_e1.set_title("Stock Composition by Expiry Risk Tier ('000 units)", color="white", fontsize=11)
+        ax_e1.set_xlabel("Units ('000)", color="#94a3b8")
+        ax_e1.set_facecolor("#0f1117"); ax_e1.tick_params(colors="#94a3b8")
+        ax_e1.legend(title="Risk Tier", fontsize=8, framealpha=0, labelcolor="#cbd5e1", bbox_to_anchor=(1.02, 1), loc="upper left")
+        for sp in ax_e1.spines.values(): sp.set_edgecolor("#1e293b")
+
+        # Right: Valuation Exposure Bar
+        ax_e2 = axes_exp[1]
+        _rv_plot = risk_val_by_dc.values/1e3 if not is_india else risk_val_by_dc.values * USD_TO_INR / 1e5
+        ax_e2.barh(risk_val_by_dc.index, _rv_plot, color="#ef4444", alpha=0.88, edgecolor="#0f1117")
+        ax_e2.set_title(f"At-Risk Capital Exposure by DC ({curr_code} {'Lakhs' if is_india else 'K'})", color="white", fontsize=11)
+        ax_e2.set_xlabel(f"Exposed Capital ({curr_code})", color="#94a3b8")
+        ax_e2.set_facecolor("#0f1117"); ax_e2.tick_params(colors="#94a3b8")
+        for bar, v in zip(ax_e2.patches, risk_val_by_dc.values):
+            ax_e2.text(bar.get_width() + (max(_rv_plot)*0.02 if len(_rv_plot)>0 else 1), bar.get_y()+bar.get_height()/2, f"{fmt_curr(v)}", va="center", fontsize=8.5, color="white")
+        for sp in ax_e2.spines.values(): sp.set_edgecolor("#1e293b")
+
+        plt.tight_layout(); show_fig(fig_exp)
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        # 4. Direct Action Bridge to LP Optimizer
+        st.markdown(f"""
+        <div style='background:rgba(16,185,129,0.15); border-left:4px solid #10b981; padding:1rem 1.4rem; border-radius:0.5rem;'>
+          <div style='display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap;'>
+            <div>
+              <span style='color:#6ee7b7; font-weight:bold; font-size:0.95rem;'>🚀 EXECUTION BRIDGE: Automated Recovery Optimization</span>
+              <div style='color:#cbd5e1; font-size:0.85rem; margin-top:0.2rem;'>
+                Convert this <b>{fmt_curr(_tot_at_risk)}</b> at-risk exposure into concrete dispatch, transfer, and liquidation decisions with specified deadlines.
+              </div>
+            </div>
+          </div>
+        </div>""", unsafe_allow_html=True)
+
+        c_btn1, c_btn2 = st.columns([1, 2])
+        with c_btn1:
+            if st.button("⚖️ Open Capital Recovery & LP Optimizer →", type="primary", use_container_width=True, key="btn_radar_lp"):
+                st.session_state["_pending_nav"] = "⚖️ LP Cost Optimizer"
+                st.rerun()
+
+        # 5. Collapsible Summary Drawer
+        with st.expander("🔍 Risk Category Register & Unit Breakdown", expanded=False):
+            risk_summary = inventory.groupby("expiry_risk").agg(
+                Products=("product_id","nunique"),
+                Total_Units=("quantity_on_hand","sum"),
+                Total_Value_USD=("inventory_value_usd","sum")
+            ).reindex([r for r in RISK_ORDER if r in inventory["expiry_risk"].unique()]).round(0)
+            risk_summary[f"Total Value ({curr_code})"] = risk_summary["Total_Value_USD"].apply(lambda v: fmt_curr(v, compact=False, decimals=0))
+            risk_summary = risk_summary.drop(columns=["Total_Value_USD"])
+            st.dataframe(risk_summary, use_container_width=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PAGE: DEMAND & SEASONALITY
@@ -2410,8 +2683,10 @@ elif selected_page == "🤖 ML Expiry Classifier":
 
     features = [f for f in ["days_to_expiry","quantity_on_hand","unit_price","avg_monthly_dispatch","cover_days","risk_score","value_per_day","pct_life_remaining"] if f in ml_df.columns]
     X = ml_df[features].fillna(0)
-    # ── Dynamic Target Variable Selection ────────────────────────────────────
-    if ml_df["expiry_risk"].nunique() >= 2:
+    # ── Target Variable Selection (Standard 4-Color RAG Matrix) ──────────────
+    if "rag_status" in ml_df.columns and ml_df["rag_status"].nunique() >= 2:
+        y = ml_df["rag_status"]
+    elif ml_df["expiry_risk"].nunique() >= 2:
         y = ml_df["expiry_risk"]
     else:
         # If all batches fall into the same nominal bucket (e.g. all >180d),
@@ -2449,24 +2724,26 @@ elif selected_page == "🤖 ML Expiry Classifier":
 
     fig, axes = plt.subplots(1, 3, figsize=(20, 6))
     fig.patch.set_facecolor("#0f1117")
-    fig.suptitle("ML Expiry Risk Classifier — Random Forest", fontsize=14, color="#00d4ff", fontweight="bold", y=1.04)
+    fig.suptitle("ML Expiry Risk Classifier — Random Forest (RAG Matrix)", fontsize=14, color="#00d4ff", fontweight="bold", y=1.04)
 
     imp = pd.Series(rf.feature_importances_, index=features).sort_values()
     axes[0].barh(imp.index, imp.values, color="#7c3aed", alpha=0.85)
     axes[0].set_title("Feature Importance"); axes[0].set_xlabel("Importance Score")
 
-    classes = sorted(y.unique())
+    classes = [r for r in RAG_ORDER if r in y.unique()] if all(r in y.unique() or r not in y.unique() for r in RAG_ORDER) and any(r in y.unique() for r in RAG_ORDER) else sorted(y.unique())
     cm = confusion_matrix(y_test, y_pred, labels=classes)
     sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", xticklabels=classes, yticklabels=classes, ax=axes[1], linewidths=0.5, linecolor="#0f1117")
     axes[1].set_title("Confusion Matrix"); axes[1].set_xlabel("Predicted"); axes[1].set_ylabel("True"); axes[1].tick_params(axis="x", rotation=30)
 
     pred_counts = ml_df["predicted_risk"].value_counts()
-    ordered_keys = [r for r in RISK_ORDER if r in pred_counts.index]
+    ordered_keys = [r for r in RAG_ORDER if r in pred_counts.index]
+    if not ordered_keys:
+        ordered_keys = [r for r in RISK_ORDER if r in pred_counts.index]
     if len(ordered_keys) == len(pred_counts):
         pred_counts = pred_counts.reindex(ordered_keys)
-        bar_colors_ml = [RISK_COLORS.get(r, "#888") for r in pred_counts.index]
+        bar_colors_ml = [RAG_COLORS.get(r, RISK_COLORS.get(r, "#888")) for r in pred_counts.index]
     else:
-        bar_colors_ml = ["#ef4444" if "Tier 1" in str(k) or "High Cover" in str(k) else ("#f59e0b" if "Tier 2" in str(k) else "#10b981") for k in pred_counts.index]
+        bar_colors_ml = ["#ef4444" if ("Tier 1" in str(k) or "High Cover" in str(k) or "Red" in str(k)) else ("#f59e0b" if ("Tier 2" in str(k) or "Amber" in str(k) or "Yellow" in str(k)) else "#10b981") for k in pred_counts.index]
 
     axes[2].bar(pred_counts.index, pred_counts.values, color=bar_colors_ml, alpha=0.9)
     axes[2].set_title("ML-Predicted Risk Distribution"); axes[2].set_ylabel("Batches"); axes[2].tick_params(axis="x", rotation=35)
@@ -2490,8 +2767,8 @@ elif selected_page == "🤖 ML Expiry Classifier":
     v_30 = dte_30["inventory_value_usd"].sum()
     v_60 = dte_60["inventory_value_usd"].sum()
     v_90 = dte_90["inventory_value_usd"].sum()
-    _high_risk_pred_cnt = len(ml_df[ml_df["predicted_risk"].astype(str).str.contains("Tier 1|CRITICAL|EXPIRED|High Cover")])
-    _high_risk_pred_val = ml_df[ml_df["predicted_risk"].astype(str).str.contains("Tier 1|CRITICAL|EXPIRED|High Cover")]["inventory_value_usd"].sum()
+    _high_risk_pred_cnt = len(ml_df[ml_df["predicted_risk"].astype(str).str.contains("Tier 1|CRITICAL|EXPIRED|High Cover|Red|Amber")])
+    _high_risk_pred_val = ml_df[ml_df["predicted_risk"].astype(str).str.contains("Tier 1|CRITICAL|EXPIRED|High Cover|Red|Amber")]["inventory_value_usd"].sum()
 
     st.markdown(f"""
     <div style='background:linear-gradient(135deg, #1e1b4b, #0f172a); border:1px solid #6366f1; border-radius:12px; padding:18px 22px; margin-bottom:18px;'>
