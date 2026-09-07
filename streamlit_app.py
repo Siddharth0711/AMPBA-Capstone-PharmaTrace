@@ -3485,9 +3485,6 @@ elif selected_page == "🤖 ML Expiry Classifier":
             _dl_cols = [c for c in ["batch_number","product_id","generic_name","warehouse_id",
                                     "days_to_expiry","quantity_on_hand","cover_days",
                                     "velocity_pressure","risk_probability","prob_band"] if c in ml_df.columns]
-            _dl_df = ml_df[_dl_cols].copy().sort_values(
-                ml_df.columns.tolist().index("risk_probability") if "risk_probability" in ml_df.columns else 0
-            ) if "risk_probability" in ml_df.columns else ml_df[_dl_cols]
             _dl_df_raw = ml_df[_dl_cols].copy()
             if "risk_probability" in _dl_df_raw.columns:
                 _dl_df_raw = _dl_df_raw.sort_values("risk_probability", ascending=False)
