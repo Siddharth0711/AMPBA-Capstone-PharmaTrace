@@ -3190,7 +3190,9 @@ elif selected_page == "🤖 ML Expiry Classifier":
             _champ  = _df_res.iloc[0]
             _champ_clf   = _champ["_clf"]
             _champ_name  = _champ["Algorithm"]
+            _champ_xall  = _champ["_xall"]   # X for full-dataset prediction (scaled for LR, raw for RF/GB)
             ml_df["predicted_risk"] = _champ_clf.predict(_champ_xall)
+
 
             # ── KEY EXPIRY RISK DRIVERS (Feature Importance — the only ML output that matters to management) ──
             st.markdown("#### 🧠 5. What Drives Expiry Risk? — Feature Importance Analysis")
