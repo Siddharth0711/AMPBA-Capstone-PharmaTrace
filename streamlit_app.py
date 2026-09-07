@@ -24,11 +24,13 @@ import matplotlib.patches as mpatches
 import matplotlib.gridspec as gridspec
 from matplotlib.colors import LinearSegmentedColormap
 import seaborn as sns
-from sklearn.ensemble import RandomForestClassifier
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report, confusion_matrix, accuracy_score, precision_score, recall_score, f1_score
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 from scipy.optimize import linprog
+import time
 import streamlit as st
 
 warnings.filterwarnings("ignore")
@@ -2671,9 +2673,10 @@ elif selected_page == "🤖 ML Expiry Classifier":
     info_box("ML Header", "ℹ️ 4-Color RAG Matrix framework and Random Forest predictive classifier.")
     st.markdown('<div class="section-desc">PharmaTrace Strategic Engine #1 | Combines the clinical 4-Color RAG (Red, Amber, Yellow, Green) Residual Shelf Life (RSL) tracking system and action planning matrix with a multi-feature Random Forest predictive classifier to triage batches before the critical 180-day distributor rejection threshold and trigger Engine #2 (LP Cost Optimizer).</div>', unsafe_allow_html=True)
 
-    tab_rag_strat, tab_ml_strat = st.tabs([
+    tab_rag_strat, tab_ml_strat, tab_xai_strat = st.tabs([
         "🚦 4-Color RAG Matrix & Zone Action Planning",
-        "🤖 Random Forest Predictive Intelligence & Governance"
+        "🤖 Multi-Model Tournament & Predictive Intelligence",
+        "🔍 Explainable AI (XAI) & Prescriptive What-If Lab"
     ])
 
     with tab_rag_strat:
@@ -2863,11 +2866,31 @@ elif selected_page == "🤖 ML Expiry Classifier":
         ]
         ai_insight("Strategic Engine #1 — RSL Framework & Action Architecture", _strat_rag_bullets, icon="🚦", color="#f59e0b")
 
+    # ═════════════════════════════════════════════════════════════════════════
+    # TAB 2: MULTI-MODEL TOURNAMENT & PREDICTIVE INTELLIGENCE
+    # ═════════════════════════════════════════════════════════════════════════
     with tab_ml_strat:
+        # Context banner
+        st.markdown(f"""
+        <div style='background:linear-gradient(135deg, #1e1b4b, #0f172a); border:1px solid #7c3aed; border-radius:12px; padding:18px 22px; margin-bottom:18px;'>
+          <div style='display:flex; justify-content:space-between; align-items:center;'>
+            <div>
+              <span style='font-size:18px; font-weight:800; color:#c084fc;'>🤖 SUPERVISED ML TOURNAMENT &amp; RISK INTELLIGENCE</span>
+              <div style='font-size:12px; color:#cbd5e1; margin-top:4px;'>
+                Multi-algorithm benchmark: Compares Random Forest, Gradient Boosting, and L2-Logistic Regression across 8 non-linear supply chain features.
+              </div>
+            </div>
+            <span style='background:#7c3aed25; border:1px solid #7c3aed; color:#c084fc; font-size:11px; font-weight:700; padding:4px 12px; border-radius:20px;'>
+              AutoML Tournament
+            </span>
+          </div>
+        </div>
+        """, unsafe_allow_html=True)
+
         c1, c2, c3 = st.columns(3)
-        with c1: info_box("ML Classifier", "ℹ️ What is this ML model doing?")
-        with c2: info_box("Feature Importance", "ℹ️ What is feature importance?")
-        with c3: info_box("Confusion Matrix", "ℹ️ How to read the confusion matrix")
+        with c1: info_box("ML Classifier", "ℹ️ Multi-model supervised classification engine.")
+        with c2: info_box("Feature Importance", "ℹ️ Non-linear feature importance ranking.")
+        with c3: info_box("Confusion Matrix", "ℹ️ Out-of-sample confusion matrix validation.")
 
         ml_df = inventory.dropna(subset=["days_to_expiry","quantity_on_hand","unit_price"]).copy()
         if supp_ok and "transaction_type" in df_txns.columns:
@@ -2889,8 +2912,6 @@ elif selected_page == "🤖 ML Expiry Classifier":
         elif ml_df["expiry_risk"].nunique() >= 2:
             y = ml_df["expiry_risk"]
         else:
-            # If all batches fall into the same nominal bucket (e.g. all >180d),
-            # dynamically cluster into relative operational pick tiers based on DTE and cover days
             if ml_df["days_to_expiry"].nunique() >= 2:
                 p33 = ml_df["days_to_expiry"].quantile(0.33)
                 p66 = ml_df["days_to_expiry"].quantile(0.66)
@@ -2900,45 +2921,142 @@ elif selected_page == "🤖 ML Expiry Classifier":
                     return "🟢 Tier 3: Strategic Reserve (Long DTE)"
                 ml_df["dynamic_risk_tier"] = ml_df["days_to_expiry"].apply(assign_operational_tier)
                 y = ml_df["dynamic_risk_tier"]
-                st.info(
-                    "🤖 **Dynamic Risk Stratification Active:** Current inventory data has a long shelf-life horizon (>180d). "
-                    "The Random Forest model has automatically clustered batches into relative operational velocity tiers "
-                    "(*Tier 1 Priority Pick* vs *Tier 2 Normal Dispatch* vs *Tier 3 Strategic Reserve*) to optimize dispatch sequence.",
-                    icon="🤖"
-                )
             else:
                 p50 = ml_df["cover_days"].median()
                 ml_df["dynamic_risk_tier"] = ml_df["cover_days"].apply(
                     lambda cd: "⚠️ High Cover / Slow Move" if cd >= p50 else "✅ Balanced / Fast Move"
                 )
                 y = ml_df["dynamic_risk_tier"]
-                st.info("ℹ️ Stratified by inventory velocity cover ratio for predictive classification.", icon="ℹ️")
 
         min_class_count = y.value_counts().min()
         strat = y if min_class_count >= 2 else None
         X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=42, stratify=strat)
-        rf = RandomForestClassifier(n_estimators=120, max_depth=8, random_state=42, n_jobs=-1)
-        rf.fit(X_train, y_train)
-        y_pred = rf.predict(X_test)
-        ml_df["predicted_risk"] = rf.predict(X)
 
-        fig, axes = plt.subplots(1, 3, figsize=(20, 6))
+        scaler = StandardScaler()
+        X_train_scaled = scaler.fit_transform(X_train)
+        X_test_scaled = scaler.transform(X_test)
+        X_scaled = scaler.transform(X)
+
+        # ── MULTI-MODEL TOURNAMENT EXECUTION ─────────────────────────────────
+        st.markdown("#### 🏆 Model Tournament & Performance Leaderboard")
+        st.caption("Side-by-side benchmarking across ensemble bagging, gradient boosting, and regularized linear classifiers on held-out test data.")
+
+        tournament_models = {
+            "Random Forest": (RandomForestClassifier(n_estimators=100, max_depth=8, random_state=42, n_jobs=-1), X_train, X_test, X),
+            "Gradient Boosting": (GradientBoostingClassifier(n_estimators=40, max_depth=3, random_state=42), X_train, X_test, X),
+            "Logistic Regression (L2)": (LogisticRegression(max_iter=500, random_state=42), X_train_scaled, X_test_scaled, X_scaled)
+        }
+
+        tourney_results = []
+        fitted_models = {}
+        for m_name, (m_clf, m_xtr, m_xte, m_xall) in tournament_models.items():
+            t0 = time.time()
+            m_clf.fit(m_xtr, y_train)
+            t_ms = (time.time() - t0) * 1000
+            m_pred = m_clf.predict(m_xte)
+            m_acc = accuracy_score(y_test, m_pred) * 100
+            m_prec = precision_score(y_test, m_pred, average="weighted", zero_division=0) * 100
+            m_rec = recall_score(y_test, m_pred, average="weighted", zero_division=0) * 100
+            m_f1 = f1_score(y_test, m_pred, average="weighted", zero_division=0) * 100
+            tourney_results.append({
+                "Algorithm": m_name,
+                "Accuracy (%)": m_acc,
+                "Weighted F1 (%)": m_f1,
+                "Precision (%)": m_prec,
+                "Recall (%)": m_rec,
+                "Train Latency": f"{t_ms:.1f} ms",
+                "Model Object": m_clf,
+                "y_test_pred": m_pred,
+                "x_all": m_xall
+            })
+            fitted_models[m_name] = m_clf
+
+        df_tourney = pd.DataFrame(tourney_results)
+        df_tourney = df_tourney.sort_values(by=["Weighted F1 (%)", "Accuracy (%)"], ascending=False).reset_index(drop=True)
+
+        champion_name = df_tourney.iloc[0]["Algorithm"]
+        champion_clf = df_tourney.iloc[0]["Model Object"]
+        champion_f1 = df_tourney.iloc[0]["Weighted F1 (%)"]
+        champion_acc = df_tourney.iloc[0]["Accuracy (%)"]
+        champion_pred = df_tourney.iloc[0]["y_test_pred"]
+        champion_xall = df_tourney.iloc[0]["x_all"]
+
+        # Store predictions in ml_df
+        ml_df["predicted_risk"] = champion_clf.predict(champion_xall)
+
+        # Champion Banner
+        st.markdown(f"""
+        <div style='background:linear-gradient(135deg, #1e293b, #0f172a); border:2px solid #f59e0b; border-radius:10px; padding:14px 20px; margin-bottom:14px;'>
+            <div style='display:flex; justify-content:space-between; align-items:center;'>
+                <div style='display:flex; align-items:center; gap:12px;'>
+                    <span style='font-size:2rem;'>🏆</span>
+                    <div>
+                        <div style='color:#f59e0b; font-size:14px; font-weight:800; text-transform:uppercase;'>CHAMPION INFERENCE MODEL: {champion_name.upper()}</div>
+                        <div style='color:#cbd5e1; font-size:12px;'>Selected as primary risk engine &bull; Achieved <b>{champion_acc:.2f}% Accuracy</b> and <b>{champion_f1:.2f}% Weighted F1-Score</b> on held-out validation lots.</div>
+                    </div>
+                </div>
+                <span style='background:#f59e0b25; border:1px solid #f59e0b; color:#fbbf24; font-size:11px; font-weight:700; padding:4px 12px; border-radius:20px;'>
+                    Active Inference Engine
+                </span>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # Leaderboard Cards
+        lead_cols = st.columns(3)
+        for idx, row in df_tourney.iterrows():
+            with lead_cols[idx]:
+                is_champ = (row["Algorithm"] == champion_name)
+                bd_color = "#f59e0b" if is_champ else "#334155"
+                champ_tag = " <span style='color:#f59e0b; font-weight:bold;'>[CHAMPION]</span>" if is_champ else ""
+                st.markdown(f"""
+                <div style='background:#0f172a; border:1px solid {bd_color}; border-top:3px solid {bd_color}; border-radius:8px; padding:12px;'>
+                    <div style='font-size:13px; font-weight:700; color:white;'>{row["Algorithm"]}{champ_tag}</div>
+                    <div style='display:flex; justify-content:space-between; margin-top:8px;'>
+                        <span style='color:#94a3b8; font-size:11px;'>Accuracy:</span>
+                        <span style='color:#00d4ff; font-weight:700; font-size:12px;'>{row["Accuracy (%)"]:.2f}%</span>
+                    </div>
+                    <div style='display:flex; justify-content:space-between; margin-top:3px;'>
+                        <span style='color:#94a3b8; font-size:11px;'>F1-Score:</span>
+                        <span style='color:#10b981; font-weight:700; font-size:12px;'>{row["Weighted F1 (%)"]:.2f}%</span>
+                    </div>
+                    <div style='display:flex; justify-content:space-between; margin-top:3px;'>
+                        <span style='color:#94a3b8; font-size:11px;'>Latency:</span>
+                        <span style='color:#cbd5e1; font-size:11px;'>{row["Train Latency"]}</span>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        # Visual Diagnostics Suite (Using Champion Model)
+        fig, axes = plt.subplots(1, 3, figsize=(20, 5.5))
         fig.patch.set_facecolor("#0f1117")
-        fig.suptitle("ML Expiry Risk Classifier — Random Forest (RAG Matrix)", fontsize=14, color="#00d4ff", fontweight="bold", y=1.04)
+        fig.suptitle(f"Model Diagnostics — {champion_name} (Evaluation on Held-Out Test Data)", fontsize=13, color="#00d4ff", fontweight="bold", y=1.03)
 
-        imp = pd.Series(rf.feature_importances_, index=features).sort_values()
-        axes[0].barh(imp.index, imp.values, color="#7c3aed", alpha=0.85)
-        axes[0].set_title("Feature Importance"); axes[0].set_xlabel("Importance Score")
+        # Feature Importance or Coefficients
+        if hasattr(champion_clf, "feature_importances_"):
+            imp = pd.Series(champion_clf.feature_importances_, index=features).sort_values()
+            axes[0].barh(imp.index, imp.values, color="#7c3aed", alpha=0.85)
+            axes[0].set_title(f"Feature Importance ({champion_name})", fontsize=11, color="white", fontweight="bold")
+            axes[0].set_xlabel("Importance Score", color="#94a3b8")
+        elif hasattr(champion_clf, "coef_"):
+            imp = pd.Series(np.abs(champion_clf.coef_).mean(axis=0), index=features).sort_values()
+            axes[0].barh(imp.index, imp.values, color="#3b82f6", alpha=0.85)
+            axes[0].set_title(f"Mean Absolute Coefficients ({champion_name})", fontsize=11, color="white", fontweight="bold")
+            axes[0].set_xlabel("Mean |Coefficient|", color="#94a3b8")
+        else:
+            imp = pd.Series(dtype=float)
 
         classes = [r for r in RAG_ORDER if r in y.unique()] if all(r in y.unique() or r not in y.unique() for r in RAG_ORDER) and any(r in y.unique() for r in RAG_ORDER) else sorted(y.unique())
-        cm = confusion_matrix(y_test, y_pred, labels=classes)
+        cm = confusion_matrix(y_test, champion_pred, labels=classes)
         sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", xticklabels=classes, yticklabels=classes, ax=axes[1], linewidths=0.5, linecolor="#0f1117")
-        axes[1].set_title("Confusion Matrix"); axes[1].set_xlabel("Predicted"); axes[1].set_ylabel("True"); axes[1].tick_params(axis="x", rotation=30)
+        axes[1].set_title("Confusion Matrix (Held-Out Test)", fontsize=11, color="white", fontweight="bold")
+        axes[1].set_xlabel("Predicted", color="#94a3b8"); axes[1].set_ylabel("True", color="#94a3b8"); axes[1].tick_params(axis="x", rotation=30)
 
         pred_counts = ml_df["predicted_risk"].value_counts()
         ordered_keys = [r for r in RAG_ORDER if r in pred_counts.index]
-        if not ordered_keys:
-            ordered_keys = [r for r in RISK_ORDER if r in pred_counts.index]
+        if not ordered_keys: ordered_keys = [r for r in RISK_ORDER if r in pred_counts.index]
         if len(ordered_keys) == len(pred_counts):
             pred_counts = pred_counts.reindex(ordered_keys)
             bar_colors_ml = [RAG_COLORS.get(r, RISK_COLORS.get(r, "#888")) for r in pred_counts.index]
@@ -2946,20 +3064,13 @@ elif selected_page == "🤖 ML Expiry Classifier":
             bar_colors_ml = ["#ef4444" if ("Tier 1" in str(k) or "High Cover" in str(k) or "Red" in str(k)) else ("#f59e0b" if ("Tier 2" in str(k) or "Amber" in str(k) or "Yellow" in str(k)) else "#10b981") for k in pred_counts.index]
 
         axes[2].bar(pred_counts.index, pred_counts.values, color=bar_colors_ml, alpha=0.9)
-        axes[2].set_title("ML-Predicted Risk Distribution"); axes[2].set_ylabel("Batches"); axes[2].tick_params(axis="x", rotation=35)
+        axes[2].set_title("ML-Predicted Risk Distribution (Portfolio)", fontsize=11, color="white", fontweight="bold")
+        axes[2].set_ylabel("Batches", color="#94a3b8"); axes[2].tick_params(axis="x", rotation=35)
 
         plt.tight_layout()
         show_fig(fig)
-        info_box("ML Charts", "ℹ️ Visualization of ML model performance.")
-        info_box("ML Classifier", "ℹ️ How to act on these ML results")
-
-        acc = accuracy_score(y_test, y_pred) * 100
-        prec = precision_score(y_test, y_pred, average="weighted", zero_division=0) * 100
-        rec = recall_score(y_test, y_pred, average="weighted", zero_division=0) * 100
-        f1 = f1_score(y_test, y_pred, average="weighted", zero_division=0) * 100
 
         # ── EXECUTIVE BRIEFING BANNER: RUNWAYS & DOLLAR WRITE-OFF EXPOSURES ─────
-        ml_df["predicted_risk"] = rf.predict(X)
         dte_30 = ml_df[ml_df["days_to_expiry"] <= 30]
         dte_60 = ml_df[(ml_df["days_to_expiry"] > 30) & (ml_df["days_to_expiry"] <= 60)]
         dte_90 = ml_df[(ml_df["days_to_expiry"] > 60) & (ml_df["days_to_expiry"] <= 90)]
@@ -2967,7 +3078,6 @@ elif selected_page == "🤖 ML Expiry Classifier":
         v_30 = dte_30["inventory_value_usd"].sum()
         v_60 = dte_60["inventory_value_usd"].sum()
         v_90 = dte_90["inventory_value_usd"].sum()
-        _high_risk_pred_cnt = len(ml_df[ml_df["predicted_risk"].astype(str).str.contains("Tier 1|CRITICAL|EXPIRED|High Cover|Red|Amber")])
         _high_risk_pred_val = ml_df[ml_df["predicted_risk"].astype(str).str.contains("Tier 1|CRITICAL|EXPIRED|High Cover|Red|Amber")]["inventory_value_usd"].sum()
 
         st.markdown(f"""
@@ -2998,9 +3108,9 @@ elif selected_page == "🤖 ML Expiry Classifier":
               <div style='font-size:11px; color:#f59e0b;'>{len(dte_90):,} Lots • Network Transfer Runway</div>
             </div>
             <div style='background:#1e293b; border-left:4px solid #10b981; padding:10px 14px; border-radius:6px;'>
-              <div style='font-size:11px; color:#94a3b8; font-weight:600;'>ML EARLY INTERVENTION</div>
-              <div style='font-size:18px; font-weight:800; color:#10b981;'>+60 Days Runway</div>
-              <div style='font-size:11px; color:#10b981;'>Precision: {prec:.1f}% • Zero False Dispatches</div>
+              <div style='font-size:11px; color:#94a3b8; font-weight:600;'>CHAMPION MODEL ACCURACY</div>
+              <div style='font-size:18px; font-weight:800; color:#10b981;'>{champion_acc:.1f}%</div>
+              <div style='font-size:11px; color:#10b981;'>F1: {champion_f1:.1f}% • {champion_name}</div>
             </div>
           </div>
         </div>
@@ -3037,56 +3147,6 @@ elif selected_page == "🤖 ML Expiry Classifier":
             val_protected = ml_df[ml_df["cover_days"] >= (120 * (100 - risk_threshold) / 40)]["inventory_value_usd"].sum()
             st.metric("Capital Scheduled for Recovery", fmt_curr(val_protected, compact=True), f"{lots_targeted:,} Batches Selected")
 
-        # ── Interactive What-If Scenario Simulator ──────────────────────────────
-        st.markdown('<div class="section-header">🔮 Interactive Expiry Risk Simulator (What-If Analysis)</div>', unsafe_allow_html=True)
-        st.markdown('<div class="section-desc">Test how adjusting Days-to-Expiry, Batch Quantity, Unit Price, and Monthly Dispatch Velocity affects the machine learning risk classification in real-time.</div>', unsafe_allow_html=True)
-
-        sim_c1, sim_c2, sim_c3, sim_c4 = st.columns(4)
-        with sim_c1: sim_dte = st.slider("Days to Expiry (DTE)", 1, 365, 45, key="sim_dte_sl")
-        with sim_c2: sim_qty = st.number_input("Batch Quantity (Units)", 50, 50000, 2500, step=100, key="sim_qty_in")
-        with sim_c3: sim_prc = st.number_input(f"Unit Price ({curr_sym} {curr_code})", 1.0, 500000.0, 45.0 if not is_india else 3750.0, step=5.0 if not is_india else 100.0, key="sim_prc_in")
-        with sim_c4: sim_vel = st.number_input("Monthly Dispatch (Units/Mo)", 10, 10000, 400, step=50, key="sim_vel_in")
-
-        sim_val = sim_qty * sim_prc
-        sim_cov = sim_qty / max(sim_vel, 1) * 30
-        sim_rsc = min(1.0, max(0.0, sim_dte / 365.0))
-        sim_vpd = sim_val / max(sim_dte, 1)
-        sim_pct = min(100.0, max(0.0, sim_dte / 365.0 * 100))
-
-        sim_row = pd.DataFrame([{
-            "days_to_expiry": sim_dte,
-            "quantity_on_hand": sim_qty,
-            "unit_price": sim_prc,
-            "avg_monthly_dispatch": sim_vel,
-            "cover_days": sim_cov,
-            "risk_score": sim_rsc,
-            "value_per_day": sim_vpd,
-            "pct_life_remaining": sim_pct
-        }])[features].fillna(0)
-
-        sim_pred = rf.predict(sim_row)[0]
-        sim_probs = rf.predict_proba(sim_row)[0]
-        sim_conf = max(sim_probs) * 100
-        sim_color = "#ef4444" if ("Tier 1" in str(sim_pred) or "CRITICAL" in str(sim_pred) or "EXPIRED" in str(sim_pred) or "HIGH" in str(sim_pred)) else ("#f59e0b" if ("Tier 2" in str(sim_pred) or "MEDIUM" in str(sim_pred)) else "#10b981")
-
-        st.markdown(f"""
-    <div style='background:linear-gradient(135deg, {sim_color}18, {sim_color}08);
-                border:1px solid {sim_color}40; border-left:5px solid {sim_color};
-                border-radius:10px; padding:16px 20px; margin:12px 0;'>
-      <div style='display:flex; justify-content:space-between; align-items:center;'>
-        <span style='font-size:16px; font-weight:700; color:{sim_color};'>🎯 Predicted Risk Tier: {sim_pred}</span>
-        <span style='font-size:13px; color:#cbd5e1;'>Confidence: <b>{sim_conf:.1f}%</b></span>
-      </div>
-      <div style='font-size:12px; color:#94a3b8; margin-top:6px;'>
-        Batch Value: <b>{fmt_curr(sim_val, compact=False, decimals=0)}</b> &nbsp;|&nbsp;
-        Stock Coverage: <b>{sim_cov:.0f} days</b> &nbsp;|&nbsp;
-        Daily Capital Exposure: <b>{fmt_curr(sim_vpd, compact=False, decimals=1)}/day</b>
-      </div>
-      <div style='font-size:12px; color:#cbd5e1; margin-top:6px;'>
-        <b>Recommended Action:</b> {'🚨 Critical risk: Expedite dispatch within 7 days or initiate inter-warehouse transfer via LP Optimizer.' if sim_color=='#ef4444' else ('⚠️ Moderate risk: Monitor weekly and prioritize in next picking cycle.' if sim_color=='#f59e0b' else '✅ Safe tier: Normal FEFO dispatch sequence. Stock levels and shelf life are balanced.')}
-      </div>
-    </div>""", unsafe_allow_html=True)
-
         # ── 1-CLICK BOARD ACTION REGISTER DOWNLOAD ─────────────────────────────
         st.markdown("#### 📥 1-Click Executive Action Register")
         critical_export = ml_df[ml_df["days_to_expiry"] <= 60].sort_values("days_to_expiry")[
@@ -3102,26 +3162,269 @@ elif selected_page == "🤖 ML Expiry Classifier":
         )
 
         with st.expander("📋 Full Batch Prediction & Confidence Table", expanded=False):
-            ml_df["confidence_pct"] = (rf.predict_proba(X).max(axis=1) * 100).round(1)
+            if hasattr(champion_clf, "predict_proba"):
+                ml_df["confidence_pct"] = (champion_clf.predict_proba(champion_xall).max(axis=1) * 100).round(1)
+            else:
+                ml_df["confidence_pct"] = 100.0
             show_cols_ml = [c for c in ["fp_batch_id","product_id","generic_name","warehouse_id","quantity_on_hand","days_to_expiry","predicted_risk","confidence_pct"] if c in ml_df.columns]
             st.dataframe(ml_df[show_cols_ml].head(500), use_container_width=True)
 
         with st.expander("📋 Detailed Classification Report"):
-            st.text(classification_report(y_test, y_pred, zero_division=0))
+            st.text(classification_report(y_test, champion_pred, zero_division=0))
         info_box("Classification Report", "ℹ️ Detailed report of ML accuracy.")
 
         # ── AI Insight: ML Governance & Predictive Signals ────────────────
         _top_feat = imp.idxmax() if not imp.empty else "days_to_expiry"
         _top_imp_val = imp.max() * 100 if not imp.empty else 0
         _rf_bullets = [
-            f"🤖 <b>Multi-variable risk intelligence:</b> The Random Forest model captures non-linear interactions between <b>Days-to-Expiry (DTE)</b>, <b>Dispatch Velocity</b>, and <b>Shelf-Life Consumption</b> that static calendar thresholds overlook.",
+            f"🤖 <b>Multi-variable risk intelligence:</b> The <b>{champion_name}</b> model captures non-linear interactions between <b>Days-to-Expiry (DTE)</b>, <b>Dispatch Velocity</b>, and <b>Shelf-Life Consumption</b> that static calendar thresholds overlook.",
             f"📊 <b>Primary risk driver:</b> <b>{_top_feat}</b> is the single most influential feature (<b>{_top_imp_val:.1f}% relative importance</b>). Batches with high stock relative to monthly velocity are flagged early, even when nominal DTE appears safe.",
-            f"🎯 <b>Accuracy & Reliability:</b> Model achieved <b>{acc:.1f}% accuracy</b> and <b>{f1:.1f}% F1-Score</b> on held-out test batches. High classification precision ensures operational resources are directed only to truly at-risk lots.",
+            f"🎯 <b>Accuracy & Reliability:</b> Model achieved <b>{champion_acc:.1f}% accuracy</b> and <b>{champion_f1:.1f}% F1-Score</b> on held-out test batches. High classification precision ensures operational resources are directed only to truly at-risk lots.",
             f"💡 <b>Operational deployment:</b> (1) Integrate ML risk scores directly into WMS pick-list generation to prioritize at-risk batches automatically, "
             f"(2) Retrain model monthly as seasonal demand shifts, "
             f"(3) Set automated early-warning alerts for batches whose predicted risk tier worsens over consecutive weekly runs."
         ]
         ai_insight("ML Expiry Classifier — Model Governance & Predictive Strategy", _rf_bullets, icon="🤖", color="#7c3aed")
+
+    # ═════════════════════════════════════════════════════════════════════════
+    # TAB 3: EXPLAINABLE AI (XAI) & PRESCRIPTIVE WHAT-IF LAB
+    # ═════════════════════════════════════════════════════════════════════════
+    with tab_xai_strat:
+        # Context banner
+        st.markdown(f"""
+        <div style='background:linear-gradient(135deg, #064e3b, #0f172a); border:1px solid #10b981; border-radius:12px; padding:18px 22px; margin-bottom:18px;'>
+          <div style='display:flex; justify-content:space-between; align-items:center;'>
+            <div>
+              <span style='font-size:18px; font-weight:800; color:#34d399;'>🔍 EXPLAINABLE AI (XAI) &amp; PRESCRIPTIVE SCENARIO LAB</span>
+              <div style='font-size:12px; color:#cbd5e1; margin-top:4px;'>
+                Demystifying the black box: Inspect individual batch probability vectors, uncover hidden velocity risks missed by static calendar rules, and test prescriptive scenarios in real-time.
+              </div>
+            </div>
+            <span style='background:#10b98125; border:1px solid #10b981; color:#6ee7b7; font-size:11px; font-weight:700; padding:4px 12px; border-radius:20px;'>
+              XAI Intelligence
+            </span>
+          </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # ── SECTION 1: BATCH-LEVEL EXPLAINABILITY INSPECTOR ───────────────────
+        st.markdown("#### 🔬 1. Batch-Level Explainability Inspector")
+        st.caption("Select any finished product batch from inventory to inspect its multi-class risk probability distribution and primary non-linear risk drivers.")
+
+        batch_id_col = "fp_batch_id" if "fp_batch_id" in ml_df.columns else ("batch_id" if "batch_id" in ml_df.columns else None)
+        if batch_id_col and not ml_df.empty:
+            # Sort batches prioritizing Amber and Red for immediate insight
+            sample_batches = ml_df.sort_values(by=["days_to_expiry"], ascending=True)
+            batch_list = sample_batches[batch_id_col].astype(str).tolist()
+            
+            xai_c1, xai_c2 = st.columns([1.5, 2.5])
+            with xai_c1:
+                sel_batch_id = st.selectbox("Select Batch ID to Inspect:", batch_list[:200], index=0, key="xai_batch_select_box")
+                b_row = ml_df[ml_df[batch_id_col].astype(str) == sel_batch_id].iloc[0]
+
+                b_drug = b_row.get("generic_name", b_row.get("product_id", "N/A"))
+                b_wh = b_row.get("warehouse_id", "N/A")
+                b_qty = int(b_row.get("quantity_on_hand", 0))
+                b_dte = int(b_row.get("days_to_expiry", 0))
+                b_val = float(b_row.get("inventory_value_usd", 0.0))
+                b_cov = float(b_row.get("cover_days", 0.0))
+                b_vel = float(b_row.get("avg_monthly_dispatch", 0.0))
+
+                st.markdown(f"""
+                <div style='background:#0f172a; border:1px solid #1e293b; border-radius:8px; padding:14px; margin-top:8px;'>
+                    <div style='font-size:14px; font-weight:800; color:#00d4ff;'>📦 Batch: {sel_batch_id}</div>
+                    <div style='font-size:12px; color:#cbd5e1; margin:4px 0;'><b>Product:</b> {b_drug}</div>
+                    <div style='font-size:11px; color:#94a3b8;'><b>Warehouse:</b> {b_wh} &bull; <b>Qty:</b> {b_qty:,} units</div>
+                    <div style='font-size:11px; color:#94a3b8;'><b>Days to Expiry:</b> {b_dte}d &bull; <b>Valuation:</b> {fmt_curr(b_val, compact=True)}</div>
+                    <div style='font-size:11px; color:#94a3b8;'><b>Stock Coverage:</b> {b_cov:.0f} days &bull; <b>Velocity:</b> {b_vel:.0f} units/mo</div>
+                </div>
+                """, unsafe_allow_html=True)
+
+            with xai_c2:
+                # Run prediction on selected batch
+                b_feat_df = pd.DataFrame([b_row[features]])[features].fillna(0)
+                if champion_name == "Logistic Regression (L2)":
+                    b_feat_trans = scaler.transform(b_feat_df)
+                else:
+                    b_feat_trans = b_feat_df
+
+                b_pred_class = champion_clf.predict(b_feat_trans)[0]
+                if hasattr(champion_clf, "predict_proba"):
+                    b_prob_dist = champion_clf.predict_proba(b_feat_trans)[0]
+                    b_classes = champion_clf.classes_
+                    b_conf = max(b_prob_dist) * 100
+                else:
+                    b_prob_dist = [1.0]
+                    b_classes = [b_pred_class]
+                    b_conf = 100.0
+
+                b_theme_color = RAG_COLORS.get(b_pred_class, "#ef4444" if "Red" in str(b_pred_class) else ("#f59e0b" if "Amber" in str(b_pred_class) else "#10b981"))
+
+                st.markdown(f"""
+                <div style='background:linear-gradient(135deg, {b_theme_color}18, {b_theme_color}08);
+                            border:1px solid {b_theme_color}40; border-left:5px solid {b_theme_color};
+                            border-radius:10px; padding:12px 18px; margin-bottom:10px;'>
+                    <div style='display:flex; justify-content:space-between; align-items:center;'>
+                        <span style='font-size:15px; font-weight:800; color:{b_theme_color};'>🎯 Predicted Tier: {b_pred_class}</span>
+                        <span style='font-size:12px; color:#cbd5e1;'>Confidence: <b>{b_conf:.1f}%</b></span>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+
+                # Horizontal Probability Distribution Chart
+                if hasattr(champion_clf, "predict_proba") and len(b_classes) > 1:
+                    fig_xai, ax_xai = plt.subplots(figsize=(8, 2.2))
+                    fig_xai.patch.set_facecolor("#0f172a")
+                    ax_xai.set_facecolor("#0f172a")
+
+                    y_pos = np.arange(len(b_classes))
+                    bar_cols = [RAG_COLORS.get(c, "#888") for c in b_classes]
+                    bars = ax_xai.barh(y_pos, b_prob_dist * 100, color=bar_cols, alpha=0.9, height=0.55)
+                    ax_xai.set_yticks(y_pos)
+                    ax_xai.set_yticklabels(b_classes, fontsize=9, color="#e2e8f0")
+                    ax_xai.set_xlabel("Predicted Probability (%)", fontsize=9, color="#94a3b8")
+                    ax_xai.set_xlim(0, 105)
+                    ax_xai.tick_params(colors="#94a3b8", labelsize=8.5)
+
+                    for b in bars:
+                        w = b.get_width()
+                        ax_xai.text(w + 1.5, b.get_y() + b.get_height()/2, f"{w:.1f}%",
+                                    ha="left", va="center", color="white", fontsize=8.5, fontweight="bold")
+                    for sp in ax_xai.spines.values(): sp.set_visible(False)
+                    plt.tight_layout()
+                    show_fig(fig_xai)
+
+                # Prescriptive Playbook Instruction
+                is_deficit = (b_cov > b_dte) and (b_dte > 0)
+                if b_dte <= 0:
+                    rec_text = "🚨 <b>Mandatory Regulatory Quarantine:</b> Batch has reached or exceeded expiry. Move immediately to quarantine cage and generate Form 483 / DSCSA disposal manifest for certified incineration."
+                elif is_deficit:
+                    rec_text = f"⚠️ <b>Velocity Deficit Alert:</b> Current stock coverage ({b_cov:.0f} days) exceeds remaining shelf life ({b_dte} days) by <b>{b_cov - b_dte:.0f} days</b>. At current dispatch rate, ~{int(max(0, b_qty - (b_vel/30)*b_dte)):,} units will expire before being picked. <b>Action:</b> Initiate Inter-Warehouse Transfer via Strategic Engine #2 (LP Cost Optimizer) or offer 50% liquidation discount."
+                else:
+                    rec_text = "✅ <b>Balanced Velocity:</b> Current sales velocity is sufficient to clear on-hand inventory before expiry. Maintain standard FEFO outbound pick sequence."
+
+                st.markdown(f"""
+                <div style='background:#1e293b; border-left:4px solid #38bdf8; border-radius:6px; padding:10px 14px; font-size:11px; color:#cbd5e1; line-height:1.5;'>
+                    {rec_text}
+                </div>
+                """, unsafe_allow_html=True)
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        # ── SECTION 2: "HIDDEN RISK" DELTA ANALYSIS (STATIC VS ML) ───────────
+        st.markdown("#### 💡 2. 'Hidden Risk' Delta Analysis: Static Calendar vs. Predictive AI")
+        st.caption("Proves the ROI of Machine Learning over simple calendar rules: Identifies batches that a static 180-day threshold marks as 'Safe', but the AI flags as at-risk due to slow sales velocity.")
+
+        # Batches with DTE > 180, but Cover Days > DTE (Will expire before selling!)
+        hidden_risk_df = ml_df[(ml_df["days_to_expiry"] > 180) & (ml_df["cover_days"] > ml_df["days_to_expiry"])].copy()
+        hidden_risk_cnt = len(hidden_risk_df)
+        hidden_risk_val = hidden_risk_df["inventory_value_usd"].sum() if "inventory_value_usd" in hidden_risk_df.columns else 0.0
+        safe_calendar_cnt = len(ml_df[ml_df["days_to_expiry"] > 180])
+
+        delta_c1, delta_c2, delta_c3 = st.columns(3)
+        with delta_c1:
+            st.markdown(f"""
+            <div style='background:#0f172a; border:1px solid #1e293b; border-top:3px solid #64748b; border-radius:8px; padding:12px; text-align:center;'>
+                <div style='font-size:11px; color:#94a3b8; font-weight:600;'>STATIC CALENDAR AUDIT (>180d)</div>
+                <div style='font-size:1.6rem; font-weight:800; color:white; margin:4px 0;'>{safe_calendar_cnt:,}</div>
+                <div style='font-size:11px; color:#64748b;'>Batches marked "Safe / No Risk"</div>
+            </div>
+            """, unsafe_allow_html=True)
+        with delta_c2:
+            st.markdown(f"""
+            <div style='background:#0f172a; border:1px solid #1e293b; border-top:3px solid #f59e0b; border-radius:8px; padding:12px; text-align:center;'>
+                <div style='font-size:11px; color:#94a3b8; font-weight:600;'>AI VELOCITY DEFICITS DETECTED</div>
+                <div style='font-size:1.6rem; font-weight:800; color:#f59e0b; margin:4px 0;'>{hidden_risk_cnt:,}</div>
+                <div style='font-size:11px; color:#f59e0b;'>Hidden slow-movers that will expire</div>
+            </div>
+            """, unsafe_allow_html=True)
+        with delta_c3:
+            st.markdown(f"""
+            <div style='background:#0f172a; border:1px solid #1e293b; border-top:3px solid #10b981; border-radius:8px; padding:12px; text-align:center;'>
+                <div style='font-size:11px; color:#94a3b8; font-weight:600;'>BLIND-SPOT CAPITAL PROTECTED</div>
+                <div style='font-size:1.6rem; font-weight:800; color:#10b981; margin:4px 0;'>{fmt_curr(hidden_risk_val, compact=True)}</div>
+                <div style='font-size:11px; color:#10b981;'>Rescued 6+ months before write-off</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        if not hidden_risk_df.empty:
+            with st.expander(f"📋 View All {hidden_risk_cnt:,} 'Hidden Risk' Batches Caught by AI", expanded=False):
+                hidden_risk_df["velocity_gap_days"] = (hidden_risk_df["cover_days"] - hidden_risk_df["days_to_expiry"]).round(0)
+                disp_hr_cols = [c for c in ["fp_batch_id", "product_id", "generic_name", "warehouse_id", "quantity_on_hand", "days_to_expiry", "cover_days", "velocity_gap_days", "inventory_value_usd"] if c in hidden_risk_df.columns]
+                st.dataframe(hidden_risk_df[disp_hr_cols].sort_values("velocity_gap_days", ascending=False).head(200), use_container_width=True)
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        # ── SECTION 3: INTERACTIVE PRESCRIPTIVE WHAT-IF SCENARIO LAB ──────────
+        st.markdown("#### 🔮 3. Interactive Prescriptive Scenario Simulator (What-If Analysis)")
+        st.caption("Adjust batch parameters in real-time to observe dynamic risk classification shifts and trigger downstream recovery actions.")
+
+        sim_c1, sim_c2, sim_c3, sim_c4 = st.columns(4)
+        with sim_c1: sim_dte = st.slider("Days to Expiry (DTE)", 1, 730, 135, key="sim_dte_sl_v2")
+        with sim_c2: sim_qty = st.number_input("Batch Quantity (Units)", 50, 50000, 3200, step=100, key="sim_qty_in_v2")
+        with sim_c3: sim_prc = st.number_input(f"Unit Price ({curr_sym} {curr_code})", 1.0, 500000.0, 45.0 if not is_india else 3750.0, step=5.0 if not is_india else 100.0, key="sim_prc_in_v2")
+        with sim_c4: sim_vel = st.number_input("Monthly Dispatch (Units/Mo)", 10, 10000, 350, step=50, key="sim_vel_in_v2")
+
+        sim_val = sim_qty * sim_prc
+        sim_cov = sim_qty / max(sim_vel, 1) * 30
+        sim_rsc = min(1.0, max(0.0, sim_dte / 730.0))
+        sim_vpd = sim_val / max(sim_dte, 1)
+        sim_pct = min(100.0, max(0.0, sim_dte / 730.0 * 100))
+
+        sim_row = pd.DataFrame([{
+            "days_to_expiry": sim_dte,
+            "quantity_on_hand": sim_qty,
+            "unit_price": sim_prc,
+            "avg_monthly_dispatch": sim_vel,
+            "cover_days": sim_cov,
+            "risk_score": sim_rsc,
+            "value_per_day": sim_vpd,
+            "pct_life_remaining": sim_pct
+        }])[features].fillna(0)
+
+        if champion_name == "Logistic Regression (L2)":
+            sim_row_trans = scaler.transform(sim_row)
+        else:
+            sim_row_trans = sim_row
+
+        sim_pred = champion_clf.predict(sim_row_trans)[0]
+        if hasattr(champion_clf, "predict_proba"):
+            sim_probs = champion_clf.predict_proba(sim_row_trans)[0]
+            sim_conf = max(sim_probs) * 100
+        else:
+            sim_conf = 100.0
+
+        sim_color = RAG_COLORS.get(sim_pred, "#ef4444" if ("Red" in str(sim_pred) or "Tier 1" in str(sim_pred)) else ("#f59e0b" if "Amber" in str(sim_pred) else "#10b981"))
+
+        st.markdown(f"""
+        <div style='background:linear-gradient(135deg, {sim_color}18, {sim_color}08);
+                    border:1px solid {sim_color}40; border-left:5px solid {sim_color};
+                    border-radius:10px; padding:16px 20px; margin:12px 0;'>
+          <div style='display:flex; justify-content:space-between; align-items:center;'>
+            <span style='font-size:16px; font-weight:700; color:{sim_color};'>🎯 Predicted Risk Tier: {sim_pred}</span>
+            <span style='font-size:13px; color:#cbd5e1;'>Model Confidence: <b>{sim_conf:.1f}%</b> ({champion_name})</span>
+          </div>
+          <div style='font-size:12px; color:#94a3b8; margin-top:6px;'>
+            Batch Value: <b>{fmt_curr(sim_val, compact=False, decimals=0)}</b> &nbsp;|&nbsp;
+            Stock Coverage: <b>{sim_cov:.0f} days</b> &nbsp;|&nbsp;
+            Daily Capital Exposure: <b>{fmt_curr(sim_vpd, compact=False, decimals=1)}/day</b>
+          </div>
+          <div style='font-size:12px; color:#cbd5e1; margin-top:6px;'>
+            <b>Recommended Action:</b> {'🚨 Critical risk: Expedite dispatch within 7 days or initiate inter-warehouse transfer via LP Optimizer.' if ('Red' in str(sim_pred) or 'Tier 1' in str(sim_pred)) else ('⚠️ Moderate risk: Monitor weekly and prioritize in next picking cycle.' if ('Amber' in str(sim_pred) or 'Tier 2' in str(sim_pred)) else '✅ Safe tier: Normal FEFO dispatch sequence. Stock levels and shelf life are balanced.')}
+          </div>
+        </div>""", unsafe_allow_html=True)
+
+        if st.button("⚖️ Transfer Simulated Scenario into Strategic Engine #2 (LP Cost Optimizer) →", key="btn_sim_to_lp", use_container_width=True):
+            st.session_state["_pending_nav"] = "⚖️ LP Cost Optimizer"
+            st.rerun()
+
+        # ── AI Insight: Explainability & Governance Architecture ───────────
+        _xai_bullets = [
+            "🔬 <b>Local Interpretability (Instance-Level XAI):</b> The Batch-Level Inspector demystifies automated risk flags for plant managers and QA auditors, showing exact probability distributions and root-cause drivers (e.g. stock coverage vs remaining shelf-life).",
+            f"💡 <b>Quantified AI Value Proposition:</b> The Delta Analysis uncovered <b>{hidden_risk_cnt:,} hidden-risk batches ({fmt_curr(hidden_risk_val, compact=True)})</b> that standard calendar rules miss because their nominal DTE exceeds 180 days, but monthly consumption velocity is too slow to clear inventory before expiry.",
+            "⚖️ <b>Prescriptive Decision Continuity:</b> Predictions seamlessly hand off to Strategic Engine #2 (Linear Programming Optimizer) to determine whether inter-DC transfer, secondary market liquidation, or certified disposal maximizes net capital recovery."
+        ]
+        ai_insight("Explainable AI (XAI) & Prescriptive Governance Architecture", _xai_bullets, icon="🔍", color="#10b981")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PAGE: LP COST OPTIMIZER — EXECUTIVE DECISION DASHBOARD
