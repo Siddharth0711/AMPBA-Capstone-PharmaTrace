@@ -2852,7 +2852,7 @@ elif selected_page == "🤖 ML Expiry Classifier":
         """, unsafe_allow_html=True)
 
         if st.button("🚀 Transfer Amber & Red Batches to Strategic Engine #2 (LP Cost Optimizer) →", key="btn_bridge_to_engine2", use_container_width=True):
-            st.session_state["page_nav"] = "⚖️ LP Cost Optimizer"
+            st.session_state["_pending_nav"] = "⚖️ LP Cost Optimizer"
             st.rerun()
 
         # Strategic AI Insight Box
