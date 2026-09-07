@@ -686,10 +686,10 @@ with st.sidebar:
     use_local = os.path.exists(LOCAL_MASTER)
     SAMPLE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sample_data.xlsx")
     use_sample = (not use_local) and (not uploaded_file) and os.path.exists(SAMPLE_PATH)
-    if use_local:
+    if uploaded_file:
+        st.success("✅ File uploaded & active", icon="📊")
+    elif use_local:
         st.success("✅ Extended production dataset auto-detected (19 Tables)", icon="💾")
-    elif uploaded_file:
-        st.success("✅ File uploaded", icon="📊")
     elif use_sample:
         st.info("📊 Demo data — upload your file to analyse your own data", icon="🔬")
     else:
@@ -756,12 +756,54 @@ def load_all_data(src):
     df_freight = read("freight_matrix")
     df_iot     = read("iot_telemetry")
 
+    # If any supplementary operational sheets are missing in the uploaded file,
+    # fall back to dedicated local files or repository baseline datasets so that
+    # all analytical & optimization modules (LP Optimizer, Demand, FEFO, IoT) work seamlessly!
+    def _fallback_sheet(sheet_name, local_filename):
+        # 1. Check local additional data directory
+        loc_path = os.path.join(LOCAL_ADD, local_filename) if ("LOCAL_ADD" in globals() and LOCAL_ADD) else ""
+        if loc_path and os.path.exists(loc_path):
+            try:
+                return pd.read_excel(loc_path)
+            except Exception:
+                pass
+        # 2. Check bundled sample_data.xlsx in repo
+        sample_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sample_data.xlsx")
+        if os.path.exists(sample_path):
+            try:
+                s_xl = pd.ExcelFile(sample_path)
+                if sheet_name in s_xl.sheet_names:
+                    return s_xl.parse(sheet_name)
+            except Exception:
+                pass
+        # 3. Check High Volume Master dataset in repo data folder
+        hv_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "PharmaTrace_High_Volume_Master_Dataset.xlsx")
+        if os.path.exists(hv_path):
+            try:
+                h_xl = pd.ExcelFile(hv_path)
+                if sheet_name in h_xl.sheet_names:
+                    return h_xl.parse(sheet_name)
+            except Exception:
+                pass
+        return pd.DataFrame()
+
+    if df_demand.empty:
+        df_demand = _fallback_sheet("monthly_demand", "01_Pharma_Compliant_Monthly_Demand_24M.xlsx")
+    if df_txns.empty:
+        df_txns = _fallback_sheet("fefo_pick_ledger", "02_Pharma_Compliant_FEFO_Pick_Ledger.xlsx")
+    if df_econ.empty:
+        df_econ = _fallback_sheet("unit_economics", "03_Pharma_Compliant_Unit_Economics_and_Costs.xlsx")
+    if df_freight.empty:
+        df_freight = _fallback_sheet("freight_matrix", "04_Pharma_Compliant_Inter_Warehouse_Freight_Matrix.xlsx")
+    if df_iot.empty:
+        df_iot = _fallback_sheet("iot_telemetry", "05_Pharma_Compliant_IoT_ColdChain_Telemetry_Logs.xlsx")
+
     # Rename columns to match what the rest of the app expects
     if not df_txns.empty:
         df_txns.rename(columns={"is_fefo_compliant": "is_fefo_compliant"}, inplace=True)  # already correct
         if "timestamp" in df_txns.columns:
             df_txns["timestamp"] = pd.to_datetime(df_txns["timestamp"], errors="coerce")
-        if "transaction_type" not in df_txns.columns and "fefo_pick_ledger" in available:
+        if "transaction_type" not in df_txns.columns:
             df_txns["transaction_type"] = "OUTBOUND_DISPATCH_PICK"  # all rows in ledger are picks
 
     if not df_iot.empty:
@@ -774,6 +816,18 @@ def load_all_data(src):
     if not df_econ.empty:
         # Rename unit_price_usd to unit_price if needed
         df_econ.rename(columns={"unit_price_usd": "unit_price"}, inplace=True, errors="ignore")
+    elif not products.empty:
+        # Synthesize fallback unit economics directly from products catalog
+        df_econ = products[["product_id", "generic_name", "dosage_form", "unit_price"]].copy() if "unit_price" in products.columns else products[["product_id"]].copy()
+        if "unit_price" not in df_econ.columns:
+            df_econ["unit_price"] = 50.0
+        df_econ["daily_holding_cost_per_unit_usd"] = (df_econ["unit_price"] * 0.25 / 365.0).round(4)
+        df_econ["certified_destruction_cost_per_unit_usd"] = (df_econ["unit_price"] * 0.10).round(2)
+        df_econ["secondary_liquidation_recovery_pct"] = 45.0
+        df_econ["order_cost_usd"] = 75.0
+        df_econ["holding_cost_rate"] = 0.25
+        df_econ["stockout_cost_per_unit_usd"] = (df_econ["unit_price"] * 1.5).round(2)
+        df_econ["economic_order_quantity_units"] = 500
 
     # ── Extended Production Sheets (Manufacturer Perspective) ───────────────
     extended_tables = {}
@@ -786,7 +840,7 @@ def load_all_data(src):
             extended_tables[ext_sheet] = pd.DataFrame()
 
     # Check if supplementary data is usable
-    supp_loaded = not df_demand.empty and not df_txns.empty
+    supp_loaded = (not df_demand.empty) or (not df_txns.empty) or (not df_econ.empty)
 
     return products, warehouses, inventory, df_demand, df_txns, df_econ, df_freight, df_iot, supp_loaded, extended_tables
 
@@ -1423,7 +1477,7 @@ elif selected_page == "✅ FEFO Compliance":
     st.markdown('<div class="section-header">✅ FEFO Compliance &amp; GMP Regulatory Defense</div>', unsafe_allow_html=True)
     st.markdown(f'<div class="section-desc">Audits outbound picking sequences against <b>{fefo_statute}</b>. Enforces earliest-expiry dispatch to prevent stranded lot write-offs and FDA/CDSCO inspection citations.</div>', unsafe_allow_html=True)
 
-    if not supp_ok:
+    if df_txns is None or df_txns.empty:
         st.warning("Upload the FEFO Pick Ledger (file 02) to view this analysis.", icon="⚠️")
         st.stop()
 
@@ -2008,7 +2062,7 @@ elif selected_page == "📈 Demand & Seasonality":
     st.markdown('<div class="section-desc">Monthly demand vs dispatch | Service level (fill rate) | Seasonal patterns by therapy area | Revenue trajectory</div>', unsafe_allow_html=True)
     with st.expander("ℹ️ What these 4 charts show", expanded=False):
         st.markdown(get_current_glossary()["Demand Trend"])
-    if not supp_ok:
+    if df_demand is None or df_demand.empty:
         st.warning("Upload Monthly Demand data (via the template) to view this analysis.", icon="⚠️"); st.stop()
 
     # Product Filter Dropdown
@@ -2603,7 +2657,7 @@ elif selected_page == "⚖️ LP Cost Optimizer":
         'financial impact, and consequence of inaction — ready for board-level review.</div>',
         unsafe_allow_html=True)
 
-    if not supp_ok:
+    if df_econ is None or df_econ.empty:
         st.warning("Upload Unit Economics file (file 03) to enable this analysis.", icon="⚠️"); st.stop()
 
     _TODAY = pd.Timestamp.now().normalize()
@@ -3388,7 +3442,7 @@ elif selected_page == "❄️ IoT Cold-Chain Monitor":
     with c1: info_box("IoT Monitor", "ℹ️ What do these 4 charts show?")
     with c2: info_box("IoT Excursion Rate", "ℹ️ What is a thermal excursion?")
 
-    if not supp_ok:
+    if df_iot is None or df_iot.empty:
         st.warning("Upload IoT Telemetry Logs (file 05) to view this analysis.", icon="⚠️"); st.stop()
 
     cold_wh_ids = warehouses.loc[warehouses["temp_controlled"]==True, "warehouse_id"].tolist() if "temp_controlled" in warehouses.columns else df_iot["warehouse_id"].unique().tolist()
@@ -4136,7 +4190,7 @@ elif selected_page == "🌐 Network Rebalancing & Transfers":
     st.markdown('<div class="section-header">🌐 Network Rebalancing & Smart Stock Transfers</div>', unsafe_allow_html=True)
     st.markdown('<div class="section-desc">Unified Geographic & Logistics Intelligence — identifies 🔥 HOT demand stockout risks vs ❄️ COLD surplus locations, compares Inter-Warehouse Transfer vs Manufacturing costs, and outputs optimal rebalancing routes.</div>', unsafe_allow_html=True)
 
-    if not supp_ok:
+    if (df_demand is None or df_demand.empty) and (df_freight is None or df_freight.empty):
         st.warning("⚠️ Upload Monthly Demand & Freight Matrix data (via the template) to enable this analysis.", icon="⚠️")
         st.stop()
 
