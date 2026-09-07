@@ -3291,9 +3291,9 @@ elif selected_page == "🤖 ML Expiry Classifier":
             X_all_sc = scaler.transform(X_ml)
 
             _models = {
-                "Random Forest":           (RandomForestClassifier(n_estimators=80, max_depth=6, random_state=42, n_jobs=-1),  X_tr,    X_te,    X_ml),
+                "Random Forest":           (RandomForestClassifier(n_estimators=80, max_depth=6, random_state=42, n_jobs=-1, class_weight="balanced"),  X_tr,    X_te,    X_ml),
                 "Gradient Boosting":       (GradientBoostingClassifier(n_estimators=40, max_depth=3, random_state=42),         X_tr,    X_te,    X_ml),
-                "Logistic Regression (L2)":(LogisticRegression(max_iter=300, random_state=42),                                 X_tr_sc, X_te_sc, X_all_sc),
+                "Logistic Regression (L2)":(LogisticRegression(max_iter=300, random_state=42, class_weight="balanced"),         X_tr_sc, X_te_sc, X_all_sc),
             }
             _results = []
             _fitted  = {}
@@ -3320,6 +3320,58 @@ elif selected_page == "🤖 ML Expiry Classifier":
             _champ_name  = _champ["Algorithm"]
             _champ_xall  = _champ["_xall"]   # X for full-dataset prediction (scaled for LR, raw for RF/GB)
             ml_df["predicted_risk"] = _champ_clf.predict(_champ_xall)
+
+            # ── GAP 1: CLASS IMBALANCE DISPLAY + CHAMPION LEADERBOARD ──────────────────────
+            _cls_counts  = y_ml.value_counts().sort_index()
+            _cls_0 = int(_cls_counts.get(0, 0))
+            _cls_1 = int(_cls_counts.get(1, 0))
+            _imb_ratio = max(_cls_0, _cls_1) / max(min(_cls_0, _cls_1), 1)
+            st.markdown(f"""
+            <div style='background:#0f172a; border:1px solid #334155; border-left:4px solid #f59e0b;
+                 border-radius:8px; padding:10px 14px; font-size:11px; color:#94a3b8; margin-bottom:10px;'>
+                🔧 <b>Class Distribution:</b>
+                <b style='color:#10b981;'>✅ Safe (0):</b> {_cls_0:,} batches ({_cls_0/max(len(y_ml),1)*100:.1f}%)&nbsp;&nbsp;
+                <b style='color:#ef4444;'>⚠️ At-Risk (1):</b> {_cls_1:,} batches ({_cls_1/max(len(y_ml),1)*100:.1f}%)&nbsp;&nbsp;
+                <b>Imbalance ratio: {_imb_ratio:.1f}×</b>&nbsp;&nbsp;
+                — Addressed by <code>class_weight='balanced'</code> in RF and LR, and Weighted F1 as the champion-selection metric.
+            </div>""", unsafe_allow_html=True)
+
+            # Algorithm Leaderboard
+            st.markdown("#### 🏆 Algorithm Leaderboard — All 3 Models Compared")
+            st.caption("All three algorithms trained on the same 75% split and evaluated on the 25% held-out test set. Champion crowned by highest Weighted F1.")
+
+            _disp_cols = ["Algorithm", "Accuracy(%)", "F1(%)", "Precision(%)", "Recall(%)", "Latency"]
+            _lb_df = _df_res[[c for c in _disp_cols if c in _df_res.columns]].copy()
+            for _mc in ["Accuracy(%)", "F1(%)", "Precision(%)", "Recall(%)"]:
+                if _mc in _lb_df.columns:
+                    _lb_df[_mc] = _lb_df[_mc].map(lambda x: f"{x:.1f}%")
+
+            fig_lb, ax_lb = plt.subplots(figsize=(14, 2.8))
+            fig_lb.patch.set_facecolor("#0f172a")
+            ax_lb.set_facecolor("#0f172a")
+            _metric_names  = ["Accuracy(%)", "F1(%)", "Precision(%)", "Recall(%)"]
+            _algo_names    = _df_res["Algorithm"].tolist()
+            _metric_vals   = {m: _df_res[m].tolist() for m in _metric_names}
+            _x = np.arange(len(_metric_names))
+            _w = 0.22
+            _algo_colors = ["#f59e0b", "#7c3aed", "#3b82f6"]
+            for i, (algo, clr) in enumerate(zip(_algo_names, _algo_colors)):
+                _offset = (i - 1) * _w
+                vals = [_metric_vals[m][i] for m in _metric_names]
+                bars = ax_lb.bar(_x + _offset, vals, _w, label=algo, color=clr, alpha=0.85)
+                for bar, v in zip(bars, vals):
+                    ax_lb.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.5,
+                               f"{v:.1f}", ha="center", va="bottom", fontsize=7.5, color="white", fontweight="bold")
+            ax_lb.set_ylim(0, 115)
+            ax_lb.set_xticks(_x); ax_lb.set_xticklabels([m.replace("(%)","") for m in _metric_names], color="#cbd5e1", fontsize=10)
+            ax_lb.set_ylabel("Score (%)", color="#94a3b8", fontsize=9)
+            ax_lb.set_title(f"🏆 Champion: {_champ_name} | Weighted F1 = {_champ['F1(%)']:.1f}%",
+                            color="#f59e0b", fontsize=11, fontweight="bold")
+            ax_lb.legend(facecolor="#1e293b", labelcolor="white", fontsize=9, loc="upper right")
+            ax_lb.tick_params(axis="y", colors="#94a3b8")
+            for sp in ax_lb.spines.values(): sp.set_color("#334155")
+            plt.tight_layout()
+            show_fig(fig_lb)
 
             # ── LEVEL 2: PROBABILITY BANDS ────────────────────────────────────
             # Use predict_proba() to show risk as a CONFIDENCE SCORE, not a false binary.
@@ -3416,6 +3468,56 @@ elif selected_page == "🤖 ML Expiry Classifier":
                     </div>""", unsafe_allow_html=True)
 
             st.markdown("<br>", unsafe_allow_html=True)
+            # ── GAP 3: BATCH-LEVEL RISK TABLE + DOWNLOAD ─────────────────────────────────
+            st.markdown("#### 📊 Batch-Level Risk Register — Every Batch Ranked by Probability")
+            st.caption("Individual batch risk scores from predict_proba(). Sort by Risk Probability to see the most at-risk batches first. Download as CSV for operational use.")
+
+            _batch_cols = [c for c in ["batch_number", "product_id", "generic_name", "warehouse_id",
+                                       "days_to_expiry", "quantity_on_hand", "inventory_value_usd",
+                                       "cover_days", "velocity_pressure", "risk_probability", "prob_band"] if c in ml_df.columns]
+            _risk_reg = ml_df[_batch_cols].copy().sort_values("risk_probability", ascending=False)
+            _risk_reg["risk_probability"] = (_risk_reg["risk_probability"] * 100).round(1).astype(str) + "%"
+            if "inventory_value_usd" in _risk_reg.columns:
+                _risk_reg["inventory_value_usd"] = _risk_reg["inventory_value_usd"].map(lambda x: f"{curr_sym}{x:,.0f}")
+            if "velocity_pressure" in _risk_reg.columns:
+                _risk_reg["velocity_pressure"] = _risk_reg["velocity_pressure"].map(lambda x: f"{x:.2f}×")
+
+            _dl_cols = [c for c in ["batch_number","product_id","generic_name","warehouse_id",
+                                    "days_to_expiry","quantity_on_hand","cover_days",
+                                    "velocity_pressure","risk_probability","prob_band"] if c in ml_df.columns]
+            _dl_df = ml_df[_dl_cols].copy().sort_values(
+                ml_df.columns.tolist().index("risk_probability") if "risk_probability" in ml_df.columns else 0
+            ) if "risk_probability" in ml_df.columns else ml_df[_dl_cols]
+            _dl_df_raw = ml_df[_dl_cols].copy()
+            if "risk_probability" in _dl_df_raw.columns:
+                _dl_df_raw = _dl_df_raw.sort_values("risk_probability", ascending=False)
+            _dl_df_raw["risk_probability_pct"] = (_dl_df_raw["risk_probability"] * 100).round(1) if "risk_probability" in _dl_df_raw.columns else 0
+
+            _tb1, _tb2 = st.columns([4, 1])
+            with _tb1:
+                st.dataframe(_risk_reg.head(50), use_container_width=True, hide_index=True)
+                st.caption(f"Showing top 50 of {len(_risk_reg):,} batches. Download for full list.")
+            with _tb2:
+                st.markdown("<div style='margin-top:24px;'></div>", unsafe_allow_html=True)
+                _csv_risk = _dl_df_raw.to_csv(index=False).encode("utf-8")
+                st.download_button(
+                    label="⬇️ Download Risk Register (CSV)",
+                    data=_csv_risk,
+                    file_name="pharmatrace_batch_risk_register.csv",
+                    mime="text/csv",
+                    help="Full batch-level risk register with probability scores and recommended actions",
+                    use_container_width=True,
+                )
+                st.markdown(f"""
+                <div style='background:#0f172a; border:1px solid #334155; border-radius:6px;
+                     padding:10px; font-size:10px; color:#94a3b8; margin-top:8px; text-align:center;'>
+                    <div style='font-size:1.3rem; font-weight:800; color:#ef4444;'>
+                        {int((ml_df['risk_probability'] >= 0.5).sum()) if 'risk_probability' in ml_df.columns else 0:,}
+                    </div>
+                    <div>batches with<br>>50% risk score</div>
+                </div>""", unsafe_allow_html=True)
+
+            st.markdown("<br>", unsafe_allow_html=True)
 
             # ── KEY EXPIRY RISK DRIVERS (Feature Importance — the only ML output that matters to management) ──
             st.markdown("#### 🧠 5. What Drives Expiry Risk? — Feature Importance Analysis")
@@ -3478,6 +3580,80 @@ elif selected_page == "🤖 ML Expiry Classifier":
                 _imp = pd.Series(np.abs(_champ_clf.coef_[0]), index=features)
                 _imp.index = [_feat_labels_map.get(f, f) for f in _imp.index]
                 _imp = _imp.sort_values(ascending=False)
+
+            # ── GAP 4: CONFUSION MATRIX + ROC CURVE SIDE BY SIDE ─────────────────────────
+            st.markdown("#### 📊 6. Model Evaluation — Confusion Matrix & ROC Curve")
+            st.caption(f"Champion: **{_champ_name}** evaluated on the 25% held-out test set ({len(y_te):,} batches). "
+                       "Confusion matrix shows exact error counts. ROC curve shows the trade-off between sensitivity (recall) and specificity at every threshold.")
+
+            _cm  = confusion_matrix(y_te, _champ["_pred"])
+            _fig_eval, (_ax_cm, _ax_roc) = plt.subplots(1, 2, figsize=(14, 5))
+            _fig_eval.patch.set_facecolor("#0f172a")
+
+            # — Confusion Matrix heatmap —
+            _ax_cm.set_facecolor("#0f172a")
+            _cm_colors = np.array([["#1e293b", "#ef444455"], ["#ef444488", "#10b98188"]])
+            for i in range(2):
+                for j in range(2):
+                    _ax_cm.add_patch(plt.Rectangle((j-0.5, i-0.5), 1, 1,
+                                                    color=_cm_colors[i][j], zorder=0))
+                    _ax_cm.text(j, i, f"{_cm[i,j]:,}",
+                                ha="center", va="center", fontsize=20, fontweight="bold",
+                                color="white")
+                    _sub = ["True Negative", "False Positive", "False Negative", "True Positive"][i*2+j]
+                    _ax_cm.text(j, i - 0.30, _sub,
+                                ha="center", va="center", fontsize=8, color="#94a3b8")
+            _ax_cm.set_xticks([0, 1]); _ax_cm.set_xticklabels(["Predicted Safe", "Predicted At-Risk"], color="#cbd5e1", fontsize=10)
+            _ax_cm.set_yticks([0, 1]); _ax_cm.set_yticklabels(["Actual Safe", "Actual At-Risk"], color="#cbd5e1", fontsize=10, rotation=90, va="center")
+            _ax_cm.set_xlim(-0.5, 1.5); _ax_cm.set_ylim(-0.5, 1.5)
+            _ax_cm.set_title("Confusion Matrix (Test Set)", color="#00d4ff", fontsize=11, fontweight="bold")
+            for sp in _ax_cm.spines.values(): sp.set_color("#334155")
+            _ax_cm.tick_params(colors="#94a3b8")
+
+            # — ROC Curve —
+            _ax_roc.set_facecolor("#0f172a")
+            try:
+                _champ_xte = _champ["_xall"][:len(y_te)]   # use scaled/unscaled appropriately
+                # Re-predict on test only for ROC (use the test portion of _xall)
+                _xte_for_roc = _champ["_xall"]  # fallback to full dataset ROC
+                _proba_roc = _champ_clf.predict_proba(_xte_for_roc)[:, 1]
+                # Use test-set portion for clean ROC
+                _test_idx  = y_te.index
+                _proba_te  = ml_df.loc[_test_idx, "risk_probability"].values if "risk_probability" in ml_df.columns else _proba_roc[:len(y_te)]
+                _fpr, _tpr, _ = roc_curve(y_te.values, _proba_te[:len(y_te)])
+                _auc_val = auc(_fpr, _tpr)
+                _ax_roc.plot(_fpr, _tpr, color="#f59e0b", lw=2.5, label=f"{_champ_name}  (AUC = {_auc_val:.3f})")
+            except Exception as _roc_e:
+                _ax_roc.text(0.5, 0.5, f"ROC unavailable: {_roc_e}", ha="center", va="center", color="#94a3b8", fontsize=10, transform=_ax_roc.transAxes)
+            _ax_roc.plot([0,1],[0,1], "--", color="#334155", lw=1.5, label="Random Classifier (AUC = 0.5)")
+            _ax_roc.set_xlabel("False Positive Rate (1 − Specificity)", color="#94a3b8", fontsize=9)
+            _ax_roc.set_ylabel("True Positive Rate (Sensitivity / Recall)", color="#94a3b8", fontsize=9)
+            _ax_roc.set_title("ROC Curve — Area Under Curve (AUC)", color="#00d4ff", fontsize=11, fontweight="bold")
+            _ax_roc.legend(facecolor="#1e293b", labelcolor="white", fontsize=9)
+            _ax_roc.tick_params(colors="#94a3b8")
+            _ax_roc.set_xlim(0, 1); _ax_roc.set_ylim(0, 1.02)
+            for sp in _ax_roc.spines.values(): sp.set_color("#334155")
+            plt.tight_layout()
+            show_fig(_fig_eval)
+
+            # Interpretation callout
+            try:
+                _tn, _fp, _fn, _tp = _cm.ravel()
+                _prec_c = _tp / max(_tp + _fp, 1) * 100
+                _rec_c  = _tp / max(_tp + _fn, 1) * 100
+                st.markdown(f"""
+                <div style='background:#0f172a; border:1px solid #334155; border-left:4px solid #f59e0b;
+                     border-radius:8px; padding:12px 16px; font-size:11px; color:#cbd5e1; margin-top:8px;'>
+                    <b style='color:#f59e0b;'>Reading the Confusion Matrix:</b>&nbsp;&nbsp;
+                    ✅ <b>True Positives (caught):</b> {_tp:,} at-risk batches correctly flagged &nbsp;|
+                    ⚠️ <b>False Negatives (missed):</b> {_fn:,} at-risk batches called 'Safe' — each is a potential write-off &nbsp;|
+                    🔔 <b>False Positives (false alarms):</b> {_fp:,} safe batches unnecessarily flagged &nbsp;|
+                    <b>Precision:</b> {_prec_c:.1f}% &nbsp;| <b>Recall:</b> {_rec_c:.1f}%
+                </div>""", unsafe_allow_html=True)
+            except Exception:
+                pass
+
+            st.markdown("<br>", unsafe_allow_html=True)
 
             # ── DATA-DRIVEN AI INSIGHTS (computed from actual batch data) ──────
             # Compute specifics for genuinely actionable insights
