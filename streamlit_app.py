@@ -2983,7 +2983,8 @@ elif selected_page == "🤖 ML Expiry Classifier":
         axes_rc[0].set_title("Velocity Pressure Distribution\n(Cover Days ÷ Days to Expiry)", color="white", fontsize=10, fontweight="bold")
         axes_rc[0].set_xlabel("Velocity Pressure (×)", color="#94a3b8", fontsize=9)
         axes_rc[0].legend(fontsize=8.5, facecolor="#1e293b", labelcolor="white")
-        axes_rc[0].tick_params(colors="#94a3b8"); [sp.set_color("#334155") for sp in axes_rc[0].spines.values()]
+        axes_rc[0].tick_params(colors="#94a3b8")
+        for _sp in axes_rc[0].spines.values(): _sp.set_color("#334155")
 
         # Plot 2: DTE vs Cover Days scatter (sample for speed)
         _samp = ml_df.sample(min(800, len(ml_df)), random_state=42)
@@ -2997,7 +2998,8 @@ elif selected_page == "🤖 ML Expiry Classifier":
         axes_rc[1].set_xlabel("Days to Expiry (DTE)", color="#94a3b8", fontsize=9)
         axes_rc[1].set_ylabel("Stock Coverage (days)", color="#94a3b8", fontsize=9)
         axes_rc[1].legend(fontsize=8.5, facecolor="#1e293b", labelcolor="white")
-        axes_rc[1].tick_params(colors="#94a3b8"); [sp.set_color("#334155") for sp in axes_rc[1].spines.values()]
+        axes_rc[1].tick_params(colors="#94a3b8")
+        for _sp in axes_rc[1].spines.values(): _sp.set_color("#334155")
 
         # Plot 3: At-Risk Value by RAG Zone
         if "rag_status" in ml_df.columns:
@@ -3010,12 +3012,46 @@ elif selected_page == "🤖 ML Expiry Classifier":
             axes_rc[2].set_ylabel(f"Value ({curr_code}, {'M' if _rag_risk.max()>1e5 else ''})", color="#94a3b8", fontsize=9)
             axes_rc[2].tick_params(axis="x", rotation=30, colors="#94a3b8")
             axes_rc[2].tick_params(axis="y", colors="#94a3b8")
-            [sp.set_color("#334155") for sp in axes_rc[2].spines.values()]
+            for _sp in axes_rc[2].spines.values(): _sp.set_color("#334155")
 
         plt.tight_layout()
         show_fig(fig_rc)
 
+        # ── What These Charts Tell Management ────────────────────────────────
+        _vp_above1_pct = (ml_df["velocity_pressure"] > 1.0).mean() * 100
+        _cliff_batches = int((ml_df["cover_days"] > ml_df["days_to_expiry"].clip(1, 9999)).sum())
+        _cliff_val     = ml_df[ml_df["cover_days"] > ml_df["days_to_expiry"].clip(1, 9999)]["inventory_value_usd"].sum()
+        _red_amber_val = ml_df[ml_df.get("rag_status", pd.Series(dtype=str)).isin(
+            [c for c in ml_df["rag_status"].unique() if any(x in str(c) for x in ["Red","Amber","🔴","🟡","🟠"])]
+        )]["inventory_value_usd"].sum() if "rag_status" in ml_df.columns else 0
+
+        ic1, ic2, ic3 = st.columns(3)
+        with ic1:
+            st.markdown(f"""
+            <div style='background:#1c0a0a; border:1px solid #ef444440; border-top:3px solid #ef4444; border-radius:8px; padding:12px; font-size:11.5px; color:#cbd5e1;'>
+                <div style='color:#ef4444; font-weight:700; margin-bottom:6px;'>📊 Chart 1: Velocity Pressure Distribution</div>
+                <b>What it says:</b> {_vp_above1_pct:.1f}% of batches have Velocity Pressure > 1.0 — meaning their stock coverage already exceeds their remaining shelf life. These batches are <b>mathematically certain to expire</b> at current sales velocity, no matter what.<br><br>
+                <b>Action:</b> Every batch to the right of the yellow threshold line is a confirmed write-off unless velocity is increased immediately.
+            </div>""", unsafe_allow_html=True)
+        with ic2:
+            st.markdown(f"""
+            <div style='background:#080d18; border:1px solid #3b82f640; border-top:3px solid #3b82f6; border-radius:8px; padding:12px; font-size:11.5px; color:#cbd5e1;'>
+                <div style='color:#3b82f6; font-weight:700; margin-bottom:6px;'>📊 Chart 2: Cover Days vs Days to Expiry</div>
+                <b>What it says:</b> <b>{_cliff_batches:,} batches ({fmt_curr(_cliff_val, compact=True)})</b> sit above the yellow diagonal "Cliff Line." Everything above the cliff line will expire before being fully sold — physical impossibility, not a sales problem.<br><br>
+                <b>Action:</b> These batches need either inter-warehouse transfer to a faster location OR immediate liquidation. Pushing sales harder won't work.
+            </div>""", unsafe_allow_html=True)
+        with ic3:
+            _rag_risk_pct = _red_amber_val / max(ml_df["inventory_value_usd"].sum(), 1) * 100
+            st.markdown(f"""
+            <div style='background:#1a1500; border:1px solid #f59e0b40; border-top:3px solid #f59e0b; border-radius:8px; padding:12px; font-size:11.5px; color:#cbd5e1;'>
+                <div style='color:#f59e0b; font-weight:700; margin-bottom:6px;'>📊 Chart 3: At-Risk Value by RAG Zone</div>
+                <b>What it says:</b> Inventory at risk is concentrated in the Red and Amber RAG zones — representing {fmt_curr(_red_amber_val, compact=True)} ({_rag_risk_pct:.1f}% of portfolio) already in the clinical danger window (&lt;12M RSL).<br><br>
+                <b>Action:</b> The RAG zone is the regulatory compliance clock. Red = DSCSA action within 72hrs. Amber = 60-day velocity sprint before re-classification to Red.
+            </div>""", unsafe_allow_html=True)
+
         st.markdown("<br>", unsafe_allow_html=True)
+
+
 
         # ── SKU Pareto Analysis ────────────────────────────────────────────────
         st.markdown("#### 📊 2. SKU Pareto — Which Products Drive 80% of Expiry Risk?")
@@ -3153,161 +3189,99 @@ elif selected_page == "🤖 ML Expiry Classifier":
             _df_res = pd.DataFrame(_results).sort_values("F1(%)", ascending=False).reset_index(drop=True)
             _champ  = _df_res.iloc[0]
             _champ_clf   = _champ["_clf"]
-            _champ_pred  = _champ["_pred"]
-            _champ_xall  = _champ["_xall"]
             _champ_name  = _champ["Algorithm"]
-            _champ_acc   = _champ["Accuracy(%)"]
-            _champ_f1    = _champ["F1(%)"]
             ml_df["predicted_risk"] = _champ_clf.predict(_champ_xall)
 
-            # Champion banner
-            st.markdown(f"""
-            <div style='background:linear-gradient(135deg, #1e293b, #0f172a); border:2px solid #f59e0b; border-radius:10px; padding:14px 20px; margin-bottom:14px;'>
-                <div style='display:flex; justify-content:space-between; align-items:center;'>
-                    <div style='display:flex; align-items:center; gap:12px;'>
-                        <span style='font-size:2rem;'>🏆</span>
-                        <div>
-                            <div style='color:#f59e0b; font-size:14px; font-weight:800;'>CHAMPION: {_champ_name.upper()}</div>
-                            <div style='color:#cbd5e1; font-size:12px;'>Accuracy: <b>{_champ_acc:.1f}%</b> &bull; Weighted F1: <b>{_champ_f1:.1f}%</b> &bull; Binary target: Financial Loss Risk (At Risk vs Safe)</div>
-                        </div>
-                    </div>
-                    <span style='background:#f59e0b25; border:1px solid #f59e0b; color:#fbbf24; font-size:11px; font-weight:700; padding:4px 12px; border-radius:20px;'>Active Inference Engine</span>
-                </div>
-            </div>""", unsafe_allow_html=True)
+            # ── KEY EXPIRY RISK DRIVERS (Feature Importance — the only ML output that matters to management) ──
+            st.markdown("#### 🧠 5. What Drives Expiry Risk? — Feature Importance Analysis")
+            st.caption(f"Trained **{_champ_name}** on {len(X_tr):,} batches. Feature importance answers: *which operational variables most strongly predict whether a batch will expire before being sold?* These are the levers management can control.")
 
-            # Leaderboard cards
-            _lc1, _lc2, _lc3 = st.columns(3)
-            for _idx, _row in _df_res.iterrows():
-                with [_lc1, _lc2, _lc3][_idx]:
-                    _bc = "#f59e0b" if _row["Algorithm"]==_champ_name else "#334155"
-                    _ct = " <span style='color:#f59e0b;'>[CHAMPION]</span>" if _row["Algorithm"]==_champ_name else ""
-                    st.markdown(f"""
-                    <div style='background:#0f172a; border:1px solid {_bc}; border-top:3px solid {_bc}; border-radius:8px; padding:12px;'>
-                        <div style='font-size:12px; font-weight:700; color:white;'>{_row["Algorithm"]}{_ct}</div>
-                        <div style='display:flex; justify-content:space-between; margin-top:6px;'>
-                            <span style='color:#94a3b8; font-size:11px;'>Accuracy:</span>
-                            <span style='color:#00d4ff; font-weight:700; font-size:12px;'>{_row["Accuracy(%)"]:.1f}%</span>
-                        </div>
-                        <div style='display:flex; justify-content:space-between; margin-top:3px;'>
-                            <span style='color:#94a3b8; font-size:11px;'>Weighted F1:</span>
-                            <span style='color:#10b981; font-weight:700; font-size:12px;'>{_row["F1(%)"]:.1f}%</span>
-                        </div>
-                        <div style='display:flex; justify-content:space-between; margin-top:3px;'>
-                            <span style='color:#94a3b8; font-size:11px;'>Precision/Recall:</span>
-                            <span style='color:#cbd5e1; font-size:11px;'>{_row["Precision(%)"]:.1f}% / {_row["Recall(%)"]:.1f}%</span>
-                        </div>
-                        <div style='display:flex; justify-content:space-between; margin-top:3px;'>
-                            <span style='color:#94a3b8; font-size:11px;'>Train Latency:</span>
-                            <span style='color:#64748b; font-size:11px;'>{_row["Latency"]}</span>
-                        </div>
-                    </div>""", unsafe_allow_html=True)
-
-            st.markdown("<br>", unsafe_allow_html=True)
-
-            # ── DIAGNOSTIC CHARTS: Confusion Matrix + Feature Importance + ROC ───
-            _classes_bin = sorted(y_ml.unique())
-            _cm = confusion_matrix(y_te, _champ_pred, labels=_classes_bin)
-
-            fig_diag, axes_diag = plt.subplots(1, 3, figsize=(20, 5.5))
-            fig_diag.patch.set_facecolor("#0f172a")
-            fig_diag.suptitle(f"Model Diagnostics — {_champ_name} (Held-Out Test Split)", fontsize=12, color="#00d4ff", fontweight="bold")
-
-            # Feature Importance
-            axes_diag[0].set_facecolor("#0f172a")
             _feat_labels_map = {
-                "days_to_expiry":"Days to Expiry","quantity_on_hand":"Quantity on Hand",
-                "unit_price":"Unit Price","avg_monthly_dispatch":"Monthly Velocity",
-                "cover_days":"Cover Days","risk_score":"RSL Risk Score",
-                "value_per_day":"Value/Day","pct_life_remaining":"Life Remaining %",
-                "velocity_pressure":"⭐ Velocity Pressure","capital_velocity_ratio":"Capital/Velocity Ratio",
-                "shelf_life_consumed_pct":"Life Consumed %"
+                "days_to_expiry":"Days to Expiry (DTE)","quantity_on_hand":"Quantity Procured",
+                "unit_price":"Unit Price","avg_monthly_dispatch":"Monthly Sales Velocity",
+                "cover_days":"Stock Coverage (days)","risk_score":"RSL Risk Score",
+                "value_per_day":"Daily Dollar Burn Rate","pct_life_remaining":"Shelf Life Remaining %",
+                "velocity_pressure":"Velocity Pressure (Cover÷DTE)","capital_velocity_ratio":"Capital/Velocity Ratio",
+                "shelf_life_consumed_pct":"Shelf Life Consumed %"
             }
+            _feat_actions = {
+                "Days to Expiry (DTE)":          "Earliest-expiring batches are the immediate priority — enforce FEFO strictly.",
+                "Quantity Procured":              "Over-procurement is a root cause. Enforce Cover Ratio < 0.8×DTE at PO approval.",
+                "Monthly Sales Velocity":         "Low velocity = primary driver. Velocity programs (promos, channel push) are highest ROI.",
+                "Stock Coverage (days)":          "When cover_days > DTE, expiry is mathematically certain. Flag and escalate immediately.",
+                "Velocity Pressure (Cover÷DTE)":  "The single number that predicts loss. VP > 1.0 = certain expiry. VP 0.7–1.0 = intervention window.",
+                "Shelf Life Remaining %":         "Products with <40% life remaining AND slow velocity need emergency reallocation.",
+                "RSL Risk Score":                 "Distributor RSL (Remaining Shelf Life) threshold — enforce >50% RSL at transfer.",
+                "Daily Dollar Burn Rate":         "High-value slow movers burn capital fastest. Prioritize by value/day for liquidation.",
+                "Unit Price":                     "High-price SKUs have disproportionate write-off impact — monitor tightly.",
+                "Shelf Life Consumed %":          "Mirrors the regulatory RSL clock. >60% consumed with slow velocity = trigger alert.",
+                "Capital/Velocity Ratio":         "Dollar exposure per unit sold. High ratio = high financial risk per day of delay.",
+            }
+
             if hasattr(_champ_clf, "feature_importances_"):
                 _imp = pd.Series(_champ_clf.feature_importances_, index=features)
                 _imp.index = [_feat_labels_map.get(f, f) for f in _imp.index]
-                _imp = _imp.sort_values(ascending=True)
-                _imp_colors = ["#f59e0b" if "Velocity Pressure" in str(i) else "#7c3aed" for i in _imp.index]
-                axes_diag[0].barh(_imp.index, _imp.values, color=_imp_colors, alpha=0.85, height=0.6)
-                axes_diag[0].set_title("Feature Importance\n(★ = Key Expiry Driver)", color="white", fontsize=10, fontweight="bold")
-                axes_diag[0].set_xlabel("Relative Importance", color="#94a3b8", fontsize=9)
+                _imp = _imp.sort_values(ascending=False)
+                # Show feature importance as a full-width chart with interpretation table
+                fig_fi, ax_fi = plt.subplots(figsize=(14, 5.5))
+                fig_fi.patch.set_facecolor("#0f172a")
+                ax_fi.set_facecolor("#0f172a")
+                _fi_colors = ["#f59e0b" if i < 3 else ("#7c3aed" if i < 6 else "#334155") for i in range(len(_imp))]
+                _bars_fi = ax_fi.barh(_imp.index[::-1], _imp.values[::-1], color=_fi_colors[::-1], alpha=0.88, height=0.6)
+                for bar, val in zip(_bars_fi, _imp.values[::-1]):
+                    ax_fi.text(bar.get_width() + 0.002, bar.get_y() + bar.get_height()/2,
+                               f"{val:.1%}", va="center", color="white", fontsize=9, fontweight="bold")
+                ax_fi.set_title(f"What Drives Expiry Risk? — {_champ_name} Feature Importance\n🟡 Top 3 = Highest-ROI intervention levers   🟣 Moderate   ⬛ Minor",
+                                color="#00d4ff", fontsize=11, fontweight="bold")
+                ax_fi.set_xlabel("Importance (% of model prediction explained)", color="#94a3b8", fontsize=9)
+                ax_fi.tick_params(colors="#94a3b8", labelsize=9)
+                for sp in ax_fi.spines.values(): sp.set_color("#334155")
+                plt.tight_layout()
+                show_fig(fig_fi)
+
+                # Actionable interpretation table
+                st.markdown("**📋 What Each Driver Means & What To Do:**")
+                _imp_table_rows = []
+                for rank, (feat_name, imp_val) in enumerate(_imp.head(6).items(), 1):
+                    action = _feat_actions.get(feat_name, "Monitor and track trend monthly.")
+                    tier = "🟡 HIGH" if rank <= 2 else ("🟣 MED" if rank <= 4 else "⬛ LOW")
+                    _imp_table_rows.append({"Rank": rank, "Driver": feat_name, "Importance": f"{imp_val:.1%}",
+                                             "Priority": tier, "Management Action": action})
+                st.dataframe(pd.DataFrame(_imp_table_rows), use_container_width=True, hide_index=True)
+
             elif hasattr(_champ_clf, "coef_"):
                 _imp = pd.Series(np.abs(_champ_clf.coef_[0]), index=features)
                 _imp.index = [_feat_labels_map.get(f, f) for f in _imp.index]
-                _imp = _imp.sort_values(ascending=True)
-                axes_diag[0].barh(_imp.index, _imp.values, color="#3b82f6", alpha=0.85, height=0.6)
-                axes_diag[0].set_title("Feature Coefficients\n(L2 Logistic Regression)", color="white", fontsize=10, fontweight="bold")
-                axes_diag[0].set_xlabel("Mean |Coefficient|", color="#94a3b8", fontsize=9)
-            else:
-                _imp = pd.Series(dtype=float)
-            axes_diag[0].tick_params(colors="#94a3b8", labelsize=8.5)
-            for sp in axes_diag[0].spines.values(): sp.set_color("#334155")
+                _imp = _imp.sort_values(ascending=False)
 
-            # Confusion Matrix
-            axes_diag[1].set_facecolor("#0f172a")
-            _short_labels = ["At Risk", "Safe"] if len(_classes_bin)==2 else _classes_bin
-            sns.heatmap(_cm, annot=True, fmt="d", cmap="Reds", ax=axes_diag[1],
-                        xticklabels=_short_labels, yticklabels=_short_labels,
-                        linewidths=1, linecolor="#0f172a", annot_kws={"size":14, "weight":"bold"})
-            axes_diag[1].set_title("Confusion Matrix\n(Held-Out Test Batches)", color="white", fontsize=10, fontweight="bold")
-            axes_diag[1].set_xlabel("Predicted", color="#94a3b8", fontsize=9)
-            axes_diag[1].set_ylabel("Actual", color="#94a3b8", fontsize=9)
-            axes_diag[1].tick_params(colors="#94a3b8", labelsize=9)
-            # Add TP/FP/TN/FN labels if binary
-            if len(_classes_bin) == 2 and _cm.shape == (2,2):
-                for (r, c), lbl in [((0,0),"TP"),(( 0,1),"FN"),((1,0),"FP"),((1,1),"TN")]:
-                    if r < _cm.shape[0] and c < _cm.shape[1]:
-                        axes_diag[1].text(c+0.5, r+0.15, lbl, ha="center", va="top", color="white", fontsize=9, fontweight="bold", alpha=0.7)
+            # ── DATA-DRIVEN AI INSIGHTS (computed from actual batch data) ──────
+            # Compute specifics for genuinely actionable insights
+            _top3_sku = (ml_df[ml_df["financial_loss_risk"]==1]
+                         .groupby(_feat_labels_map.get("product_id", "product_id") if "generic_name" not in ml_df.columns else "generic_name")
+                         ["inventory_value_usd"].sum()
+                         .sort_values(ascending=False).head(3)) if at_risk_cnt > 0 else pd.Series(dtype=float)
+            _name_col_ai = "generic_name" if "generic_name" in ml_df.columns else "product_id"
+            _top3_sku = (ml_df[ml_df["financial_loss_risk"]==1]
+                         .groupby(_name_col_ai)["inventory_value_usd"].sum()
+                         .sort_values(ascending=False).head(3)) if at_risk_cnt > 0 else pd.Series(dtype=float)
 
-            # ROC Curve (Binary)
-            axes_diag[2].set_facecolor("#0f172a")
-            if hasattr(_champ_clf, "predict_proba") and len(_classes_bin)==2:
-                _xte_use = X_te if _champ_name!="Logistic Regression (L2)" else X_te_sc
-                _y_prob_bin = _champ_clf.predict_proba(_xte_use)[:,1]
-    
-                _y_bin_01 = y_te  # numeric 0/1: 1 = At Risk
-                if _y_bin_01.sum() > 0:
-                    from sklearn.metrics import roc_curve, auc as _auc_fn
-                    _fpr, _tpr, _ = roc_curve(_y_bin_01, _y_prob_bin)
-                    _roc_auc = _auc_fn(_fpr, _tpr)
-                    axes_diag[2].plot(_fpr, _tpr, color="#ef4444", lw=2.5, label=f"ROC Curve (AUC = {_roc_auc:.3f})")
-                    axes_diag[2].fill_between(_fpr, _tpr, alpha=0.1, color="#ef4444")
-                    axes_diag[2].plot([0,1],[0,1], color="#334155", lw=1.5, linestyle="--", label="Random (AUC=0.5)")
-                    axes_diag[2].set_title(f"ROC Curve — {_champ_name}\n(At-Risk batch detection)", color="white", fontsize=10, fontweight="bold")
-                    axes_diag[2].set_xlabel("False Positive Rate", color="#94a3b8", fontsize=9)
-                    axes_diag[2].set_ylabel("True Positive Rate (Recall)", color="#94a3b8", fontsize=9)
-                    axes_diag[2].legend(facecolor="#1e293b", labelcolor="white", fontsize=9)
-            axes_diag[2].tick_params(colors="#94a3b8")
-            for sp in axes_diag[2].spines.values(): sp.set_color("#334155")
+            _avg_vp_risk = ml_df[ml_df["financial_loss_risk"]==1]["velocity_pressure"].mean() if at_risk_cnt > 0 else 0
+            _avg_vp_safe = ml_df[ml_df["financial_loss_risk"]==0]["velocity_pressure"].mean()
+            _vel_gap     = _avg_vp_risk / max(_avg_vp_safe, 0.001)
+            _top3_str    = "; ".join([f"<b>{str(n)[:25]}</b> ({fmt_curr(v, compact=True)})" for n,v in _top3_sku.items()]) if not _top3_sku.empty else "N/A"
+            _top_feat_ai = _imp.index[0] if not _imp.empty else "Quantity Procured"
+            _top_feat_pct = _imp.iloc[0] * 100 if not _imp.empty else 0
+            _expired_cnt = len(ml_df[ml_df["days_to_expiry"] <= 0]) if "days_to_expiry" in ml_df.columns else 0
+            _expired_val = ml_df[ml_df["days_to_expiry"] <= 0]["inventory_value_usd"].sum() if _expired_cnt > 0 else 0
 
-            plt.tight_layout()
-            show_fig(fig_diag)
-
-            # Confusion matrix interpretation
-            if _cm.shape==(2,2):
-                _tp,_fn,_fp,_tn = _cm[0,0],_cm[0,1],_cm[1,0],_cm[1,1]
-                _missed_val = ml_df.sample(frac=0.25,random_state=42).loc[ml_df.index.isin(X_te.index) if hasattr(X_te,"index") else ml_df.index[:len(X_te)]]["inventory_value_usd"].head(_fn).sum() if _fn>0 else 0
-                st.markdown(f"""
-                <div style='background:#1e293b; border-left:4px solid #7c3aed; border-radius:6px; padding:12px 16px; font-size:12px; color:#cbd5e1;'>
-                    <b>Confusion Matrix Interpretation:</b><br>
-                    ✅ <b>True Positives ({_tp:,}):</b> Correctly flagged as At-Risk — these batches get timely intervention. &nbsp;&nbsp;
-                    ✅ <b>True Negatives ({_tn:,}):</b> Correctly identified as Safe — no unnecessary alerts.<br>
-                    ⚠️ <b>False Negatives ({_fn:,}):</b> At-Risk batches the model MISSED — these may slip through to write-off. Minimize these.&nbsp;&nbsp;
-                    ⚠️ <b>False Positives ({_fp:,}):</b> Safe batches flagged as At-Risk — causes unnecessary intervention cost.
-                </div>""", unsafe_allow_html=True)
-
-            # Classification report in expander
-            with st.expander("📋 Full Classification Report", expanded=False):
-                st.text(classification_report(y_te, _champ_pred, zero_division=0))
-
-            # AI Insight
-            _top_feat_name = _feat_labels_map.get(features[np.argmax(_champ_clf.feature_importances_) if hasattr(_champ_clf,"feature_importances_") else 0], "Velocity Pressure")
             _rc_bullets = [
-                f"🔬 <b>Primary Expiry Driver:</b> <b>{_top_feat_name}</b> is the most predictive feature. When a batch's stock coverage exceeds its remaining shelf life (Velocity Pressure > 1.0), it is physically impossible to sell all units before expiry — this is the single largest controllable root cause of expiry losses.",
-                f"📦 <b>Batch Class Imbalance Handled:</b> {at_risk_pct:.1f}% of batches ({at_risk_cnt:,}) are At-Risk. The binary 'Financial Loss Risk' target (velocity_pressure > 1) creates a meaningful, balanced prediction problem — unlike a RAG 4-color label where 90%+ batches are Green.",
-                f"🎯 <b>Model Precision vs. Recall Trade-off:</b> High Recall = fewer missed at-risk batches (fewer write-offs). High Precision = fewer false alarms (fewer unnecessary interventions). The {_champ_name} optimizes weighted F1 across both. Target Recall > 85% to minimize write-off exposure.",
-                f"🏭 <b>Structural Fix Needed:</b> Root cause is not just slow sales — it's procurement of excess stock relative to shelf life. Work with procurement to enforce a <b>Cover Ratio < 0.8×DTE</b> rule at time of purchase order."
+                f"🎯 <b>Top {len(_top3_sku)} At-Risk SKUs Demand Immediate Attention:</b> {_top3_str} — together these account for the largest share of expiry-threatened capital. Sales teams should be briefed on these SKUs today. Any velocity improvement here has immediate P&L impact.",
+                f"📊 <b>Root Cause — {_top_feat_ai} ({_top_feat_pct:.0f}% of model prediction):</b> The model identifies this as the dominant predictor of expiry loss. At-risk batches have {_avg_vp_risk:.2f}× velocity pressure on average vs {_avg_vp_safe:.2f}× for safe batches — a <b>{_vel_gap:.1f}× gap</b>. This means at-risk batches are moving {100/max(_vel_gap,0.01):.0f}% too slowly relative to their shelf life.",
+                f"⚠️ <b>Already Expired — Immediate Compliance Action:</b> {_expired_cnt:,} batches ({fmt_curr(_expired_val, compact=True)}) have crossed their expiry date. These are regulatory liabilities — the longer they sit in warehouse inventory records, the higher the FDA audit risk. Submit destruction manifests within 72 hours.",
+                f"🏭 <b>Procurement Policy is the Structural Root Cause:</b> When Cover Days &gt; Days to Expiry, expiry is mathematically guaranteed regardless of how hard sales pushes. The fix is upstream: enforce a <b>maximum purchase quantity = (DTE × monthly velocity × 0.75)</b> rule at PO sign-off. This single policy change prevents the accumulation of structurally non-sellable inventory."
             ]
-            ai_insight("Binary ML Expiry Classifier — Root Cause & Model Intelligence", _rc_bullets, icon="🔬", color="#7c3aed")
+            ai_insight("Expiry Risk Intelligence — What the Data Is Telling Management", _rc_bullets, icon="🔬", color="#7c3aed")
+
 
 
     # ═════════════════════════════════════════════════════════════════════════
@@ -3522,7 +3496,9 @@ elif selected_page == "🤖 ML Expiry Classifier":
                 c_left, c_right = st.columns([2, 1])
                 with c_left:
                     st.markdown(f"**{_zc['action']}**")
-                    st.markdown("<br>".join([f"{'✅' if i==0 else '→'} **Step {i+1}:** {s}" for i,s in enumerate(_zc["steps"])]), unsafe_allow_html=False)
+                    for _si, _ss in enumerate(_zc["steps"]):
+                        _icon = "✅" if _si == 0 else f"**{_si+1}.**"
+                        st.markdown(f"{_icon} {_ss}")
                     st.markdown(f"\n> 💡 {_zc['recovery_note']}")
                 with c_right:
                     st.markdown(f"""
