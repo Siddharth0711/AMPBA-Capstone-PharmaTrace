@@ -416,11 +416,18 @@ def build_glossary(is_in=False):
             f"- Yellow (HIGH 30-90d): Proactive redistribution"
         ),
         "Demand Trend": (
-            f"**24-Month Demand & Seasonality Analysis** has 4 panels:\n\n"
-            f"1. **Demand vs Dispatch** — demanded volume vs actual fulfilled volume.\n"
-            f"2. **Fill Rate** — monthly service level (Green ≥ 97%, Red < 95%).\n"
-            f"3. **Seasonality** — average monthly demand by therapy area.\n"
-            f"4. **Revenue Trend** — total {c_code} value of dispatches per month."
+            f"**Strategic Engine 6: Shipments-Driven Demand Prediction & Seasonality** has 5 tabs:\n\n"
+            f"1. **Pattern Classification** — 4 clinical demand patterns derived from real shipment behaviour "
+            f"(Chronic, Acute/Seasonal, Controlled Substance, Specialty Oncology).\n"
+            f"2. **1M / 3M / 6M Forecasts** — XGBoost cross-sectional forecasts trained on 20,000 shipment "
+            f"transactions across 2,984 products. Demand is monotonically enforced (3M ≥ 1M ≥ 6M). "
+            f"Full product list searchable + downloadable as Excel.\n"
+            f"3. **Warehouse & Distributor Demand** — per-warehouse demand ranking by actual shipment volume "
+            f"(WH001–WH008), region breakdown, distributor spread, delay rates, and monthly trend lines.\n"
+            f"4. **Model Performance & Features** — XGBoost MAPE/RMSE/R² by horizon, MAPE by clinical "
+            f"pattern, and top feature importances.\n"
+            f"5. **Procurement Action Plan** — executive PO deadlines with 18% safety stock buffer across "
+            f"1M/3M/6M horizons, plus a clinical pattern lead-time calendar."
         ),
         "ML Classifier": (
             f"**Random Forest Expiry Risk Classifier** predicts near-expiry risk for active batches.\n\n"
@@ -2667,30 +2674,73 @@ elif selected_page == "📈 Demand & Seasonality":
 
             with _c1w:
                 st.markdown("#### 🏭 Warehouse Demand Ranking")
-                # Use dominant_wh_type (available) instead of origin_warehouse_id
-                _wh_col = "origin_warehouse_id" if "origin_warehouse_id" in _src3.columns else "dominant_wh_type"
-                _wr = (_src3.groupby(_wh_col).agg(
-                    Total=("total_quantity","sum"),
-                    Products=("product_id","nunique"),
-                    AvgMo=("total_quantity","mean")).reset_index().sort_values("Total", ascending=False))
-                _wr["Total"] = _wr["Total"].astype(int)
-                _wr["AvgMo"] = _wr["AvgMo"].round(0).astype(int)
-                _wr["Share(%)"] = (_wr["Total"] / _wr["Total"].sum() * 100).round(1)
-                _wr.columns = ["Warehouse Type", "Total Units", "Products", "Avg/Month", "Share(%)"]
-                st.dataframe(_wr, use_container_width=True, hide_index=True)
-                fig_wh, ax_wh = plt.subplots(figsize=(8, 4))
-                fig_wh.patch.set_facecolor("#0f1117"); ax_wh.set_facecolor("#0f1117")
-                _wh_colors = ["#00d4ff", "#10b981", "#f59e0b", "#ef4444", "#7c3aed"]
-                ax_wh.bar(_wr["Warehouse Type"], _wr["Total Units"]/1e6,
-                          color=_wh_colors[:len(_wr)], alpha=0.85, edgecolor="#334155", linewidth=0.8)
-                for _xi, (_v, _s) in enumerate(zip(_wr["Total Units"], _wr["Share(%)"] )):
-                    ax_wh.text(_xi, _v/1e6 + 0.02, f"{_s}%", ha="center", fontsize=9, color="#e2e8f0", fontweight="bold")
-                ax_wh.set_ylabel("Total Units (M)", fontsize=9, color="#94a3b8")
-                ax_wh.set_title("Demand by Warehouse Type", fontsize=10, color="#e2e8f0", fontweight="bold")
-                ax_wh.tick_params(axis="x", rotation=20, colors="#94a3b8")
-                ax_wh.tick_params(axis="y", colors="#94a3b8")
-                for sp in ax_wh.spines.values(): sp.set_edgecolor("#334155")
-                plt.tight_layout(); show_fig(fig_wh)
+                # Load live warehouse demand directly from raw master dataset shipments
+                # so we can show individual warehouse IDs (WH001-WH008) with names & cities
+                try:
+                    _mdata_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "data", "PharmaTrace_Master_Dataset_Production_Extended_Cleaned.xlsx")
+                    _mxf = pd.ExcelFile(_mdata_path)
+                    _shp_raw = _mxf.parse("shipments")[["shipment_id","origin_warehouse_id",
+                                                          "fp_batch_id","quantity","status"]]
+                    _fpb_raw = _mxf.parse("finished_product_batches")[["fp_batch_id","product_id"]].drop_duplicates()
+                    _wh_raw  = _mxf.parse("warehouses")[["warehouse_id","warehouse_name",
+                                                           "warehouse_type","city","state",
+                                                           "capacity_units","temp_controlled"]]
+                    _shp_raw = _shp_raw.merge(_fpb_raw, on="fp_batch_id", how="left")
+                    _shp_raw = _shp_raw.merge(_wh_raw, left_on="origin_warehouse_id",
+                                              right_on="warehouse_id", how="left")
+                    _wr_live = _shp_raw.groupby(
+                        ["warehouse_id","warehouse_name","warehouse_type","city","state","capacity_units"]
+                    ).agg(
+                        Total_Units=("quantity","sum"),
+                        Products=("product_id","nunique"),
+                        Shipments=("shipment_id","count"),
+                        Delayed=("status", lambda x: (x=="delayed").sum())
+                    ).reset_index().sort_values("Total_Units", ascending=False)
+                    _wr_live["Delay Rate(%)"] = (_wr_live["Delayed"] / _wr_live["Shipments"] * 100).round(1)
+                    _wr_live["Utilization(%)"] = (_wr_live["Total_Units"] / _wr_live["capacity_units"] * 100).round(1)
+                    _wr_live["Share(%)"]       = (_wr_live["Total_Units"] / _wr_live["Total_Units"].sum() * 100).round(1)
+                    _wr_live["Total Units"]    = _wr_live["Total_Units"].astype(int)
+                    _wr_disp = _wr_live[["warehouse_id","warehouse_name","warehouse_type",
+                                          "city","state","Total Units","Products","Shipments",
+                                          "Share(%)","Utilization(%)","Delay Rate(%)"]]
+                    _wr_disp.columns = ["WH ID","Warehouse Name","Type","City","State",
+                                         "Total Units","Products","Shipments",
+                                         "Share(%)","Utilization(%)","Delay Rate(%)"]
+                    st.dataframe(_wr_disp, use_container_width=True, hide_index=True)
+                    # Horizontal bar chart by warehouse
+                    _wr_labels = (_wr_live["warehouse_id"] + " · " + _wr_live["city"]).tolist()
+                    _wr_vals   = (_wr_live["Total_Units"] / 1e6).tolist()
+                    _wr_type_clr = {"central":"#00d4ff","regional":"#10b981","cold-chain":"#f59e0b"}
+                    _wr_clrs   = [_wr_type_clr.get(t,"#64748b") for t in _wr_live["warehouse_type"].tolist()]
+                    fig_wh, ax_wh = plt.subplots(figsize=(8, 5))
+                    fig_wh.patch.set_facecolor("#0f1117"); ax_wh.set_facecolor("#0f1117")
+                    _bars = ax_wh.barh(_wr_labels, _wr_vals, color=_wr_clrs, alpha=0.85,
+                                        edgecolor="#334155", linewidth=0.8)
+                    for _bi, (_bv, _bs) in enumerate(zip(_wr_vals, _wr_live["Share(%)"].tolist())):
+                        ax_wh.text(_bv + 0.02, _bi, f"{_bs}%", va="center",
+                                   fontsize=8, color="#e2e8f0", fontweight="bold")
+                    ax_wh.set_xlabel("Total Units Shipped (M)", fontsize=9, color="#94a3b8")
+                    ax_wh.set_title("Warehouse Demand Ranking (color = type)",
+                                    fontsize=10, color="#e2e8f0", fontweight="bold")
+                    ax_wh.invert_yaxis()
+                    ax_wh.tick_params(colors="#94a3b8")
+                    # Legend for type colors
+                    from matplotlib.patches import Patch as _Patch
+                    ax_wh.legend(handles=[_Patch(color=v, label=k) for k,v in _wr_type_clr.items()],
+                                  fontsize=8, framealpha=0, labelcolor="#e2e8f0", loc="lower right")
+                    for sp in ax_wh.spines.values(): sp.set_edgecolor("#334155")
+                    plt.tight_layout(); show_fig(fig_wh)
+                except Exception as _wh_ex:
+                    # Graceful fallback to warehouse type grouping
+                    _wh_col = "dominant_wh_type" if "dominant_wh_type" in _src3.columns else None
+                    if _wh_col:
+                        _wr_fb = _src3.groupby(_wh_col).agg(
+                            Total=("total_quantity","sum"), Products=("product_id","nunique")
+                        ).reset_index().sort_values("Total", ascending=False)
+                        _wr_fb["Share(%)"] = (_wr_fb["Total"] / _wr_fb["Total"].sum() * 100).round(1)
+                        st.dataframe(_wr_fb, use_container_width=True, hide_index=True)
+                    st.caption(f"⚠️ Could not load individual warehouse data: {_wh_ex}")
 
             with _c2w:
                 st.markdown("#### 🌍 Demand by Region")
