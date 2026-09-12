@@ -2867,26 +2867,77 @@ elif selected_page == "📈 Demand & Seasonality":
                     if os.path.exists(_wh_mo_path):
                         st.markdown("##### 📈 Monthly Volume by Warehouse")
                         _wm = pd.read_csv(_wh_mo_path).sort_values(["warehouse_id","year_month"])
-                        _wh_ids = _wm["warehouse_id"].unique().tolist()
+                        _wh_ids = sorted(_wm["warehouse_id"].unique().tolist())
                         _ref_wm = _wm[_wm["warehouse_id"]==_wh_ids[0]]["year_month"].tolist()
-                        fig_wmt, ax_wmt = plt.subplots(figsize=(8, 4))
-                        fig_wmt.patch.set_facecolor("#0f1117"); ax_wmt.set_facecolor("#0f1117")
-                        for _wid in _wh_ids:
+
+                        # ── Warehouse filter ────────────────────────────────
+                        _sel_wh = st.multiselect(
+                            "Filter warehouses (leave blank to show all)",
+                            options=_wh_ids,
+                            default=[],
+                            key="wh_filter_monthly",
+                            placeholder="Select one or more warehouses…"
+                        )
+                        _plot_wh_ids = _sel_wh if _sel_wh else _wh_ids
+                        _is_filtered = bool(_sel_wh)
+
+                        fig_wmt, ax_wmt = plt.subplots(figsize=(10, 4))
+                        fig_wmt.patch.set_facecolor("#0f1117")
+                        ax_wmt.set_facecolor("#0f1117")
+
+                        # Dimmed palette for all-warehouses view
+                        _bright_palette = ["#00d4ff","#10b981","#f59e0b","#7c3aed",
+                                           "#f43f5e","#84cc16","#fb923c","#a78bfa",
+                                           "#06b6d4","#34d399","#fbbf24","#c084fc"]
+
+                        for _i, _wid in enumerate(_wh_ids):
                             _wg = _wm[_wm["warehouse_id"]==_wid].copy().reset_index(drop=True)
                             _wt_arr = _wr.loc[_wr["warehouse_id"]==_wid, "warehouse_type"].values
-                            _wc = _wr_type_clr.get(str(_wt_arr[0]) if len(_wt_arr) else "", "#64748b")
+                            _base_clr = _wr_type_clr.get(str(_wt_arr[0]) if len(_wt_arr) else "", "#64748b")
+
+                            if _is_filtered:
+                                if _wid in _sel_wh:
+                                    # Selected: bright colour, thick line, full opacity
+                                    _clr   = _bright_palette[_i % len(_bright_palette)]
+                                    _lw    = 2.5
+                                    _alpha = 1.0
+                                    _ms    = 4
+                                    _zorder = 5
+                                else:
+                                    # Unselected: faint grey ghost line
+                                    _clr   = "#2d3748"
+                                    _lw    = 0.8
+                                    _alpha = 0.35
+                                    _ms    = 0
+                                    _zorder = 1
+                            else:
+                                _clr   = _base_clr
+                                _lw    = 1.5
+                                _alpha = 0.8
+                                _ms    = 2
+                                _zorder = 3
+
+                            _label = _wid if (_wid in _plot_wh_ids) else None
                             ax_wmt.plot(range(len(_wg)), _wg["total_units"]/1e3,
-                                        label=_wid, lw=1.5, color=_wc, alpha=0.8, marker="o", markersize=2)
+                                        label=_label, lw=_lw, color=_clr,
+                                        alpha=_alpha, marker="o", markersize=_ms,
+                                        zorder=_zorder)
+
                         _step_wmt = max(1, len(_ref_wm)//8)
                         ax_wmt.set_xticks(list(range(len(_ref_wm)))[::_step_wmt])
-                        ax_wmt.set_xticklabels(_ref_wm[::_step_wmt], rotation=30, ha="right",
-                                               fontsize=7, color="#94a3b8")
+                        ax_wmt.set_xticklabels(_ref_wm[::_step_wmt], rotation=30,
+                                               ha="right", fontsize=7, color="#94a3b8")
                         ax_wmt.set_ylabel("Units (K)", fontsize=8, color="#94a3b8")
-                        ax_wmt.set_title("Monthly Shipment Volume per Warehouse", fontsize=9, color="#e2e8f0")
-                        ax_wmt.legend(fontsize=7, framealpha=0, labelcolor="#e2e8f0", ncol=2)
+                        _title_suffix = f" — {', '.join(_sel_wh)}" if _is_filtered else " — All Warehouses"
+                        ax_wmt.set_title(f"Monthly Shipment Volume per Warehouse{_title_suffix}",
+                                         fontsize=9, color="#e2e8f0")
+                        if _plot_wh_ids:
+                            ax_wmt.legend(fontsize=7, framealpha=0,
+                                          labelcolor="#e2e8f0", ncol=min(len(_plot_wh_ids), 4))
                         ax_wmt.tick_params(axis="y", colors="#94a3b8")
                         for sp in ax_wmt.spines.values(): sp.set_edgecolor("#334155")
                         plt.tight_layout(); show_fig(fig_wmt)
+
                 except Exception as _wh_ex:
                     # Fallback: warehouse type grouping from monthly_shipment_demand
                     _wh_col = "dominant_wh_type" if "dominant_wh_type" in _src3.columns else None
