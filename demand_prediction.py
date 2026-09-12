@@ -376,13 +376,16 @@ def generate_forecasts(df, results, horizons=[1,3,6]):
     rows = []
     latest = df.sort_values("year_month_dt").groupby("product_id").last().reset_index()
     last_dt = df["year_month_dt"].max()
+    # Anchor forecast horizon labels to TODAY, not to the last date in training data.
+    # e.g. 1M = next 1 month from now, 3M = next 3 months from now, etc.
+    today_dt = pd.Timestamp.now().normalize().replace(day=1)  # first of current month
 
     for h in horizons:
         key = f"{h}m"
         if key not in results: continue
         model  = results[key]["model"]
         avail  = results[key]["avail_features"]
-        tgt_dt = last_dt + pd.DateOffset(months=h)
+        tgt_dt = today_dt + pd.DateOffset(months=h)   # ← was: last_dt + offset
         tgt_ym = tgt_dt.strftime("%Y-%m")
         X_fut  = latest[avail].fillna(0)
         preds  = np.maximum(model.predict(X_fut), 0)
@@ -461,6 +464,51 @@ def run_pipeline(data_path):
     print(f"  Pipeline complete in {(datetime.now()-t0).seconds}s")
     print(f"{'='*70}\n")
     return monthly, forecasts, results, encoders
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LIVE MODE: accept pre-loaded DataFrames (called from Streamlit on upload)
+# ─────────────────────────────────────────────────────────────────────────────
+def run_pipeline_from_sheets(sheets: dict) -> dict:
+    """
+    Run the full demand prediction pipeline from pre-loaded DataFrames.
+
+    Parameters
+    ----------
+    sheets : dict
+        Must contain keys: 'shipments', 'finished_product_batches', 'products',
+        'distributors', 'retailers', 'warehouses'  — each a pandas DataFrame.
+
+    Returns
+    -------
+    dict with keys:
+        'monthly_agg'  : pd.DataFrame   — product × month aggregated demand
+        'forecasts'    : pd.DataFrame   — 1M / 3M / 6M forecast rows
+        'results'      : dict           — model objects + metrics per horizon
+        'encoders'     : dict           — LabelEncoder per categorical column
+        'generated_at' : str            — ISO timestamp
+    """
+    required = ["shipments", "finished_product_batches", "products",
+                "distributors", "retailers", "warehouses"]
+    missing = [s for s in required if s not in sheets or sheets[s].empty]
+    if missing:
+        raise ValueError(f"run_pipeline_from_sheets: missing/empty sheets: {missing}")
+
+    enriched  = build_enriched(sheets)
+    monthly   = aggregate_monthly(enriched)
+    monthly   = classify_patterns(monthly)
+    monthly, encoders = engineer_features(monthly)
+    results   = train_and_evaluate(monthly)
+    forecasts = generate_forecasts(monthly, results)
+
+    return {
+        "monthly_agg":  monthly,
+        "forecasts":    forecasts,
+        "results":      results,
+        "encoders":     encoders,
+        "generated_at": datetime.now().isoformat(),
+        "data_path":    "<uploaded file>",
+    }
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

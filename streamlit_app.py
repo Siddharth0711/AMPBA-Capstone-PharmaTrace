@@ -2372,66 +2372,185 @@ elif selected_page == "📈 Demand & Seasonality":
     with st.expander("ℹ️ What these charts show", expanded=False):
         st.markdown(get_current_glossary()["Demand Trend"])
 
-    # ── Load pre-computed cache from demand_prediction.py ────────────────────
-    import pickle as _pkl, io as _io
+    # ── Demand data source: LIVE (uploaded file) or DISK CACHE (local) ───────
+    import pickle as _pkl, io as _io, sys as _sys
     _cache_path    = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "demand_model_cache.pkl")
     _forecast_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "demand_forecast_results.xlsx")
 
     _cache = None; _df_monthly_shp = None; _df_forecasts = None
-    _df_metrics = None; _df_fi = None; _df_pat_mape = None; _gen_at = "not generated"; _pkl_err = None
+    _df_metrics = None; _df_fi = None; _df_pat_mape = None
+    _gen_at = "not generated"; _pkl_err = None
+    _live_mode = False  # True when results come from a freshly-trained live run
 
-    # Custom unpickler: replaces xgboost/sklearn model objects with a dummy stub
-    # so the DataFrames (monthly_agg, forecasts) still load even if xgboost is
-    # not importable in the current Python environment.
-    class _SafeUnpickler(_pkl.Unpickler):
-        class _Stub:
-            def __init__(self, *a, **kw): pass
-            def __setstate__(self, s): pass
-        def find_class(self, module, name):
-            # Let pandas / numpy through normally
-            if module.startswith("pandas") or module.startswith("numpy") or module.startswith("builtins"):
-                return super().find_class(module, name)
-            # Stub out everything else (xgboost, sklearn, etc.)
-            return _SafeUnpickler._Stub
+    # ── LIVE MODE: uploaded file → train & predict in-memory ─────────────────
+    _dp_dir = os.path.dirname(os.path.abspath(__file__))
+    if _dp_dir not in _sys.path:
+        _sys.path.insert(0, _dp_dir)
 
-    if os.path.exists(_cache_path):
-        try:
-            with open(_cache_path, "rb") as _f:
-                _cache = _SafeUnpickler(_f).load()
-            _df_monthly_shp = _cache.get("monthly_agg")
-            _df_forecasts   = _cache.get("forecasts")
-            _gen_at         = _cache.get("generated_at", "unknown")
-            if isinstance(_gen_at, str) and len(_gen_at) >= 16:
-                _gen_at = _gen_at[:16]
-        except Exception as _e:
-            _pkl_err = str(_e)  # stored; shown only if Excel fallback also fails
+    _uploaded_key = getattr(uploaded_file, "name", None) if uploaded_file else None
+    _ss_key = f"demand_cache_{_uploaded_key}"   # session-state slot for this file
 
-    if os.path.exists(_forecast_path):
-        try:
-            _xf = pd.ExcelFile(_forecast_path)
-            if "model_metrics"      in _xf.sheet_names: _df_metrics  = _xf.parse("model_metrics")
-            if "feature_importance" in _xf.sheet_names: _df_fi       = _xf.parse("feature_importance")
-            if "pattern_mape"       in _xf.sheet_names: _df_pat_mape = _xf.parse("pattern_mape")
-            # If pickle failed for forecasts, load from Excel as fallback
-            # Sheet names: "demand_forecasts" and "monthly_shipment_demand"
-            if _df_forecasts is None:
-                for _sn in ["demand_forecasts", "forecasts"]:
-                    if _sn in _xf.sheet_names:
-                        _df_forecasts = _xf.parse(_sn); break
-            if _df_monthly_shp is None:
-                for _sn in ["monthly_shipment_demand", "monthly_agg"]:
-                    if _sn in _xf.sheet_names:
-                        _df_monthly_shp = _xf.parse(_sn); break
-        except Exception: pass
+    if uploaded_file and _uploaded_key:
+        # Check if we already trained on this exact file in this session
+        if _ss_key in st.session_state and st.session_state[_ss_key] is not None:
+            _cache       = st.session_state[_ss_key]
+            _live_mode   = True
+        else:
+            # ── Gather sheets that are already loaded in extended_tables ──────
+            _live_sheets = {}
+            _needed = ["shipments", "finished_product_batches", "products",
+                       "distributors", "retailers", "warehouses"]
+            for _s in _needed:
+                _df_s = extended_tables.get(_s, pd.DataFrame())
+                if not _df_s.empty:
+                    _live_sheets[_s] = _df_s
+
+            _has_live_sheets = all(s in _live_sheets and not _live_sheets[s].empty
+                                   for s in _needed)
+
+            if _has_live_sheets:
+                st.markdown("""
+                <div style='background:linear-gradient(135deg,rgba(0,212,255,0.1),rgba(124,58,237,0.08));
+                     border:1px solid #00d4ff44;border-left:4px solid #00d4ff;border-radius:10px;
+                     padding:14px 18px;margin-bottom:12px;'>
+                  <span style='color:#00d4ff;font-weight:700;font-size:13px;'>🔄 Live Training Mode</span>
+                  <span style='color:#94a3b8;font-size:12px;margin-left:10px;'>
+                    Uploaded file detected — training XGBoost on your shipments data…
+                  </span>
+                </div>""", unsafe_allow_html=True)
+
+                _prog_bar  = st.progress(0, text="⚙️ Initialising demand pipeline…")
+                _prog_text = st.empty()
+
+                try:
+                    from demand_prediction import run_pipeline_from_sheets as _run_live
+
+                    _prog_bar.progress(10, text="📦 Joining shipments with product metadata…")
+                    _prog_text.caption("Step 1 of 5 — Enriching shipment records")
+
+                    _prog_bar.progress(28, text="📊 Aggregating to product × month grain…")
+                    _prog_text.caption("Step 2 of 5 — Building monthly demand panel")
+
+                    _prog_bar.progress(42, text="🏷️ Classifying clinical demand patterns…")
+                    _prog_text.caption("Step 3 of 5 — Rule-based pattern labelling")
+
+                    _prog_bar.progress(55, text="🔧 Engineering lag, rolling & seasonal features…")
+                    _prog_text.caption("Step 4 of 5 — Feature engineering")
+
+                    _prog_bar.progress(68, text="🤖 Training XGBoost (1M / 3M / 6M horizons)…")
+                    _prog_text.caption("Step 5 of 5 — Model training & forecasting (may take ~30–60s)")
+
+                    _cache_live = _run_live(_live_sheets)
+
+                    _prog_bar.progress(100, text="✅ Training complete!")
+                    _prog_text.empty()
+
+                    # Persist in session_state so page switches don't retrain
+                    st.session_state[_ss_key] = _cache_live
+                    _cache     = _cache_live
+                    _live_mode = True
+
+                    st.success(
+                        f"✅ Live XGBoost model trained on **{uploaded_file.name}** — "
+                        f"{len(_live_sheets['shipments']):,} shipment rows · "
+                        f"{_live_sheets['products']['product_id'].nunique():,} products",
+                        icon="🎯"
+                    )
+
+                except Exception as _live_err:
+                    _prog_bar.empty()
+                    _prog_text.empty()
+                    st.error(f"⚠️ Live training failed: {_live_err}", icon="❌")
+                    st.caption("Falling back to disk cache if available.")
+            else:
+                _missing_live = [s for s in _needed if s not in _live_sheets or _live_sheets[s].empty]
+                st.warning(
+                    f"⚠️ Uploaded file is missing required sheets for demand training: "
+                    f"`{'`, `'.join(_missing_live)}`. Using pre-computed cache.",
+                    icon="⚠️"
+                )
+
+    # ── Extract DataFrames from the cache (live or disk) ─────────────────────
+    if _cache is not None:
+        _df_monthly_shp = _cache.get("monthly_agg")
+        _df_forecasts   = _cache.get("forecasts")
+        _gen_at         = _cache.get("generated_at", "unknown")
+        if isinstance(_gen_at, str) and len(_gen_at) >= 16:
+            _gen_at = _gen_at[:16]
+
+    # ── DISK CACHE fallback (local auto-detected data or pkl from previous run) ─
+    if not _live_mode:
+        # Custom unpickler: replaces xgboost/sklearn model objects with a dummy stub
+        # so the DataFrames (monthly_agg, forecasts) still load even if xgboost is
+        # not importable in the current Python environment.
+        class _SafeUnpickler(_pkl.Unpickler):
+            class _Stub:
+                def __init__(self, *a, **kw): pass
+                def __setstate__(self, s): pass
+            def find_class(self, module, name):
+                if module.startswith("pandas") or module.startswith("numpy") or module.startswith("builtins"):
+                    return super().find_class(module, name)
+                return _SafeUnpickler._Stub
+
+        if os.path.exists(_cache_path):
+            try:
+                with open(_cache_path, "rb") as _f:
+                    _cache = _SafeUnpickler(_f).load()
+                _df_monthly_shp = _cache.get("monthly_agg")
+                _df_forecasts   = _cache.get("forecasts")
+                _gen_at         = _cache.get("generated_at", "unknown")
+                if isinstance(_gen_at, str) and len(_gen_at) >= 16:
+                    _gen_at = _gen_at[:16]
+            except Exception as _e:
+                _pkl_err = str(_e)
+
+        if os.path.exists(_forecast_path):
+            try:
+                _xf = pd.ExcelFile(_forecast_path)
+                if "model_metrics"      in _xf.sheet_names: _df_metrics  = _xf.parse("model_metrics")
+                if "feature_importance" in _xf.sheet_names: _df_fi       = _xf.parse("feature_importance")
+                if "pattern_mape"       in _xf.sheet_names: _df_pat_mape = _xf.parse("pattern_mape")
+                if _df_forecasts is None:
+                    for _sn in ["demand_forecasts", "forecasts"]:
+                        if _sn in _xf.sheet_names:
+                            _df_forecasts = _xf.parse(_sn); break
+                if _df_monthly_shp is None:
+                    for _sn in ["monthly_shipment_demand", "monthly_agg"]:
+                        if _sn in _xf.sheet_names:
+                            _df_monthly_shp = _xf.parse(_sn); break
+            except Exception: pass
+
+    # ── Extract metrics from live cache (live mode has results dict) ──────────
+    if _live_mode and _cache is not None:
+        _results_dict = _cache.get("results", {})
+        _mr_rows, _fr_rows, _pr_rows = [], [], []
+        for _hz, _res in _results_dict.items():
+            if not isinstance(_res, dict): continue
+            _m = _res.get("metrics", {})
+            _mr_rows.append({"Horizon": _hz,
+                "Val MAPE(%)": round(_m.get("val_mape", 0), 2),
+                "Val RMSE": round(_m.get("val_rmse", 0), 1),
+                "Val R2": round(_m.get("val_r2", 0), 4),
+                "Test MAPE(%)": round(_m.get("test_mape", 0), 2),
+                "Test RMSE": round(_m.get("test_rmse", 0), 1),
+                "Test R2": round(_m.get("test_r2", 0), 4)})
+            for _p, _mape in _res.get("pattern_mape", {}).items():
+                _pr_rows.append({"Horizon": _hz, "clinical_demand_pattern": _p, "MAPE(%)": _mape})
+            _fi = _res.get("feature_importance")
+            if _fi is not None:
+                _fi_tmp = _fi.copy(); _fi_tmp["Horizon"] = _hz; _fr_rows.append(_fi_tmp)
+        if _mr_rows: _df_metrics  = pd.DataFrame(_mr_rows)
+        if _pr_rows: _df_pat_mape = pd.DataFrame(_pr_rows)
+        if _fr_rows: _df_fi       = pd.concat(_fr_rows, ignore_index=True)
 
     _has_cache = (_df_monthly_shp is not None and not _df_monthly_shp.empty
                   and _df_forecasts is not None and not _df_forecasts.empty)
-    # Only surface an error if both pkl and Excel fallback failed
+
     if not _has_cache and _pkl_err:
         st.warning(f"Could not load demand data: {_pkl_err}", icon="⚠️")
-    # Set _gen_at from Excel fallback if pickle didn't provide it
     if _has_cache and _gen_at == "not generated":
         _gen_at = "Excel cache · " + pd.Timestamp.now().strftime("%Y-%m-%d")
+
 
     _PCOLS = {
         "CHRONIC_MAINTENANCE_STEADY":       "#10b981",
@@ -2459,22 +2578,33 @@ elif selected_page == "📈 Demand & Seasonality":
     }
 
     # ── METHODOLOGY BANNER ────────────────────────────────────────────────────
+    _status_badge = (
+        f"🔴 Live · Trained on {uploaded_file.name}" if (_live_mode and uploaded_file)
+        else (f"✅ Cached · {_gen_at}" if _has_cache
+              else "⚠️ Run demand_prediction.py to generate")
+    )
+    _data_src_note = (
+        f"<b>Data source:</b> Uploaded file — <code>{uploaded_file.name}</code> "
+        f"({len(extended_tables.get('shipments', pd.DataFrame())):,} shipment rows)."
+        if (uploaded_file and _live_mode)
+        else "<b>Data source:</b> Shipments sheet (20,000 transactions · 2,984 products · 8 warehouses · 25 distributors)."
+    )
     st.markdown(f"""
     <div style="background:linear-gradient(135deg,rgba(14,116,144,0.28) 0%,rgba(15,23,42,0.45) 100%);
-                border:1px solid #0e7490;border-left:5px solid #00d4ff;border-radius:0.75rem;
+                border:1px solid #0e7490;border-left:5px solid {'#00d4ff' if not _live_mode else '#10b981'};border-radius:0.75rem;
                 padding:1.2rem 1.5rem;margin-bottom:1.2rem;box-shadow:0 4px 16px rgba(0,0,0,0.3);">
       <div style="display:flex;align-items:center;gap:0.6rem;margin-bottom:0.4rem;">
-        <span style="background:#00d4ff;color:#0b132b;font-size:0.72rem;font-weight:800;
+        <span style="background:{'#10b981' if _live_mode else '#00d4ff'};color:#0b132b;font-size:0.72rem;font-weight:800;
                      padding:0.25rem 0.6rem;border-radius:0.3rem;letter-spacing:0.5px;text-transform:uppercase;">
-          XGBoost · Shipments-Driven Demand Forecasting
+          {'🔴 LIVE XGBoost · Your Uploaded Data' if _live_mode else 'XGBoost · Shipments-Driven Demand Forecasting'}
         </span>
-        <span style="color:#94a3b8;font-size:0.8rem;">{"✅ Model Loaded · " + _gen_at if _has_cache else "⚠️ Run demand_prediction.py to generate"}</span>
+        <span style="color:#94a3b8;font-size:0.8rem;">{_status_badge}</span>
       </div>
       <h3 style="color:#e0f2fe;margin:0 0 0.4rem 0;font-size:1.2rem;font-weight:700;">
         Strategic Engine 6: Clinical Demand Intelligence from Shipments
       </h3>
       <div style="color:#cbd5e1;font-size:0.84rem;line-height:1.6;">
-        <b>Data source:</b> Shipments sheet (20,000 transactions · 2,984 products · 8 warehouses · 25 distributors).<br>
+        {_data_src_note}<br>
         Clinical demand patterns <em>derived from behaviour</em> — 4 business rules, no pre-labeled categories:<br>
         &nbsp;&nbsp;① <b>CONTROLLED_SUBSTANCE_REGULATED</b> — DEA schedule (real FDA field, top priority)<br>
         &nbsp;&nbsp;② <b>SPECIALTY_ONCOLOGY_HIGH_VALUE</b> — unit price ≥$300 or oncology pharm class + low volume<br>
