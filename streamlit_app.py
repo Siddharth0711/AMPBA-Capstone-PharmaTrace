@@ -3298,38 +3298,62 @@ with 24+ months of real WMS/ERP data, MAPE would drop to 10–20%. The pipeline 
                 st.dataframe(pd.DataFrame(_ar), use_container_width=True, hide_index=True)
 
             # ── 4. SPEND BREAKDOWN & SKU-LEVEL ACTIONABLE WORKORDERS ───────────
+            st.markdown("---")
+            _c_hz_sel, _c_inv_info = st.columns([1, 2])
+            with _c_hz_sel:
+                _sel_hz = st.selectbox(
+                    "🎯 Select Planning Horizon for Workorders & Spend",
+                    ["1M (Immediate Next Month)", "3M (Quarterly Pipeline)", "6M (Half-Year Pipeline)"],
+                    index=0, key="proc_sku_hz"
+                )
+                _hz_code = _sel_hz[:2]
+            with _c_inv_info:
+                st.markdown("""
+                <div style='background:rgba(16,185,129,0.08);border:1px solid #10b98144;border-radius:8px;
+                            padding:10px 14px;margin-top:4px;font-size:11.5px;color:#cbd5e1;line-height:1.5;'>
+                  📦 <b>MRP Net Order Logic Enabled:</b> Net PO Required = <code>max(0, Gross Demand + Safety Buffer − Usable On-Hand Stock)</code>.
+                  Prevents over-procurement and costly expiry write-offs by checking real-time warehouse inventory.
+                </div>""", unsafe_allow_html=True)
+
+            _fh_sel = _df_forecasts[_df_forecasts["horizon"] == _hz_code].copy()
+
+            # Build On-Hand Inventory map per product (excluding expired/rejected Red batches)
+            _on_hand_map = {}
+            if inventory is not None and not inventory.empty and "product_id" in inventory.columns and "quantity_on_hand" in inventory.columns:
+                _usable_inv = inventory[inventory["rag_status"] != "Red"] if "rag_status" in inventory.columns else inventory
+                _on_hand_map = _usable_inv.groupby("product_id")["quantity_on_hand"].sum().to_dict()
+
             _c_sp1, _c_sp2 = st.columns([1, 1])
 
             with _c_sp1:
-                st.markdown("#### 💰 Working Capital by Clinical Pattern (1M)")
-                _fh1 = _df_forecasts[_df_forecasts["horizon"] == "1M"].copy()
-                if not _fh1.empty and "clinical_demand_pattern" in _fh1.columns:
-                    _fh1["po_val"] = _fh1["forecasted_value_usd"] * (1.0 + _buffer_pct)
-                    _p_spend = _fh1.groupby("clinical_demand_pattern")["po_val"].sum().reset_index()
+                st.markdown(f"#### 💰 Working Capital by Clinical Pattern ({_hz_code})")
+                if not _fh_sel.empty and "clinical_demand_pattern" in _fh_sel.columns:
+                    _fh_sel["po_val"] = _fh_sel["forecasted_value_usd"] * (1.0 + _buffer_pct)
+                    _p_spend = _fh_sel.groupby("clinical_demand_pattern")["po_val"].sum().reset_index()
                     _p_spend = _p_spend.sort_values("po_val", ascending=False)
                     
-                    fig_ps, ax_ps = plt.subplots(figsize=(7, 4))
+                    fig_ps, ax_ps = plt.subplots(figsize=(7, 3.8))
                     fig_ps.patch.set_facecolor("#0f1117"); ax_ps.set_facecolor("#0f1117")
-                    _bars = ax_ps.barh(
+                    ax_ps.barh(
                         [_p.replace("_"," ")[:24] for _p in _p_spend["clinical_demand_pattern"]],
                         _p_spend["po_val"] / 1e6,
                         color=[_PCOLS.get(p, "#00d4ff") for p in _p_spend["clinical_demand_pattern"]],
                         alpha=0.85, edgecolor="#334155"
                     )
                     ax_ps.set_xlabel("Procurement Capital ($ Millions)", fontsize=8, color="#94a3b8")
-                    ax_ps.set_title("1M Capital Allocation (Base + Buffer)", fontsize=9, color="#e2e8f0", fontweight="bold")
+                    ax_ps.set_title(f"{_hz_code} Capital Allocation (Base + Buffer)", fontsize=9, color="#e2e8f0", fontweight="bold")
                     ax_ps.tick_params(colors="#94a3b8"); ax_ps.invert_yaxis()
                     for sp in ax_ps.spines.values(): sp.set_edgecolor("#334155")
                     plt.tight_layout(); show_fig(fig_ps)
 
             with _c_sp2:
-                st.markdown("#### 📦 Volume by Warehouse Channel (1M)")
-                if not _fh1.empty and "dominant_wh_type" in _fh1.columns:
-                    _wh_vol = _fh1.groupby("dominant_wh_type")["forecasted_quantity"].sum().reset_index()
+                st.markdown(f"#### 📦 Volume by Warehouse Channel ({_hz_code})")
+                if not _fh_sel.empty and "dominant_wh_type" in _fh_sel.columns:
+                    _wh_vol = _fh_sel.groupby("dominant_wh_type")["forecasted_quantity"].sum().reset_index()
                     _wh_vol["Total Order"] = (_wh_vol["forecasted_quantity"] * (1.0 + _buffer_pct)).round(0).astype(int)
                     _wh_vol = _wh_vol.sort_values("Total Order", ascending=False)
 
-                    fig_wv, ax_wv = plt.subplots(figsize=(7, 4))
+                    fig_wv, ax_wv = plt.subplots(figsize=(7, 3.8))
                     fig_wv.patch.set_facecolor("#0f1117"); ax_wv.set_facecolor("#0f1117")
                     _wh_clrs = {"central":"#00d4ff","regional":"#10b981","cold-chain":"#f59e0b"}
                     ax_wv.barh(
@@ -3339,27 +3363,38 @@ with 24+ months of real WMS/ERP data, MAPE would drop to 10–20%. The pipeline 
                         alpha=0.85, edgecolor="#334155"
                     )
                     ax_wv.set_xlabel("Recommended Order (Million Units)", fontsize=8, color="#94a3b8")
-                    ax_wv.set_title("1M Units by Warehouse Type", fontsize=9, color="#e2e8f0", fontweight="bold")
+                    ax_wv.set_title(f"{_hz_code} Units by Warehouse Type", fontsize=9, color="#e2e8f0", fontweight="bold")
                     ax_wv.tick_params(colors="#94a3b8"); ax_wv.invert_yaxis()
                     for sp in ax_wv.spines.values(): sp.set_edgecolor("#334155")
                     plt.tight_layout(); show_fig(fig_wv)
 
-            # ── 5. TOP URGENT PURCHASE ORDERS TABLE (SKU-LEVEL WORKORDERS) ──────
+            # ── 5. TOP URGENT PURCHASE ORDERS TABLE (SKU-LEVEL NET WORKORDERS) ───
             st.markdown("---")
-            st.markdown("#### 🚨 Immediate Action Workorders — Top Urgent SKUs (1M Horizon)")
-            st.caption("Highest-volume medications requiring Purchase Order issuance within the next 30 days.")
+            st.markdown(f"#### 🚨 Material Requirements Workorders — Top SKUs ({_hz_code} Horizon)")
+            st.caption("Net Purchase Order calculation factoring in Gross AI Demand, Safety Buffer, and Usable On-Hand Warehouse Stock.")
 
-            _f1_sku = _fh1.copy()
-            _f1_sku["Buffer Units"] = (_f1_sku["forecasted_quantity"] * _buffer_pct).round(0).astype(int)
-            _f1_sku["Total Order Units"] = (_f1_sku["forecasted_quantity"] + _f1_sku["Buffer Units"]).astype(int)
-            _f1_sku["Total PO Value"] = (_f1_sku["Total Order Units"] * _f1_sku["unit_price"]).round(2)
-            _f1_sku = _f1_sku.sort_values("forecasted_quantity", ascending=False)
+            _f_sku = _fh_sel.copy()
+            _f_sku["Gross Demand"] = _f_sku["forecasted_quantity"].astype(int)
+            _f_sku["Buffer Units"] = (_f_sku["Gross Demand"] * _buffer_pct).round(0).astype(int)
+            _f_sku["Total Gross Need"] = _f_sku["Gross Demand"] + _f_sku["Buffer Units"]
+            _f_sku["On Hand Stock"] = _f_sku["product_id"].map(_on_hand_map).fillna(0).astype(int)
+            _f_sku["Net PO Required"] = (_f_sku["Total Gross Need"] - _f_sku["On Hand Stock"]).clip(lower=0).astype(int)
+            _f_sku["Net PO Value ($)"] = (_f_sku["Net PO Required"] * _f_sku["unit_price"]).round(2)
+            _f_sku["Stock Status"] = np.where(
+                _f_sku["On Hand Stock"] >= _f_sku["Total Gross Need"],
+                "🟢 Covered by Stock",
+                "🚨 Reorder Shortfall"
+            )
+
+            # Sort by Net PO Value descending to highlight highest financial / inventory priorities
+            _f_sku = _f_sku.sort_values("Net PO Required", ascending=False)
 
             _sku_cols = [c for c in ["product_id", "generic_name", "clinical_demand_pattern",
-                                     "forecasted_quantity", "Buffer Units", "Total Order Units",
-                                     "unit_price", "Total PO Value", "dominant_wh_type", "dominant_region"] if c in _f1_sku.columns]
-            _sku_disp = _f1_sku[_sku_cols].head(20).copy()
-            _sku_disp.columns = [c.replace("_", " ").title() for c in _sku_cols]
+                                     "Gross Demand", "Buffer Units", "Total Gross Need",
+                                     "On Hand Stock", "Net PO Required", "unit_price",
+                                     "Net PO Value ($)", "Stock Status", "dominant_wh_type", "dominant_region"] if c in _f_sku.columns]
+            _sku_disp = _f_sku[_sku_cols].head(25).copy()
+            _sku_disp.columns = [c.replace("_", " ").title() if not c.startswith("Net PO Value") else c for c in _sku_cols]
             st.dataframe(_sku_disp, use_container_width=True, hide_index=True)
 
         # ── 6. CLINICAL PATTERN LEAD-TIME CALENDAR ─────────────────────────────
