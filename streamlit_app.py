@@ -2366,22 +2366,38 @@ elif selected_page == "📈 Demand & Seasonality":
         st.markdown(get_current_glossary()["Demand Trend"])
 
     # ── Load pre-computed cache from demand_prediction.py ────────────────────
-    import pickle as _pkl
+    import pickle as _pkl, io as _io
     _cache_path    = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "demand_model_cache.pkl")
     _forecast_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "demand_forecast_results.xlsx")
 
     _cache = None; _df_monthly_shp = None; _df_forecasts = None
-    _df_metrics = None; _df_fi = None; _df_pat_mape = None; _gen_at = "not generated"
+    _df_metrics = None; _df_fi = None; _df_pat_mape = None; _gen_at = "not generated"; _pkl_err = None
+
+    # Custom unpickler: replaces xgboost/sklearn model objects with a dummy stub
+    # so the DataFrames (monthly_agg, forecasts) still load even if xgboost is
+    # not importable in the current Python environment.
+    class _SafeUnpickler(_pkl.Unpickler):
+        class _Stub:
+            def __init__(self, *a, **kw): pass
+            def __setstate__(self, s): pass
+        def find_class(self, module, name):
+            # Let pandas / numpy through normally
+            if module.startswith("pandas") or module.startswith("numpy") or module.startswith("builtins"):
+                return super().find_class(module, name)
+            # Stub out everything else (xgboost, sklearn, etc.)
+            return _SafeUnpickler._Stub
 
     if os.path.exists(_cache_path):
         try:
             with open(_cache_path, "rb") as _f:
-                _cache = _pkl.load(_f)
+                _cache = _SafeUnpickler(_f).load()
             _df_monthly_shp = _cache.get("monthly_agg")
             _df_forecasts   = _cache.get("forecasts")
-            _gen_at         = _cache.get("generated_at", "unknown")[:16]
+            _gen_at         = _cache.get("generated_at", "unknown")
+            if isinstance(_gen_at, str) and len(_gen_at) >= 16:
+                _gen_at = _gen_at[:16]
         except Exception as _e:
-            st.warning(f"Could not load demand model cache: {_e}", icon="⚠️")
+            _pkl_err = str(_e)  # stored; shown only if Excel fallback also fails
 
     if os.path.exists(_forecast_path):
         try:
@@ -2389,10 +2405,23 @@ elif selected_page == "📈 Demand & Seasonality":
             if "model_metrics"      in _xf.sheet_names: _df_metrics  = _xf.parse("model_metrics")
             if "feature_importance" in _xf.sheet_names: _df_fi       = _xf.parse("feature_importance")
             if "pattern_mape"       in _xf.sheet_names: _df_pat_mape = _xf.parse("pattern_mape")
+            # If pickle failed for forecasts, load from Excel as fallback
+            # Sheet names: "demand_forecasts" and "monthly_shipment_demand"
+            if _df_forecasts is None:
+                for _sn in ["demand_forecasts", "forecasts"]:
+                    if _sn in _xf.sheet_names:
+                        _df_forecasts = _xf.parse(_sn); break
+            if _df_monthly_shp is None:
+                for _sn in ["monthly_shipment_demand", "monthly_agg"]:
+                    if _sn in _xf.sheet_names:
+                        _df_monthly_shp = _xf.parse(_sn); break
         except Exception: pass
 
-    _has_cache = (_cache is not None and _df_monthly_shp is not None
+    _has_cache = (_df_monthly_shp is not None and not _df_monthly_shp.empty
                   and _df_forecasts is not None and not _df_forecasts.empty)
+    # Only surface an error if both pkl and Excel fallback failed
+    if not _has_cache and locals().get("_pkl_err"):
+        st.warning(f"Could not load demand data: {_pkl_err}", icon="⚠️")
 
     _PCOLS = {
         "CHRONIC_MAINTENANCE_STEADY":       "#10b981",
@@ -2400,11 +2429,17 @@ elif selected_page == "📈 Demand & Seasonality":
         "CONTROLLED_SUBSTANCE_REGULATED":   "#ef4444",
         "SPECIALTY_ONCOLOGY_HIGH_VALUE":    "#7c3aed",
     }
+    # CSS-circle icons replace emoji (emojis render as gray boxes in some browsers)
+    def _circle_icon(color, symbol=""):
+        return (f'<div style="width:2.2rem;height:2.2rem;border-radius:50%;'
+                f'background:{color};margin:0 auto 0.3rem auto;'
+                f'display:flex;align-items:center;justify-content:center;'
+                f'font-size:1rem;color:#fff;font-weight:800;">{symbol}</div>')
     _PICONS = {
-        "CHRONIC_MAINTENANCE_STEADY":       "🟢",
-        "ACUTE_SEASONAL_WINTER_SURGE":      "❄️",
-        "CONTROLLED_SUBSTANCE_REGULATED":   "🔴",
-        "SPECIALTY_ONCOLOGY_HIGH_VALUE":    "💎",
+        "CHRONIC_MAINTENANCE_STEADY":       _circle_icon("#10b981", "✓"),
+        "ACUTE_SEASONAL_WINTER_SURGE":      _circle_icon("#f59e0b", "❄"),
+        "CONTROLLED_SUBSTANCE_REGULATED":   _circle_icon("#ef4444", "R"),
+        "SPECIALTY_ONCOLOGY_HIGH_VALUE":    _circle_icon("#7c3aed", "★"),
     }
     _PDESC = {
         "CHRONIC_MAINTENANCE_STEADY":     "Diabetes, BP meds, cardiovascular — stable year-round. Low CV. No regulatory flags.",
@@ -2466,11 +2501,14 @@ elif selected_page == "📈 Demand & Seasonality":
             for _i, _row in _pc.iterrows():
                 _pt = _row["Pattern"]
                 with _ccols[_i % len(_ccols)]:
+                    # _PICONS now returns a CSS-circle HTML string, injected directly
+                    _default_icon = (f'<div style="width:2.2rem;height:2.2rem;border-radius:50%;'
+                                     f'background:#64748b;margin:0 auto 0.3rem auto;"></div>')
                     st.markdown(f"""
                     <div style="background:rgba(0,0,0,0.3);border:1px solid {_PCOLS.get(_pt,'#64748b')};
                                 border-top:4px solid {_PCOLS.get(_pt,'#64748b')};border-radius:0.6rem;
                                 padding:0.9rem;text-align:center;margin-bottom:0.6rem;">
-                      <div style="font-size:1.8rem">{_PICONS.get(_pt,"⬜")}</div>
+                      {_PICONS.get(_pt, _default_icon)}
                       <div style="color:{_PCOLS.get(_pt,'#64748b')};font-size:0.68rem;font-weight:800;
                                   text-transform:uppercase;margin:0.3rem 0;">{_pt.replace("_"," ")}</div>
                       <div style="color:#e0f2fe;font-size:1.6rem;font-weight:800;">{_row['Share (%)']:.1f}%</div>

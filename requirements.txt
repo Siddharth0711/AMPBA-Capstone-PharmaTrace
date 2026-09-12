@@ -9,6 +9,7 @@ seaborn>=0.13
 
 # ── Machine Learning ──────────────────────────────────────────────────────────
 scikit-learn>=1.4             # RandomForestClassifier — flexible pin for Py3.14
+xgboost>=2.0                  # XGBoost demand forecasting (demand_prediction.py)
 
 # ── Mathematical Optimisation ─────────────────────────────────────────────────
 scipy>=1.13                   # linprog (HiGHS LP solver)
