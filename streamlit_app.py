@@ -957,6 +957,13 @@ def load_all_data(src):
         else:
             extended_tables[ext_sheet] = pd.DataFrame()
 
+    # ── Also expose core sheets needed by demand pipeline ────────────────────
+    # products, warehouses, finished_product_batches are top-level locals here;
+    # adding them to extended_tables makes live demand training work on upload.
+    extended_tables["products"]                = products
+    extended_tables["warehouses"]              = warehouses
+    extended_tables["finished_product_batches"] = batches  # batches read at top of this fn
+
     # Check if supplementary data is usable
     supp_loaded = (not df_demand.empty) or (not df_txns.empty) or (not df_econ.empty)
 
@@ -1015,6 +1022,11 @@ def load_local_legacy():
                       "raw_material_batches", "returns", "recalls", "disposal", "compliance_documents",
                       "ai_prediction_data", "shipments", "manufacturers", "distributors", "retailers"]:
         extended_tables[ext_sheet] = read_loc(ext_sheet)
+
+    # Expose core sheets needed by demand pipeline
+    extended_tables["products"]                = products
+    extended_tables["warehouses"]              = warehouses
+    extended_tables["finished_product_batches"] = read_loc("finished_product_batches")
 
     return products, warehouses, inventory, df_demand, df_txns, df_econ, df_freight, df_iot, True, extended_tables
 
@@ -2396,7 +2408,7 @@ elif selected_page == "📈 Demand & Seasonality":
             _cache       = st.session_state[_ss_key]
             _live_mode   = True
         else:
-            # ── Gather sheets that are already loaded in extended_tables ──────
+            # ── Gather sheets already loaded in extended_tables ──────────
             _live_sheets = {}
             _needed = ["shipments", "finished_product_batches", "products",
                        "distributors", "retailers", "warehouses"]
@@ -2404,6 +2416,14 @@ elif selected_page == "📈 Demand & Seasonality":
                 _df_s = extended_tables.get(_s, pd.DataFrame())
                 if not _df_s.empty:
                     _live_sheets[_s] = _df_s
+
+            # Safety fallback: products & warehouses are top-level variables
+            # (unpacked from get_data()); use them directly if extended_tables
+            # didn't have them (e.g. older cache from before this fix).
+            if "products" not in _live_sheets and products is not None and not products.empty:
+                _live_sheets["products"] = products
+            if "warehouses" not in _live_sheets and warehouses is not None and not warehouses.empty:
+                _live_sheets["warehouses"] = warehouses
 
             _has_live_sheets = all(s in _live_sheets and not _live_sheets[s].empty
                                    for s in _needed)
