@@ -2420,8 +2420,11 @@ elif selected_page == "📈 Demand & Seasonality":
     _has_cache = (_df_monthly_shp is not None and not _df_monthly_shp.empty
                   and _df_forecasts is not None and not _df_forecasts.empty)
     # Only surface an error if both pkl and Excel fallback failed
-    if not _has_cache and locals().get("_pkl_err"):
+    if not _has_cache and _pkl_err:
         st.warning(f"Could not load demand data: {_pkl_err}", icon="⚠️")
+    # Set _gen_at from Excel fallback if pickle didn't provide it
+    if _has_cache and _gen_at == "not generated":
+        _gen_at = "Excel cache · " + pd.Timestamp.now().strftime("%Y-%m-%d")
 
     _PCOLS = {
         "CHRONIC_MAINTENANCE_STEADY":       "#10b981",
@@ -2693,24 +2696,29 @@ elif selected_page == "📈 Demand & Seasonality":
                 st.markdown("#### 🌍 Demand by Region")
                 _reg_col = "dominant_region" if "dominant_region" in _src3.columns else None
                 if _reg_col:
-                    _rr = (_src3.groupby(_reg_col).agg(
-                        Total=("total_quantity","sum"),
-                        Products=("product_id","nunique"),
-                        AvgMo=("total_quantity","mean"),
-                        DelayRate=("delay_rate","mean") if "delay_rate" in _src3.columns else ("total_quantity","count")
-                        ).reset_index().sort_values("Total", ascending=False))
+                    # Build aggregation dict dynamically based on available columns
+                    _rr_agg = dict(Total=("total_quantity","sum"), Products=("product_id","nunique"))
+                    if "delay_rate" in _src3.columns:
+                        _rr_agg["DelayRate"] = ("delay_rate","mean")
+                    _rr = (_src3.groupby(_reg_col).agg(**_rr_agg)
+                           .reset_index().sort_values("Total", ascending=False))
                     _rr["Total"] = _rr["Total"].astype(int)
                     _rr["Share(%)"] = (_rr["Total"] / _rr["Total"].sum() * 100).round(1)
-                    if "delay_rate" in _src3.columns:
-                        _rr["Delay Rate(%)"] = (_rr["delay_rate"] * 100).round(1)
-                        _rr = _rr.drop(columns=["delay_rate"], errors="ignore")
-                    _rr.columns = _rr.columns.str.replace("dominant_region","Region").str.replace("_"," ").str.title()
-                    st.dataframe(_rr, use_container_width=True, hide_index=True)
+                    if "DelayRate" in _rr.columns:
+                        _rr["Delay Rate(%)"] = (_rr["DelayRate"] * 100).round(1)
+                        _rr = _rr.drop(columns=["DelayRate"])
+                    # Keep raw values for charting BEFORE renaming columns
+                    _rr_regions = _rr[_reg_col].astype(str).tolist()
+                    _rr_totals  = (_rr["Total"].values / 1e6).tolist()
+                    # Now rename for display
+                    _rr_display = _rr.rename(columns={_reg_col: "Region", "Total": "Total Units",
+                                                       "Products": "Products", "Share(%)": "Share(%)"})
+                    st.dataframe(_rr_display, use_container_width=True, hide_index=True)
                     fig_rr, ax_rr = plt.subplots(figsize=(8, 4))
                     fig_rr.patch.set_facecolor("#0f1117"); ax_rr.set_facecolor("#0f1117")
                     _reg_colors = ["#10b981", "#00d4ff", "#f59e0b", "#7c3aed"]
-                    ax_rr.barh(_rr.iloc[:, 0].astype(str), _rr["Total"].values / 1e6,
-                               color=_reg_colors[:len(_rr)], alpha=0.85, edgecolor="#334155")
+                    ax_rr.barh(_rr_regions, _rr_totals,
+                               color=_reg_colors[:len(_rr_regions)], alpha=0.85, edgecolor="#334155")
                     ax_rr.set_xlabel("Total Units (M)", fontsize=9, color="#94a3b8")
                     ax_rr.set_title("Demand by Region", fontsize=10, color="#e2e8f0", fontweight="bold")
                     ax_rr.tick_params(colors="#94a3b8"); ax_rr.invert_yaxis()
@@ -2743,19 +2751,24 @@ elif selected_page == "📈 Demand & Seasonality":
             with _c4w:
                 st.markdown("#### ⏱️ Delay Rate by Warehouse Type")
                 if "delay_rate" in _src3.columns and "dominant_wh_type" in _src3.columns:
-                    _dlr = (_src3.groupby("dominant_wh_type").agg(
-                        AvgDelay=("delay_rate","mean"),
-                        TotalShipments=("num_shipments","sum") if "num_shipments" in _src3.columns else ("total_quantity","count")
-                        ).reset_index())
-                    _dlr["AvgDelay(%)"] = (_dlr["AvgDelay"] * 100).round(2)
-                    _dlr = _dlr.drop(columns=["AvgDelay"]).sort_values("AvgDelay(%)", ascending=False)
-                    st.dataframe(_dlr.rename(columns={"dominant_wh_type":"Warehouse Type","TotalShipments":"Total Shipments"}),
-                                 use_container_width=True, hide_index=True)
+                    _dlr_agg = dict(AvgDelay=("delay_rate","mean"))
+                    if "num_shipments" in _src3.columns:
+                        _dlr_agg["TotalShipments"] = ("num_shipments","sum")
+                    _dlr = (_src3.groupby("dominant_wh_type").agg(**_dlr_agg).reset_index())
+                    _dlr["Avg Delay(%)"] = (_dlr["AvgDelay"] * 100).round(2)
+                    _dlr = _dlr.drop(columns=["AvgDelay"]).sort_values("Avg Delay(%)", ascending=False)
+                    # Keep raw values for chart BEFORE renaming
+                    _dlr_wh_labels = _dlr["dominant_wh_type"].astype(str).tolist()
+                    _dlr_vals      = _dlr["Avg Delay(%)"].tolist()
+                    _dl_colors     = ["#ef4444" if v > 5 else "#10b981" for v in _dlr_vals]
+                    # Rename for display
+                    _dlr_display = _dlr.rename(columns={"dominant_wh_type": "Warehouse Type",
+                                                         "TotalShipments": "Total Shipments"} if "TotalShipments" in _dlr.columns
+                                               else {"dominant_wh_type": "Warehouse Type"})
+                    st.dataframe(_dlr_display, use_container_width=True, hide_index=True)
                     fig_dl, ax_dl = plt.subplots(figsize=(8, 3))
                     fig_dl.patch.set_facecolor("#0f1117"); ax_dl.set_facecolor("#0f1117")
-                    _dl_colors = ["#ef4444" if v > 5 else "#10b981" for v in _dlr["AvgDelay(%)"]]
-                    ax_dl.barh(_dlr["Warehouse Type"] if "Warehouse Type" in _dlr.columns else _dlr.iloc[:,0],
-                               _dlr["AvgDelay(%)"],
+                    ax_dl.barh(_dlr_wh_labels, _dlr_vals,
                                color=_dl_colors, alpha=0.85, edgecolor="#334155")
                     ax_dl.axvline(5, color="#f59e0b", linestyle="--", linewidth=1.5, label="5% threshold")
                     ax_dl.set_xlabel("Avg Delay Rate (%)", fontsize=9, color="#94a3b8")
