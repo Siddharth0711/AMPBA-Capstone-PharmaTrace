@@ -2674,73 +2674,81 @@ elif selected_page == "📈 Demand & Seasonality":
 
             with _c1w:
                 st.markdown("#### 🏭 Warehouse Demand Ranking")
-                # Load live warehouse demand directly from raw master dataset shipments
-                # so we can show individual warehouse IDs (WH001-WH008) with names & cities
+                # Load from pre-computed CSVs (committed to repo, tiny files — work on Streamlit Cloud)
+                # warehouse_demand_summary.csv : 8 rows, one per warehouse
+                # warehouse_monthly_trend.csv  : 273 rows, monthly volume per warehouse
+                _wh_sum_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                             "data", "warehouse_demand_summary.csv")
+                _wh_mo_path  = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                             "data", "warehouse_monthly_trend.csv")
                 try:
-                    _mdata_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                        "data", "PharmaTrace_Master_Dataset_Production_Extended_Cleaned.xlsx")
-                    _mxf = pd.ExcelFile(_mdata_path)
-                    _shp_raw = _mxf.parse("shipments")[["shipment_id","origin_warehouse_id",
-                                                          "fp_batch_id","quantity","status"]]
-                    _fpb_raw = _mxf.parse("finished_product_batches")[["fp_batch_id","product_id"]].drop_duplicates()
-                    _wh_raw  = _mxf.parse("warehouses")[["warehouse_id","warehouse_name",
-                                                           "warehouse_type","city","state",
-                                                           "capacity_units","temp_controlled"]]
-                    _shp_raw = _shp_raw.merge(_fpb_raw, on="fp_batch_id", how="left")
-                    _shp_raw = _shp_raw.merge(_wh_raw, left_on="origin_warehouse_id",
-                                              right_on="warehouse_id", how="left")
-                    _wr_live = _shp_raw.groupby(
-                        ["warehouse_id","warehouse_name","warehouse_type","city","state","capacity_units"]
-                    ).agg(
-                        Total_Units=("quantity","sum"),
-                        Products=("product_id","nunique"),
-                        Shipments=("shipment_id","count"),
-                        Delayed=("status", lambda x: (x=="delayed").sum())
-                    ).reset_index().sort_values("Total_Units", ascending=False)
-                    _wr_live["Delay Rate(%)"] = (_wr_live["Delayed"] / _wr_live["Shipments"] * 100).round(1)
-                    _wr_live["Utilization(%)"] = (_wr_live["Total_Units"] / _wr_live["capacity_units"] * 100).round(1)
-                    _wr_live["Share(%)"]       = (_wr_live["Total_Units"] / _wr_live["Total_Units"].sum() * 100).round(1)
-                    _wr_live["Total Units"]    = _wr_live["Total_Units"].astype(int)
-                    _wr_disp = _wr_live[["warehouse_id","warehouse_name","warehouse_type",
-                                          "city","state","Total Units","Products","Shipments",
-                                          "Share(%)","Utilization(%)","Delay Rate(%)"]]
+                    _wr = pd.read_csv(_wh_sum_path).sort_values("total_units", ascending=False).reset_index(drop=True)
+                    _wr["share_pct"] = (_wr["total_units"] / _wr["total_units"].sum() * 100).round(1)
+                    # Display table
+                    _wr_disp = _wr[["warehouse_id","warehouse_name","warehouse_type","city","state",
+                                    "total_units","num_products","num_shipments",
+                                    "share_pct","utilization_pct","delay_rate_pct"]].copy()
                     _wr_disp.columns = ["WH ID","Warehouse Name","Type","City","State",
-                                         "Total Units","Products","Shipments",
-                                         "Share(%)","Utilization(%)","Delay Rate(%)"]
+                                        "Total Units","Products","Shipments",
+                                        "Share(%)","Utilization(%)","Delay Rate(%)"]
                     st.dataframe(_wr_disp, use_container_width=True, hide_index=True)
-                    # Horizontal bar chart by warehouse
-                    _wr_labels = (_wr_live["warehouse_id"] + " · " + _wr_live["city"]).tolist()
-                    _wr_vals   = (_wr_live["Total_Units"] / 1e6).tolist()
+                    # Horizontal bar chart — one bar per warehouse
                     _wr_type_clr = {"central":"#00d4ff","regional":"#10b981","cold-chain":"#f59e0b"}
-                    _wr_clrs   = [_wr_type_clr.get(t,"#64748b") for t in _wr_live["warehouse_type"].tolist()]
+                    _wr_labels = (_wr["warehouse_id"] + " · " + _wr["city"]).tolist()
+                    _wr_vals   = (_wr["total_units"] / 1e6).tolist()
+                    _wr_clrs   = [_wr_type_clr.get(str(t),"#64748b") for t in _wr["warehouse_type"].tolist()]
                     fig_wh, ax_wh = plt.subplots(figsize=(8, 5))
                     fig_wh.patch.set_facecolor("#0f1117"); ax_wh.set_facecolor("#0f1117")
-                    _bars = ax_wh.barh(_wr_labels, _wr_vals, color=_wr_clrs, alpha=0.85,
-                                        edgecolor="#334155", linewidth=0.8)
-                    for _bi, (_bv, _bs) in enumerate(zip(_wr_vals, _wr_live["Share(%)"].tolist())):
+                    ax_wh.barh(_wr_labels, _wr_vals, color=_wr_clrs, alpha=0.85,
+                               edgecolor="#334155", linewidth=0.8)
+                    for _bi, (_bv, _bs) in enumerate(zip(_wr_vals, _wr["share_pct"].tolist())):
                         ax_wh.text(_bv + 0.02, _bi, f"{_bs}%", va="center",
                                    fontsize=8, color="#e2e8f0", fontweight="bold")
                     ax_wh.set_xlabel("Total Units Shipped (M)", fontsize=9, color="#94a3b8")
                     ax_wh.set_title("Warehouse Demand Ranking (color = type)",
                                     fontsize=10, color="#e2e8f0", fontweight="bold")
-                    ax_wh.invert_yaxis()
-                    ax_wh.tick_params(colors="#94a3b8")
-                    # Legend for type colors
+                    ax_wh.invert_yaxis(); ax_wh.tick_params(colors="#94a3b8")
                     from matplotlib.patches import Patch as _Patch
                     ax_wh.legend(handles=[_Patch(color=v, label=k) for k,v in _wr_type_clr.items()],
-                                  fontsize=8, framealpha=0, labelcolor="#e2e8f0", loc="lower right")
+                                 fontsize=8, framealpha=0, labelcolor="#e2e8f0", loc="lower right")
                     for sp in ax_wh.spines.values(): sp.set_edgecolor("#334155")
                     plt.tight_layout(); show_fig(fig_wh)
+                    # Monthly volume trend per warehouse
+                    if os.path.exists(_wh_mo_path):
+                        st.markdown("##### 📈 Monthly Volume by Warehouse")
+                        _wm = pd.read_csv(_wh_mo_path).sort_values(["warehouse_id","year_month"])
+                        _wh_ids = _wm["warehouse_id"].unique().tolist()
+                        _ref_wm = _wm[_wm["warehouse_id"]==_wh_ids[0]]["year_month"].tolist()
+                        fig_wmt, ax_wmt = plt.subplots(figsize=(8, 4))
+                        fig_wmt.patch.set_facecolor("#0f1117"); ax_wmt.set_facecolor("#0f1117")
+                        for _wid in _wh_ids:
+                            _wg = _wm[_wm["warehouse_id"]==_wid].copy().reset_index(drop=True)
+                            _wt_arr = _wr.loc[_wr["warehouse_id"]==_wid, "warehouse_type"].values
+                            _wc = _wr_type_clr.get(str(_wt_arr[0]) if len(_wt_arr) else "", "#64748b")
+                            ax_wmt.plot(range(len(_wg)), _wg["total_units"]/1e3,
+                                        label=_wid, lw=1.5, color=_wc, alpha=0.8, marker="o", markersize=2)
+                        _step_wmt = max(1, len(_ref_wm)//8)
+                        ax_wmt.set_xticks(list(range(len(_ref_wm)))[::_step_wmt])
+                        ax_wmt.set_xticklabels(_ref_wm[::_step_wmt], rotation=30, ha="right",
+                                               fontsize=7, color="#94a3b8")
+                        ax_wmt.set_ylabel("Units (K)", fontsize=8, color="#94a3b8")
+                        ax_wmt.set_title("Monthly Shipment Volume per Warehouse", fontsize=9, color="#e2e8f0")
+                        ax_wmt.legend(fontsize=7, framealpha=0, labelcolor="#e2e8f0", ncol=2)
+                        ax_wmt.tick_params(axis="y", colors="#94a3b8")
+                        for sp in ax_wmt.spines.values(): sp.set_edgecolor("#334155")
+                        plt.tight_layout(); show_fig(fig_wmt)
                 except Exception as _wh_ex:
-                    # Graceful fallback to warehouse type grouping
+                    # Fallback: warehouse type grouping from monthly_shipment_demand
                     _wh_col = "dominant_wh_type" if "dominant_wh_type" in _src3.columns else None
                     if _wh_col:
                         _wr_fb = _src3.groupby(_wh_col).agg(
                             Total=("total_quantity","sum"), Products=("product_id","nunique")
                         ).reset_index().sort_values("Total", ascending=False)
                         _wr_fb["Share(%)"] = (_wr_fb["Total"] / _wr_fb["Total"].sum() * 100).round(1)
-                        st.dataframe(_wr_fb, use_container_width=True, hide_index=True)
-                    st.caption(f"⚠️ Could not load individual warehouse data: {_wh_ex}")
+                        st.dataframe(_wr_fb.rename(columns={"dominant_wh_type":"Warehouse Type",
+                                                             "Total":"Total Units"}),
+                                     use_container_width=True, hide_index=True)
+                    st.caption(f"ℹ️ Warehouse type summary shown (CSV unavailable: {_wh_ex})")
 
             with _c2w:
                 st.markdown("#### 🌍 Demand by Region")

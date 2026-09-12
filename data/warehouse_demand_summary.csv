@@ -1,0 +1,9 @@
+warehouse_id,warehouse_name,warehouse_type,city,state,capacity_units,temp_controlled,total_units,num_products,num_shipments,delay_rate_pct,utilization_pct,share_pct
+WH001,Central DC - New Jersey,central,Edison,NJ,500000,True,4106185,1701,4806,0.0,821.2,22.9
+WH008,Central DC - Nevada,central,Reno,NV,300000,True,3560871,1575,3782,0.0,1187.0,19.9
+WH004,Regional DC - California,regional,Ontario,CA,250000,False,2156433,983,2268,0.0,862.6,12.0
+WH006,Cold Chain Hub - Pennsylvania,cold-chain,Philadelphia,PA,90000,True,1920916,990,1992,0.0,2134.4,10.7
+WH003,Cold Chain Hub - Illinois,cold-chain,Chicago,IL,100000,True,1915604,1093,2274,0.0,1915.6,10.7
+WH002,Regional DC - Texas,regional,Dallas,TX,200000,False,1674927,862,1792,0.0,837.5,9.3
+WH005,Regional DC - Georgia,regional,Atlanta,GA,180000,False,1365501,800,1608,0.0,758.6,7.6
+WH007,Regional DC - Ohio,regional,Columbus,OH,150000,False,1231967,767,1478,0.0,821.3,6.9
