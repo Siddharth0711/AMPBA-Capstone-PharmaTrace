@@ -2547,13 +2547,22 @@ elif selected_page == "📈 Demand & Seasonality":
         for _hz, _res in _results_dict.items():
             if not isinstance(_res, dict): continue
             _m = _res.get("metrics", {})
-            _mr_rows.append({"Horizon": _hz,
-                "Val MAPE(%)": round(_m.get("val_mape", 0), 2),
-                "Val RMSE": round(_m.get("val_rmse", 0), 1),
-                "Val R2": round(_m.get("val_r2", 0), 4),
+            _mr_rows.append({
+                "Horizon": _hz,
+                "Train Period": _res.get("train_period", ""),
+                "Test Period":  _res.get("test_period", ""),
+                "Train Rows":   _res.get("train_size", 0),
+                "Test Rows":    _res.get("test_size", 0),
                 "Test MAPE(%)": round(_m.get("test_mape", 0), 2),
-                "Test RMSE": round(_m.get("test_rmse", 0), 1),
-                "Test R2": round(_m.get("test_r2", 0), 4)})
+                "Test RMSE":    round(_m.get("test_rmse", 0), 1),
+                "Test R²":      round(_m.get("test_r2", 0), 4),
+                "Test R2":      round(_m.get("test_r2", 0), 4),
+                "Train %":      _res.get("train_pct", 80),
+                "Test %":       _res.get("test_pct", 20),
+                "Val MAPE(%)":  round(_m.get("val_mape", 0), 2),
+                "Val RMSE":     round(_m.get("val_rmse", 0), 1),
+                "Val R2":       round(_m.get("val_r2", 0), 4),
+            })
             for _p, _mape in _res.get("pattern_mape", {}).items():
                 _pr_rows.append({"Horizon": _hz, "clinical_demand_pattern": _p, "MAPE(%)": _mape})
             _fi = _res.get("feature_importance")
@@ -3141,6 +3150,8 @@ elif selected_page == "📈 Demand & Seasonality":
             </div>""", unsafe_allow_html=True)
 
         if _df_metrics is not None and not _df_metrics.empty:
+            if "Test R2" in _df_metrics.columns and "Test R²" not in _df_metrics.columns:
+                _df_metrics["Test R²"] = _df_metrics["Test R2"]
             st.markdown("#### 📊 Test-Set Performance by Horizon")
             _disp_cols = [c for c in ["Horizon","Train Period","Test Period",
                                        "Train Rows","Test Rows",
