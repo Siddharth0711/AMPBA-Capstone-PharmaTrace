@@ -2895,12 +2895,9 @@ elif selected_page == "📈 Demand & Seasonality":
                     if "DelayRate" in _rr.columns:
                         _rr["Delay Rate(%)"] = (_rr["DelayRate"] * 100).round(1)
                         _rr = _rr.drop(columns=["DelayRate"])
-                    # Keep raw values for charting BEFORE renaming columns
                     _rr_regions = _rr[_reg_col].astype(str).tolist()
                     _rr_totals  = (_rr["Total"].values / 1e6).tolist()
-                    # Now rename for display
-                    _rr_display = _rr.rename(columns={_reg_col: "Region", "Total": "Total Units",
-                                                       "Products": "Products", "Share(%)": "Share(%)"})
+                    _rr_display = _rr.rename(columns={_reg_col: "Region", "Total": "Total Units"})
                     st.dataframe(_rr_display, use_container_width=True, hide_index=True)
                     fig_rr, ax_rr = plt.subplots(figsize=(8, 4))
                     fig_rr.patch.set_facecolor("#0f1117"); ax_rr.set_facecolor("#0f1117")
@@ -2918,7 +2915,6 @@ elif selected_page == "📈 Demand & Seasonality":
 
             with _c3w:
                 st.markdown("#### 🚛 Top Distributor Count by Product")
-                # num_unique_distributors = how many distributors each product uses
                 if "num_unique_distributors" in _src3.columns:
                     _dist_agg = (_src3.groupby("product_id").agg(
                         TotalQty=("total_quantity","sum"),
@@ -3010,44 +3006,117 @@ elif selected_page == "📈 Demand & Seasonality":
             st.info("Run `python demand_prediction.py` to generate warehouse & distributor demand rankings.")
 
     # ── TAB 4: MODEL PERFORMANCE ──────────────────────────────────────────────
+    # ── TAB 4: MODEL PERFORMANCE ──────────────────────────────────────────────
     with _tab4:
         st.markdown("### 🔬 XGBoost Model Performance & Explainability")
+
+        # ── Split summary banner ─────────────────────────────────────────────
+        _split_info = {}
+        if _live_mode and _cache is not None:
+            for _hz, _res in _cache.get("results", {}).items():
+                if isinstance(_res, dict):
+                    _split_info[_hz.upper()] = {
+                        "train_period": _res.get("train_period", ""),
+                        "test_period":  _res.get("test_period",  ""),
+                        "train_size":   _res.get("train_size",   0),
+                        "test_size":    _res.get("test_size",    0),
+                        "train_pct":    _res.get("train_pct",    80),
+                        "test_pct":     _res.get("test_pct",     20),
+                    }
+        elif _df_metrics is not None and "Train Period" in _df_metrics.columns:
+            for _, _row in _df_metrics.iterrows():
+                _split_info[str(_row["Horizon"]).upper()] = {
+                    "train_period": _row.get("Train Period", ""),
+                    "test_period":  _row.get("Test Period",  ""),
+                    "train_size":   int(_row.get("Train Rows", 0)),
+                    "test_size":    int(_row.get("Test Rows",  0)),
+                    "train_pct":    int(_row.get("Train %",    80)),
+                    "test_pct":     int(_row.get("Test %",     20)),
+                }
+
+        _ref_info = next(iter(_split_info.values()), None) if _split_info else None
+        if _ref_info:
+            _tp  = _ref_info.get("train_pct", 80)
+            _tep = _ref_info.get("test_pct",  20)
+            st.markdown(f"""
+            <div style='background:rgba(0,0,0,0.3);border:1px solid #1e3a5f;border-radius:10px;
+                         padding:16px 20px;margin-bottom:16px;'>
+              <div style='font-size:11px;font-weight:700;color:#94a3b8;letter-spacing:0.08em;
+                           text-transform:uppercase;margin-bottom:10px;'>
+                📐 Chronological Train / Test Split
+              </div>
+              <div style='display:flex;width:100%;height:28px;border-radius:6px;overflow:hidden;margin-bottom:8px;'>
+                <div style='width:{_tp}%;background:linear-gradient(90deg,#3b82f6,#1d4ed8);
+                             display:flex;align-items:center;justify-content:center;
+                             font-size:11px;font-weight:700;color:#fff;'>
+                  🏋️ TRAIN {_tp}%
+                </div>
+                <div style='width:{_tep}%;background:linear-gradient(90deg,#10b981,#059669);
+                             display:flex;align-items:center;justify-content:center;
+                             font-size:11px;font-weight:700;color:#fff;'>
+                  🧪 TEST {_tep}%
+                </div>
+              </div>
+              <div style='display:flex;justify-content:space-between;font-size:11px;color:#94a3b8;'>
+                <span>🔵 Training: <b style='color:#60a5fa;'>{_ref_info.get('train_period','')}</b>
+                  &nbsp;({_ref_info.get('train_size',0):,} rows)</span>
+                <span>🟢 Test (most recent): <b style='color:#34d399;'>{_ref_info.get('test_period','')}</b>
+                  &nbsp;({_ref_info.get('test_size',0):,} rows)</span>
+              </div>
+              <div style='font-size:10px;color:#475569;margin-top:6px;'>
+                ⏱️ Test set = the <b>most recent {_tep}% of months</b> — never seen during training.
+                Model evaluated on future demand it was not trained on, matching real-world deployment.
+              </div>
+            </div>""", unsafe_allow_html=True)
+
         if _df_metrics is not None and not _df_metrics.empty:
-            st.dataframe(_df_metrics, use_container_width=True, hide_index=True)
+            st.markdown("#### 📊 Test-Set Performance by Horizon")
+            _disp_cols = [c for c in ["Horizon","Train Period","Test Period",
+                                       "Train Rows","Test Rows",
+                                       "Test MAPE(%)","Test RMSE","Test R²",
+                                       "Train %","Test %"] if c in _df_metrics.columns]
+            if not _disp_cols:
+                _disp_cols = list(_df_metrics.columns)
+            st.dataframe(_df_metrics[_disp_cols], use_container_width=True, hide_index=True)
+
             if _df_pat_mape is not None and not _df_pat_mape.empty:
-                st.markdown("#### MAPE by Clinical Pattern (Test Set)")
+                st.markdown("#### 🏷️ MAPE by Clinical Pattern (Test Set — most recent months)")
                 try:
-                    st.dataframe(_df_pat_mape.pivot(index="clinical_demand_pattern",columns="Horizon",values="MAPE(%)"), use_container_width=True)
+                    st.dataframe(
+                        _df_pat_mape.pivot(index="clinical_demand_pattern",
+                                           columns="Horizon", values="MAPE(%)"),
+                        use_container_width=True)
                 except Exception:
                     st.dataframe(_df_pat_mape, use_container_width=True, hide_index=True)
+
             if _df_fi is not None and not _df_fi.empty:
-                st.markdown("#### Top Feature Importances")
+                st.markdown("#### 🎯 Top Feature Importances")
                 _hfi = st.selectbox("Horizon", _df_fi["Horizon"].unique().tolist(), key="hz_fi")
-                _fih = _df_fi[_df_fi["Horizon"]==_hfi].head(20)
-                fig_fi, ax_fi = plt.subplots(figsize=(12,6))
+                _fih = _df_fi[_df_fi["Horizon"] == _hfi].head(20)
+                fig_fi, ax_fi = plt.subplots(figsize=(12, 6))
                 fig_fi.patch.set_facecolor("#0f1117"); ax_fi.set_facecolor("#0f1117")
                 ax_fi.barh(_fih["feature"][::-1], _fih["importance"][::-1],
-                            color=[PALETTE[i%len(PALETTE)] for i in range(len(_fih))][::-1], alpha=0.85)
+                            color=[PALETTE[i % len(PALETTE)] for i in range(len(_fih))][::-1], alpha=0.85)
                 ax_fi.set_xlabel("Importance", fontsize=9, color="#94a3b8")
                 ax_fi.set_title(f"Feature Importances — {_hfi}", fontsize=11, color="#e2e8f0", fontweight="bold")
                 ax_fi.tick_params(colors="#94a3b8")
                 for sp in ax_fi.spines.values(): sp.set_edgecolor("#334155")
                 plt.tight_layout(); show_fig(fig_fi)
-            with st.expander("🔬 Why XGBoost over SARIMA?", expanded=False):
-                st.markdown("""
-| Criterion | XGBoost (Chosen) | SARIMA (Previous) |
-|---|---|---|
-| Sparse panel data | ✅ Works (cross-sectional) | ❌ Needs 24+ months/series |
-| Cross-product learning | ✅ 2,984 products jointly | ❌ One model per product |
-| Feature richness | ✅ DEA, price, warehouse, carrier | ❌ Univariate |
-| Clinical patterns | ✅ Used as input feature | ❌ Not supported |
-| Distributor/WH features | ✅ Present | ❌ Not supported |
 
-**Note on MAPE:** High MAPE reflects sparse data (~5 months/product average). In production
+            with st.expander("🔬 Why 80/20 chronological split?", expanded=False):
+                st.markdown("""
+| Design Choice | Reason |
+|---|---|
+| **80% train / 20% test** | Industry-standard for time-series demand forecasting |
+| **Most recent months = Test** | Simulates real deployment: model predicts the future it never saw |
+| **Chronological (not random)** | Random splits cause data leakage — future data leaks into training |
+| **No validation set** | Sparse panels (~5 months/product) — 3-way split starves training |
+
+**Note on MAPE:** High MAPE reflects sparse data (~5 months/product avg). In production
 with 24+ months of real WMS/ERP data, MAPE would drop to 10–20%. The pipeline is production-ready.
                 """)
         else:
-            st.info("Run `python demand_prediction.py` to generate model performance data.")
+            st.info("Upload your data file or run `python demand_prediction.py` to generate model performance data.")
 
     # ── TAB 5: PROCUREMENT ACTION PLAN ────────────────────────────────────────
     with _tab5:

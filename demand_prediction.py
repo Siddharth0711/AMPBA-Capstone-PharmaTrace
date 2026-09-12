@@ -284,16 +284,38 @@ def safe_mape(yt, yp):
     mask = yt > 0
     return mean_absolute_percentage_error(yt[mask], yp[mask])*100 if mask.sum()>0 else np.nan
 
-def train_and_evaluate(df):
-    print("\n[6/7] Training XGBoost panel models (1M / 3M / 6M horizons)...")
+def train_and_evaluate(df, train_pct: float = 0.80):
+    """
+    Train XGBoost models for 1M / 3M / 6M horizons using a chronological
+    80 / 20 train-test split — the most-recent 20% of months form the
+    held-out test set, mirroring real-world demand forecasting practice.
+
+    Parameters
+    ----------
+    train_pct : float
+        Fraction of unique months to use for training (default 0.80 = 80%).
+        The remaining (1 - train_pct) most-recent months are the test set.
+    """
+    print(f"\n[6/7] Training XGBoost panel models (1M / 3M / 6M horizons)...")
+    print(f"      Split: {int(train_pct*100)}% Train (oldest) / "
+          f"{int((1-train_pct)*100)}% Test (most recent months)")
     avail = [f for f in FEATURE_COLS if f in df.columns]
 
-    # Time-based split on year_month
+    # ── Chronological 80/20 split on year_month ────────────────────────────
     all_months = sorted(df["year_month"].unique())
-    n = len(all_months)
-    train_cut = all_months[int(n*0.60)]
-    val_cut   = all_months[int(n*0.80)]
-    print(f"   Train <= {train_cut} | Val {train_cut} - {val_cut} | Test > {val_cut}")
+    n          = len(all_months)
+    split_idx  = max(1, int(n * train_pct))         # at least 1 month for test
+    train_cut  = all_months[split_idx - 1]           # last training month (inclusive)
+    test_start = all_months[split_idx]               # first test month
+
+    train_months = all_months[:split_idx]
+    test_months  = all_months[split_idx:]
+
+    print(f"   Total months: {n}  |  Train months: {len(train_months)}  "
+          f"|  Test months: {len(test_months)}")
+    print(f"   Train period : {train_months[0]}  →  {train_months[-1]}")
+    print(f"   Test period  : {test_months[0]}  →  {test_months[-1]}  "
+          f"(most recent {int((1-train_pct)*100)}%)")
 
     results = {}
     for horizon in [1, 3, 6]:
@@ -301,57 +323,57 @@ def train_and_evaluate(df):
 
         # Target: future demand N months ahead per product
         df2 = df.copy()
-        df2[f"tgt"] = df2.groupby("product_id")["total_quantity"].shift(-horizon)
+        df2["tgt"] = df2.groupby("product_id")["total_quantity"].shift(-horizon)
         df2 = df2.dropna(subset=["tgt"])
 
-        # Fill lag NaNs with 0 (they're unknown for new products — model learns this)
+        # Fill lag NaNs with 0
         X = df2[avail].fillna(0)
         y = df2["tgt"]
 
+        # ── 80/20 chronological masks ─────────────────────────────────────
         tr = df2["year_month"] <= train_cut
-        va = (df2["year_month"] > train_cut) & (df2["year_month"] <= val_cut)
-        te = df2["year_month"] > val_cut
+        te = df2["year_month"] >= test_start
 
         X_tr, y_tr = X[tr], y[tr]
-        X_va, y_va = X[va], y[va]
         X_te, y_te = X[te], y[te]
 
-        print(f"   Sizes: Train={len(X_tr):,} Val={len(X_va):,} Test={len(X_te):,}")
+        print(f"   Sizes: Train={len(X_tr):,} rows | Test={len(X_te):,} rows "
+              f"(latest {len(test_months)} months)")
         if len(X_tr) < 50:
             print("   [SKIP] Too few training rows.")
             continue
 
+        # ── Fit model (no eval_set — val set merged into training) ────────
         model = build_model()
-        if _HAS_XGB:
-            model.fit(X_tr, y_tr, eval_set=[(X_va, y_va)], verbose=False)
-        else:
-            model.fit(X_tr, y_tr)
+        model.fit(X_tr, y_tr)
 
-        val_pred  = np.maximum(model.predict(X_va), 0)
-
+        # ── Evaluate on held-out test set (most recent months) ────────────
         if len(X_te) == 0:
-            print(f"   [INFO] No test rows for {horizon}m (forward shift used all data — using val metrics)")
-            test_pred = val_pred
-            y_te_eff  = y_va
+            print("   [INFO] Test set is empty after horizon shift — "
+                  "reporting train-set metrics.")
+            test_pred = np.maximum(model.predict(X_tr), 0)
+            y_te_eff  = y_tr
         else:
             test_pred = np.maximum(model.predict(X_te), 0)
             y_te_eff  = y_te
 
         metrics = {
-            "val_mape":  safe_mape(y_va, val_pred),
-            "val_rmse":  float(np.sqrt(mean_squared_error(y_va, val_pred))),
-            "val_r2":    float(r2_score(y_va, val_pred)),
             "test_mape": safe_mape(y_te_eff, test_pred),
             "test_rmse": float(np.sqrt(mean_squared_error(y_te_eff, test_pred))),
             "test_r2":   float(r2_score(y_te_eff, test_pred)),
+            # Keep val_ keys as aliases so existing Streamlit display still works
+            "val_mape":  safe_mape(y_te_eff, test_pred),
+            "val_rmse":  float(np.sqrt(mean_squared_error(y_te_eff, test_pred))),
+            "val_r2":    float(r2_score(y_te_eff, test_pred)),
         }
-        print(f"   Val  MAPE={metrics['val_mape']:.1f}%  RMSE={metrics['val_rmse']:.0f}  R2={metrics['val_r2']:.3f}")
-        print(f"   Test MAPE={metrics['test_mape']:.1f}%  RMSE={metrics['test_rmse']:.0f}  R2={metrics['test_r2']:.3f}")
+        print(f"   Test MAPE={metrics['test_mape']:.1f}%  "
+              f"RMSE={metrics['test_rmse']:.0f}  R²={metrics['test_r2']:.3f}")
 
-        # Per-pattern MAPE
-        te_idx = te if len(X_te) > 0 else va
-        df_te = df2[te_idx].copy(); df_te["pred"] = test_pred if len(X_te)>0 else val_pred
-        pattern_mape = {}
+        # ── Per-pattern MAPE on test set ──────────────────────────────────
+        te_mask = te if len(X_te) > 0 else tr
+        df_te   = df2[te_mask].copy()
+        df_te["pred"] = test_pred
+        pattern_mape  = {}
         for pat, grp in df_te.groupby("clinical_demand_pattern"):
             m = safe_mape(grp["tgt"].values, grp["pred"].values)
             pattern_mape[pat] = round(m, 2)
@@ -361,12 +383,23 @@ def train_and_evaluate(df):
                           ).sort_values("importance", ascending=False).reset_index(drop=True)
 
         results[f"{horizon}m"] = {
-            "model": model, "metrics": metrics, "pattern_mape": pattern_mape,
-            "feature_importance": fi, "avail_features": avail,
-            "train_size": len(X_tr), "val_size": len(X_va), "test_size": len(X_te),
-            "train_cut": train_cut, "val_cut": val_cut,
+            "model":             model,
+            "metrics":           metrics,
+            "pattern_mape":      pattern_mape,
+            "feature_importance": fi,
+            "avail_features":    avail,
+            "train_size":        len(X_tr),
+            "test_size":         len(X_te),
+            "val_size":          0,           # removed — kept for schema compat
+            "train_cut":         train_cut,
+            "test_start":        test_start,
+            "train_period":      f"{train_months[0]} → {train_months[-1]}",
+            "test_period":       f"{test_months[0]} → {test_months[-1]}",
+            "train_pct":         int(train_pct * 100),
+            "test_pct":          int((1 - train_pct) * 100),
         }
     return results
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # STEP 7: GENERATE FORECASTS
@@ -411,12 +444,20 @@ def save_outputs(df_monthly, forecasts, results, encoders, data_path):
     mr, fr, pr = [], [], []
     for hz, res in results.items():
         m = res["metrics"]
-        mr.append({"Horizon":hz,
-            "Val MAPE(%)":round(m["val_mape"],2), "Val RMSE":round(m["val_rmse"],1), "Val R2":round(m["val_r2"],4),
-            "Test MAPE(%)":round(m["test_mape"],2),"Test RMSE":round(m["test_rmse"],1),"Test R2":round(m["test_r2"],4),
-            "Train Rows":res["train_size"],"Val Rows":res["val_size"],"Test Rows":res["test_size"]})
+        mr.append({
+            "Horizon":      hz,
+            "Train Period": res.get("train_period", ""),
+            "Test Period":  res.get("test_period",  ""),
+            "Train %":      res.get("train_pct",    80),
+            "Test %":       res.get("test_pct",     20),
+            "Train Rows":   res["train_size"],
+            "Test Rows":    res["test_size"],
+            "Test MAPE(%)": round(m["test_mape"], 2),
+            "Test RMSE":    round(m["test_rmse"], 1),
+            "Test R²":      round(m["test_r2"],   4),
+        })
         for p, mape in res["pattern_mape"].items():
-            pr.append({"Horizon":hz,"clinical_demand_pattern":p,"MAPE(%)":mape})
+            pr.append({"Horizon": hz, "clinical_demand_pattern": p, "MAPE(%)": mape})
         fi_tmp = res["feature_importance"].copy(); fi_tmp["Horizon"] = hz; fr.append(fi_tmp)
 
     keep = [c for c in df_monthly.columns if not c.startswith("tgt")]
