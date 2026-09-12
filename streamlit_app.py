@@ -2547,19 +2547,38 @@ elif selected_page == "📈 Demand & Seasonality":
         st.caption("Forecasted demand per product for next 1, 3, 6 months from XGBoost trained on shipment history.")
 
         if _has_cache and _df_forecasts is not None and not _df_forecasts.empty:
-            _hz = st.selectbox("Horizon", sorted(_df_forecasts["horizon"].unique().tolist()), key="hz_sel")
-            _fv = _df_forecasts[_df_forecasts["horizon"]==_hz].copy()
-            if not _fv.empty:
-                _ft = _fv.nlargest(20,"forecasted_quantity")
-                _dc = [c for c in ["product_id","generic_name","clinical_demand_pattern",
-                                    "forecasted_quantity","forecasted_value_usd",
-                                    "dominant_wh_type","dominant_region"] if c in _ft.columns]
-                _ftd = _ft[_dc].copy(); _ftd.columns = [c.replace("_"," ").title() for c in _dc]
-                st.markdown(f"**Top 20 Products — {_hz} Horizon · Target: {_fv['forecast_year_month'].iloc[0]}**")
-                st.dataframe(_ftd, use_container_width=True, hide_index=True)
 
+            # ── Enforce monotonic cumulative demand: 3M ≥ 1M, 6M ≥ 3M ──────
+            # XGBoost predicts each horizon independently; enforce non-decreasing
+            # totals so a product's 3M forecast ≥ 1M and 6M forecast ≥ 3M.
+            _fcst_mono = _df_forecasts.copy()
+            if set(["1M","3M","6M"]).issubset(_fcst_mono["horizon"].unique()):
+                _p1 = _fcst_mono[_fcst_mono["horizon"]=="1M"][["product_id","forecasted_quantity"]].set_index("product_id")["forecasted_quantity"]
+                _p3 = _fcst_mono[_fcst_mono["horizon"]=="3M"][["product_id","forecasted_quantity"]].set_index("product_id")["forecasted_quantity"]
+                _p6 = _fcst_mono[_fcst_mono["horizon"]=="6M"][["product_id","forecasted_quantity"]].set_index("product_id")["forecasted_quantity"]
+                # Monotonic clamp: 3M = max(3M, 1M); 6M = max(6M, 3M_clamped)
+                _p3c = _p3.combine(_p1, max)
+                _p6c = _p6.combine(_p3c, max)
+                _fcst_mono.loc[_fcst_mono["horizon"]=="3M", "forecasted_quantity"] = \
+                    _fcst_mono.loc[_fcst_mono["horizon"]=="3M", "product_id"].map(_p3c).fillna(_fcst_mono.loc[_fcst_mono["horizon"]=="3M","forecasted_quantity"]).values
+                _fcst_mono.loc[_fcst_mono["horizon"]=="6M", "forecasted_quantity"] = \
+                    _fcst_mono.loc[_fcst_mono["horizon"]=="6M", "product_id"].map(_p6c).fillna(_fcst_mono.loc[_fcst_mono["horizon"]=="6M","forecasted_quantity"]).values
+                # Recalculate value proportionally
+                if "forecasted_value_usd" in _fcst_mono.columns and "unit_price" in _fcst_mono.columns:
+                    _fcst_mono["forecasted_value_usd"] = (_fcst_mono["forecasted_quantity"] * _fcst_mono["unit_price"]).round(2)
+            else:
+                _fcst_mono = _df_forecasts.copy()
+
+            _hz = st.selectbox("Horizon", ["1M","3M","6M"], key="hz_sel")
+            _fv = _fcst_mono[_fcst_mono["horizon"]==_hz].copy().sort_values("forecasted_quantity", ascending=False)
+
+            if not _fv.empty:
+                _target_mo = _fv["forecast_year_month"].iloc[0] if "forecast_year_month" in _fv.columns else _hz
+
+                # ── KPI row ──────────────────────────────────────────────────
+                _tot = int(_fv["forecasted_quantity"].sum())
+                _val = _fv["forecasted_value_usd"].sum() if "forecasted_value_usd" in _fv.columns else 0
                 _c1f, _c2f = st.columns(2)
-                _tot = int(_fv["forecasted_quantity"].sum()); _val = _fv["forecasted_value_usd"].sum()
                 with _c1f:
                     _bp = _fv.groupby("clinical_demand_pattern").agg(
                         Products=("product_id","nunique"), Units=("forecasted_quantity","sum"),
@@ -2569,23 +2588,60 @@ elif selected_page == "📈 Demand & Seasonality":
                 with _c2f:
                     st.markdown(f"""<div style="background:rgba(0,0,0,0.3);border:1px solid #0e7490;
                                 border-radius:0.6rem;padding:1rem;">
-                      <div style="color:#94a3b8;font-size:0.8rem;">Total Forecast ({_hz})</div>
+                      <div style="color:#94a3b8;font-size:0.8rem;">Total Forecast ({_hz}) · Target: {_target_mo}</div>
                       <div style="color:#38bdf8;font-size:2rem;font-weight:800;">{_tot:,} Units</div>
-                      <div style="color:#94a3b8;font-size:0.8rem;margin-top:0.4rem;">Procurement Value</div>
+                      <div style="color:#94a3b8;font-size:0.8rem;margin-top:0.4rem;">Procurement Value Est.</div>
                       <div style="color:#10b981;font-size:1.5rem;font-weight:700;">{fmt_curr(_val,compact=False,decimals=0)}</div>
+                      <div style="color:#64748b;font-size:0.72rem;margin-top:0.3rem;">{_fv['product_id'].nunique():,} products · monotonic 1M≤3M≤6M enforced</div>
                     </div>""", unsafe_allow_html=True)
 
+                # ── Bar chart top 15 ─────────────────────────────────────────
                 fig_fc, ax_fc = plt.subplots(figsize=(16,5))
                 fig_fc.patch.set_facecolor("#0f1117"); ax_fc.set_facecolor("#0f1117")
-                _fc15 = _ft.head(15)
-                ax_fc.barh(_fc15["generic_name"].str[:32] if "generic_name" in _fc15 else _fc15["product_id"],
+                _fc15 = _fv.head(15)
+                ax_fc.barh(_fc15["generic_name"].str[:35] if "generic_name" in _fc15 else _fc15["product_id"],
                             _fc15["forecasted_quantity"],
                             color=[_PCOLS.get(p,"#64748b") for p in _fc15["clinical_demand_pattern"]], alpha=0.85)
                 ax_fc.set_xlabel("Forecasted Units", fontsize=9, color="#94a3b8")
-                ax_fc.set_title(f"Top 15 Products — {_hz} Forecast (color=pattern)", fontsize=11, color="#e2e8f0", fontweight="bold")
+                ax_fc.set_title(f"Top 15 Products — {_hz} Forecast (color=demand pattern)", fontsize=11, color="#e2e8f0", fontweight="bold")
                 ax_fc.tick_params(colors="#94a3b8"); ax_fc.invert_yaxis()
                 for sp in ax_fc.spines.values(): sp.set_edgecolor("#334155")
                 plt.tight_layout(); show_fig(fig_fc)
+
+                # ── Full product table with search + download ─────────────────
+                st.markdown("---")
+                st.markdown(f"#### 📋 All {len(_fv):,} Products — {_hz} Forecast")
+                _srch = st.text_input("🔍 Search by product name or ID", "", key="fc_search")
+                _dc = [c for c in ["product_id","generic_name","clinical_demand_pattern",
+                                   "forecasted_quantity","forecasted_value_usd",
+                                   "dominant_wh_type","dominant_region","pharm_class"] if c in _fv.columns]
+                _fvd = _fv[_dc].copy()
+                _fvd.columns = [c.replace("_"," ").title() for c in _dc]
+                if _srch.strip():
+                    _mask = _fvd.apply(lambda r: _srch.lower() in str(r).lower(), axis=1)
+                    _fvd = _fvd[_mask]
+                st.dataframe(_fvd, use_container_width=True, hide_index=True, height=420)
+
+                # ── Excel download ────────────────────────────────────────────
+                import io as _io2
+                _dl_buf = _io2.BytesIO()
+                with pd.ExcelWriter(_dl_buf, engine="openpyxl") as _ew:
+                    # All horizons in separate sheets
+                    for _h in ["1M","3M","6M"]:
+                        _sh = _fcst_mono[_fcst_mono["horizon"]==_h].copy().sort_values("forecasted_quantity", ascending=False)
+                        _sh_cols = [c for c in ["product_id","generic_name","clinical_demand_pattern",
+                                                "forecasted_quantity","forecasted_value_usd",
+                                                "dominant_wh_type","dominant_region","pharm_class",
+                                                "forecast_year_month"] if c in _sh.columns]
+                        _sh[_sh_cols].to_excel(_ew, sheet_name=f"Forecast_{_h}", index=False)
+                _dl_buf.seek(0)
+                st.download_button(
+                    label="📥 Download All Forecasts (Excel — 1M, 3M, 6M sheets)",
+                    data=_dl_buf,
+                    file_name=f"PharmaTrace_Demand_Forecast_{_hz}_{_target_mo}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                )
         else:
             st.info("Run `python demand_prediction.py` to generate XGBoost forecasts. Showing SARIMA fallback.")
             if df_demand is not None and not df_demand.empty and "quantity_demanded_units" in df_demand.columns:
@@ -2602,61 +2658,153 @@ elif selected_page == "📈 Demand & Seasonality":
 
         _src3 = _df_monthly_shp if (_has_cache and _df_monthly_shp is not None) else None
         if _src3 is not None:
+
+            # ── ROW 1: Warehouse Type Ranking + Region Ranking ────────────────
             _c1w, _c2w = st.columns(2)
+
             with _c1w:
                 st.markdown("#### 🏭 Warehouse Demand Ranking")
-                if "origin_warehouse_id" in _src3.columns:
-                    _wr = (_src3.groupby("origin_warehouse_id").agg(
-                        Total=("total_quantity","sum"), Products=("product_id","nunique"),
-                        AvgMo=("total_quantity","mean")).reset_index().sort_values("Total",ascending=False))
-                    _wr["Total"] = _wr["Total"].astype(int); _wr["AvgMo"] = _wr["AvgMo"].round(0).astype(int)
-                    _wr.columns = ["Warehouse","Total Units","Products","Avg/Month"]
-                    st.dataframe(_wr, use_container_width=True, hide_index=True)
-                    fig_wh, ax_wh = plt.subplots(figsize=(8,4))
-                    fig_wh.patch.set_facecolor("#0f1117"); ax_wh.set_facecolor("#0f1117")
-                    ax_wh.bar(_wr["Warehouse"], _wr["Total Units"]/1e3, color=PALETTE[:len(_wr)], alpha=0.85)
-                    ax_wh.set_ylabel("Total Units (K)", fontsize=9, color="#94a3b8")
-                    ax_wh.set_title("Demand by Warehouse", fontsize=10, color="#e2e8f0", fontweight="bold")
-                    ax_wh.tick_params(axis="x", rotation=30, colors="#94a3b8"); ax_wh.tick_params(axis="y", colors="#94a3b8")
-                    for sp in ax_wh.spines.values(): sp.set_edgecolor("#334155")
-                    plt.tight_layout(); show_fig(fig_wh)
+                # Use dominant_wh_type (available) instead of origin_warehouse_id
+                _wh_col = "origin_warehouse_id" if "origin_warehouse_id" in _src3.columns else "dominant_wh_type"
+                _wr = (_src3.groupby(_wh_col).agg(
+                    Total=("total_quantity","sum"),
+                    Products=("product_id","nunique"),
+                    AvgMo=("total_quantity","mean")).reset_index().sort_values("Total", ascending=False))
+                _wr["Total"] = _wr["Total"].astype(int)
+                _wr["AvgMo"] = _wr["AvgMo"].round(0).astype(int)
+                _wr["Share(%)"] = (_wr["Total"] / _wr["Total"].sum() * 100).round(1)
+                _wr.columns = ["Warehouse Type", "Total Units", "Products", "Avg/Month", "Share(%)"]
+                st.dataframe(_wr, use_container_width=True, hide_index=True)
+                fig_wh, ax_wh = plt.subplots(figsize=(8, 4))
+                fig_wh.patch.set_facecolor("#0f1117"); ax_wh.set_facecolor("#0f1117")
+                _wh_colors = ["#00d4ff", "#10b981", "#f59e0b", "#ef4444", "#7c3aed"]
+                ax_wh.bar(_wr["Warehouse Type"], _wr["Total Units"]/1e6,
+                          color=_wh_colors[:len(_wr)], alpha=0.85, edgecolor="#334155", linewidth=0.8)
+                for _xi, (_v, _s) in enumerate(zip(_wr["Total Units"], _wr["Share(%)"] )):
+                    ax_wh.text(_xi, _v/1e6 + 0.02, f"{_s}%", ha="center", fontsize=9, color="#e2e8f0", fontweight="bold")
+                ax_wh.set_ylabel("Total Units (M)", fontsize=9, color="#94a3b8")
+                ax_wh.set_title("Demand by Warehouse Type", fontsize=10, color="#e2e8f0", fontweight="bold")
+                ax_wh.tick_params(axis="x", rotation=20, colors="#94a3b8")
+                ax_wh.tick_params(axis="y", colors="#94a3b8")
+                for sp in ax_wh.spines.values(): sp.set_edgecolor("#334155")
+                plt.tight_layout(); show_fig(fig_wh)
 
             with _c2w:
-                st.markdown("#### 🚛 Top 15 Distributors by Volume")
-                if "distributor_id" in _src3.columns:
-                    _dr = (_src3.groupby("distributor_id").agg(
-                        Total=("total_quantity","sum"), Products=("product_id","nunique"),
-                        DelayRate=("delay_rate","mean")).reset_index()
-                        .sort_values("Total",ascending=False).head(15))
-                    _dr["Total"] = _dr["Total"].astype(int); _dr["DelayRate"] = (_dr["DelayRate"]*100).round(1)
-                    _dr.columns = ["Distributor","Total Units","Products","Delay Rate (%)"]
-                    st.dataframe(_dr, use_container_width=True, hide_index=True)
-                    fig_dr, ax_dr = plt.subplots(figsize=(8,4))
-                    fig_dr.patch.set_facecolor("#0f1117"); ax_dr.set_facecolor("#0f1117")
-                    _t10 = _dr.head(10)
-                    ax_dr.barh(_t10["Distributor"], _t10["Total Units"]/1e3,
-                               color=["#ef4444" if r>5 else "#10b981" for r in _t10["Delay Rate (%)"]], alpha=0.85)
-                    ax_dr.set_xlabel("Total Units (K)", fontsize=9, color="#94a3b8")
-                    ax_dr.set_title("Top 10 Distributors (red=delay >5%)", fontsize=10, color="#e2e8f0", fontweight="bold")
-                    ax_dr.tick_params(colors="#94a3b8"); ax_dr.invert_yaxis()
-                    for sp in ax_dr.spines.values(): sp.set_edgecolor("#334155")
-                    plt.tight_layout(); show_fig(fig_dr)
+                st.markdown("#### 🌍 Demand by Region")
+                _reg_col = "dominant_region" if "dominant_region" in _src3.columns else None
+                if _reg_col:
+                    _rr = (_src3.groupby(_reg_col).agg(
+                        Total=("total_quantity","sum"),
+                        Products=("product_id","nunique"),
+                        AvgMo=("total_quantity","mean"),
+                        DelayRate=("delay_rate","mean") if "delay_rate" in _src3.columns else ("total_quantity","count")
+                        ).reset_index().sort_values("Total", ascending=False))
+                    _rr["Total"] = _rr["Total"].astype(int)
+                    _rr["Share(%)"] = (_rr["Total"] / _rr["Total"].sum() * 100).round(1)
+                    if "delay_rate" in _src3.columns:
+                        _rr["Delay Rate(%)"] = (_rr["delay_rate"] * 100).round(1)
+                        _rr = _rr.drop(columns=["delay_rate"], errors="ignore")
+                    _rr.columns = _rr.columns.str.replace("dominant_region","Region").str.replace("_"," ").str.title()
+                    st.dataframe(_rr, use_container_width=True, hide_index=True)
+                    fig_rr, ax_rr = plt.subplots(figsize=(8, 4))
+                    fig_rr.patch.set_facecolor("#0f1117"); ax_rr.set_facecolor("#0f1117")
+                    _reg_colors = ["#10b981", "#00d4ff", "#f59e0b", "#7c3aed"]
+                    ax_rr.barh(_rr.iloc[:, 0].astype(str), _rr["Total"].values / 1e6,
+                               color=_reg_colors[:len(_rr)], alpha=0.85, edgecolor="#334155")
+                    ax_rr.set_xlabel("Total Units (M)", fontsize=9, color="#94a3b8")
+                    ax_rr.set_title("Demand by Region", fontsize=10, color="#e2e8f0", fontweight="bold")
+                    ax_rr.tick_params(colors="#94a3b8"); ax_rr.invert_yaxis()
+                    for sp in ax_rr.spines.values(): sp.set_edgecolor("#334155")
+                    plt.tight_layout(); show_fig(fig_rr)
 
+            # ── ROW 2: Distributor volume proxy + Delay rate analysis ─────────
+            _c3w, _c4w = st.columns(2)
+
+            with _c3w:
+                st.markdown("#### 🚛 Top Distributor Count by Product")
+                # num_unique_distributors = how many distributors each product uses
+                if "num_unique_distributors" in _src3.columns:
+                    _dist_agg = (_src3.groupby("product_id").agg(
+                        TotalQty=("total_quantity","sum"),
+                        AvgDist=("num_unique_distributors","mean"),
+                        MaxDist=("num_unique_distributors","max"),
+                        Pattern=("clinical_demand_pattern","first") if "clinical_demand_pattern" in _src3.columns else ("total_quantity","count")
+                        ).reset_index().sort_values("TotalQty", ascending=False).head(15))
+                    _gn_map = _src3.drop_duplicates("product_id").set_index("product_id")["generic_name"] if "generic_name" in _src3.columns else None
+                    if _gn_map is not None:
+                        _dist_agg.insert(1, "Generic Name", _dist_agg["product_id"].map(_gn_map))
+                    _dist_agg["TotalQty"] = _dist_agg["TotalQty"].astype(int)
+                    _dist_agg["AvgDist"] = _dist_agg["AvgDist"].round(1)
+                    st.caption("Products by total shipment volume · avg distributors used per month")
+                    st.dataframe(_dist_agg.rename(columns={"TotalQty":"Total Units","AvgDist":"Avg Distributors/Mo",
+                                                            "MaxDist":"Max Distributors","Pattern":"Demand Pattern"}),
+                                 use_container_width=True, hide_index=True)
+
+            with _c4w:
+                st.markdown("#### ⏱️ Delay Rate by Warehouse Type")
+                if "delay_rate" in _src3.columns and "dominant_wh_type" in _src3.columns:
+                    _dlr = (_src3.groupby("dominant_wh_type").agg(
+                        AvgDelay=("delay_rate","mean"),
+                        TotalShipments=("num_shipments","sum") if "num_shipments" in _src3.columns else ("total_quantity","count")
+                        ).reset_index())
+                    _dlr["AvgDelay(%)"] = (_dlr["AvgDelay"] * 100).round(2)
+                    _dlr = _dlr.drop(columns=["AvgDelay"]).sort_values("AvgDelay(%)", ascending=False)
+                    st.dataframe(_dlr.rename(columns={"dominant_wh_type":"Warehouse Type","TotalShipments":"Total Shipments"}),
+                                 use_container_width=True, hide_index=True)
+                    fig_dl, ax_dl = plt.subplots(figsize=(8, 3))
+                    fig_dl.patch.set_facecolor("#0f1117"); ax_dl.set_facecolor("#0f1117")
+                    _dl_colors = ["#ef4444" if v > 5 else "#10b981" for v in _dlr["AvgDelay(%)"]]
+                    ax_dl.barh(_dlr["Warehouse Type"] if "Warehouse Type" in _dlr.columns else _dlr.iloc[:,0],
+                               _dlr["AvgDelay(%)"],
+                               color=_dl_colors, alpha=0.85, edgecolor="#334155")
+                    ax_dl.axvline(5, color="#f59e0b", linestyle="--", linewidth=1.5, label="5% threshold")
+                    ax_dl.set_xlabel("Avg Delay Rate (%)", fontsize=9, color="#94a3b8")
+                    ax_dl.set_title("Delay Rate by Warehouse Type (red>5%)", fontsize=10, color="#e2e8f0", fontweight="bold")
+                    ax_dl.tick_params(colors="#94a3b8"); ax_dl.invert_yaxis()
+                    ax_dl.legend(fontsize=8, framealpha=0, labelcolor="#e2e8f0")
+                    for sp in ax_dl.spines.values(): sp.set_edgecolor("#334155")
+                    plt.tight_layout(); show_fig(fig_dl)
+
+            # ── Monthly Demand Trend ──────────────────────────────────────────
             st.markdown("#### 📈 Monthly Demand Trend")
             if "year_month" in _src3.columns:
                 _tr = _src3.groupby("year_month")["total_quantity"].sum().reset_index().sort_values("year_month")
-                fig_t, ax_t = plt.subplots(figsize=(16,4))
+                fig_t, ax_t = plt.subplots(figsize=(16, 4))
                 fig_t.patch.set_facecolor("#0f1117"); ax_t.set_facecolor("#0f1117")
                 _xt = range(len(_tr))
                 ax_t.fill_between(_xt, _tr["total_quantity"]/1e3, alpha=0.25, color="#00d4ff")
                 ax_t.plot(_xt, _tr["total_quantity"]/1e3, color="#00d4ff", lw=2.5)
                 _step = max(1, len(_tr)//10)
-                ax_t.set_xticks(list(_xt)[::_step]); ax_t.set_xticklabels(_tr["year_month"].tolist()[::_step], rotation=30, ha="right", fontsize=8, color="#94a3b8")
+                ax_t.set_xticks(list(_xt)[::_step])
+                ax_t.set_xticklabels(_tr["year_month"].tolist()[::_step], rotation=30, ha="right", fontsize=8, color="#94a3b8")
                 ax_t.set_ylabel("Units (K)", fontsize=9, color="#94a3b8")
                 ax_t.set_title("Monthly Total Shipment Volume", fontsize=11, color="#e2e8f0", fontweight="bold")
                 ax_t.tick_params(axis="y", colors="#94a3b8")
                 for sp in ax_t.spines.values(): sp.set_edgecolor("#334155")
                 plt.tight_layout(); show_fig(fig_t)
+
+                # ── Demand trend by warehouse type ────────────────────────────
+                if "dominant_wh_type" in _src3.columns:
+                    st.markdown("#### 📊 Monthly Trend by Warehouse Type")
+                    _trbyw = _src3.groupby(["year_month","dominant_wh_type"])["total_quantity"].sum().reset_index().sort_values("year_month")
+                    fig_tw, ax_tw = plt.subplots(figsize=(16, 4))
+                    fig_tw.patch.set_facecolor("#0f1117"); ax_tw.set_facecolor("#0f1117")
+                    _wh_types = _trbyw["dominant_wh_type"].unique()
+                    _wh_clrs = {"central":"#00d4ff","regional":"#10b981","cold-chain":"#f59e0b"}
+                    for _wt in _wh_types:
+                        _grp = _trbyw[_trbyw["dominant_wh_type"]==_wt].copy()
+                        _grp_idx = list(range(len(_grp)))
+                        _xvals = [_tr["year_month"].tolist().index(ym) if ym in _tr["year_month"].tolist() else i for i, ym in enumerate(_grp["year_month"])]
+                        ax_tw.plot(_xvals, _grp["total_quantity"]/1e3,
+                                   label=_wt, lw=2, color=_wh_clrs.get(_wt, "#94a3b8"), marker="o", markersize=3)
+                    ax_tw.set_xticks(list(_xt)[::_step])
+                    ax_tw.set_xticklabels(_tr["year_month"].tolist()[::_step], rotation=30, ha="right", fontsize=8, color="#94a3b8")
+                    ax_tw.set_ylabel("Units (K)", fontsize=9, color="#94a3b8")
+                    ax_tw.set_title("Monthly Shipment Volume by Warehouse Type", fontsize=11, color="#e2e8f0", fontweight="bold")
+                    ax_tw.legend(fontsize=9, framealpha=0, labelcolor="#e2e8f0")
+                    ax_tw.tick_params(axis="y", colors="#94a3b8")
+                    for sp in ax_tw.spines.values(): sp.set_edgecolor("#334155")
+                    plt.tight_layout(); show_fig(fig_tw)
         else:
             st.info("Run `python demand_prediction.py` to generate warehouse & distributor demand rankings.")
 
