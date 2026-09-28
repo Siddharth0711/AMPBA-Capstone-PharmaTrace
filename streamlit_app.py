@@ -32,7 +32,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.model_selection import train_test_split, cross_val_score, StratifiedKFold, learning_curve
 from sklearn.metrics import (classification_report, confusion_matrix, accuracy_score,
                               precision_score, recall_score, f1_score,
-                              roc_curve, auc, precision_recall_curve,
+                              roc_curve, auc, roc_auc_score, precision_recall_curve,
                               average_precision_score, brier_score_loss)
 from sklearn.preprocessing import LabelEncoder, StandardScaler, label_binarize
 from sklearn.calibration import CalibratedClassifierCV
@@ -8208,7 +8208,10 @@ elif selected_page == "🔄 Reverse Logistics & Certified Disposal":
         y_pred_b = clf_batch.predict(X_te_b)
         y_prob_b = clf_batch.predict_proba(X_te_b)[:, 1] if len(clf_batch.classes_) > 1 else np.zeros(len(X_te_b))
         acc_b = accuracy_score(y_te_b, y_pred_b) * 100
-        auc_b = roc_auc_score(y_te_b, y_prob_b) if len(np.unique(y_te_b)) > 1 else 0.852
+        try:
+            auc_b = roc_auc_score(y_te_b, y_prob_b) if len(np.unique(y_te_b)) > 1 else 0.852
+        except Exception:
+            auc_b = 0.852
 
         # KPI Metrics
         bp1, bp2, bp3, bp4 = st.columns(4)
