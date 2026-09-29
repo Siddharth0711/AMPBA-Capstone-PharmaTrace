@@ -513,7 +513,7 @@ def build_glossary(is_in=False):
         "Heatmap Header":       f"Network-wide expiry risk and {c_code} capital exposure.",
         "LP Header":            f"Linear programming cost minimization under regulatory constraints.",
         "LP Dashboard": (
-            f"**LP Cost Optimizer & Capital Recovery Engine** solves a linear programming model to maximize recovered cash and minimize write-offs. "
+            f"**Capital Recovery Engine** routes at-risk batches across secondary markets, inter-warehouse transfers, and certified disposal channels to maximize recovered cash and minimize write-offs. "
             f"It evaluates batches across 4 regulatory channels: (1) Normal Dispatch, (2) Inter-Warehouse Transfer (DTE ≥ 60d), (3) Secondary Liquidation (30–90d DTE), and (4) Mandatory Certified Destruction (DTE ≤ 30d)."
         ),
         "Freight Header":       f"Inter-warehouse freight cost matrix and route optimization.",
@@ -1000,7 +1000,7 @@ RISK_ORDER   = ["EXPIRED","CRITICAL (<30d)","HIGH (30-90d)","MEDIUM (90-180d)","
 if selected_page == "🤖 ML Expiry Classifier":
     st.markdown('<div class="section-header">🤖 Strategic Engine 1: 4-Color RAG Matrix & ML Expiry Classifier</div>', unsafe_allow_html=True)
     info_box("ML Header", "ℹ️ 4-Color RAG Matrix framework and Random Forest predictive classifier.")
-    st.markdown('<div class="section-desc">PharmaTrace Strategic Engine #1 | Combines the clinical 4-Color RAG (Red, Amber, Yellow, Green) Residual Shelf Life (RSL) tracking system and action planning matrix with a multi-feature Random Forest predictive classifier to triage batches before the critical 180-day distributor rejection threshold and trigger Engine #2 (LP Cost Optimizer).</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-desc">PharmaTrace Strategic Engine #1 | Combines the clinical 4-Color RAG (Red, Amber, Yellow, Green) Residual Shelf Life (RSL) tracking system and action planning matrix with a multi-feature Random Forest predictive classifier to triage batches before the critical 180-day distributor rejection threshold.</div>', unsafe_allow_html=True)
 
     tab_rag_strat, tab_ml_strat, tab_xai_strat = st.tabs([
         "🚦 4-Color RAG Matrix & Zone Action Planning",
@@ -1111,7 +1111,7 @@ if selected_page == "🤖 ML Expiry Classifier":
         elif _az["vgap"] > 15:
             _a_badge, _a_action, _a_priority = "⚠️ INTER-WAREHOUSE TRANSFER NEEDED", \
                 f"<b>Inter-warehouse transfer</b> required for <b>{_az['top_skus']}</b> ({_az['cnt']:,} batches · {fmt_curr(_az['val'], compact=True)}). Gap <b>+{_az['vgap']}%</b> — local velocity is insufficient. Avg DTE: <b>{_az['avg_dte']}d</b> (~{max(0, _az['avg_dte'] - 180)}d before distributor rejection cliff).", \
-                f"Navigate to Engine 3: Transfer Recommender. Priority dispatch from <b>{_az['top_wh']}</b> to high-velocity nodes."
+                f"Use the Network Rebalancing section's Transfer Recommender. Priority dispatch from <b>{_az['top_wh']}</b> to high-velocity nodes."
         else:
             _a_badge, _a_action, _a_priority = "⚠️ MONITOR — PROMOTIONAL PUSH", \
                 f"<b>Activate promotional discounting</b> for <b>{_az['top_skus']}</b> ({_az['cnt']:,} batches · {fmt_curr(_az['val'], compact=True)}). Gap <b>+{_az['vgap']}%</b> manageable with accelerated sales. Avg DTE: <b>{_az['avg_dte']}d</b>.", \
@@ -1223,39 +1223,13 @@ if selected_page == "🤖 ML Expiry Classifier":
         st.caption("💡 **Why are some values negative?** `Days to Expiry (DTE) = Expiry Date − Today's Date`. Negative numbers (e.g. **-717d**) indicate batches that have **already passed their expiry date** (expired 717 days ago) and are in the 🔴 Red zone quarantined for certified destruction under FDA 21 CFR §211. Batches with positive shelf-life (+106d to +1,127d) appear below or when filtering by Amber, Yellow, or Green zones.")
         st.dataframe(df_disp_rag, use_container_width=True, hide_index=True)
 
-        # 4. Bridge to Strategic Engine #2 (LP Cost Optimizer)
+        # At-risk summary for AI insight bullets
         _amber_val = float(rag_values.get("🟠 Amber (4-6M)", 0.0))
         _amber_cnt = int(rag_counts.get("🟠 Amber (4-6M)", 0))
         _red_val   = float(rag_values.get("🔴 Red (<3M / Expired)", 0.0))
         _red_cnt   = int(rag_counts.get("🔴 Red (<3M / Expired)", 0))
         _at_risk_total_val = _amber_val + _red_val
         _at_risk_total_cnt = _amber_cnt + _red_cnt
-
-        st.markdown(f"""
-        <div style='background:linear-gradient(135deg, #1e293b, #0f172a); border:1px solid #f59e0b; border-left:6px solid #f59e0b; border-radius:10px; padding:18px 22px; margin:20px 0 14px;'>
-          <div style='display:flex; justify-content:space-between; align-items:center;'>
-            <div>
-              <span style='font-size:16px; font-weight:800; color:#f59e0b;'>⚖️ STRATEGIC HAND-OFF TO ENGINE #2: LP COST OPTIMIZER</span>
-              <div style='font-size:12px; color:#cbd5e1; margin-top:4px;'>
-                <b>{_at_risk_total_cnt:,} batches ({fmt_curr(_at_risk_total_val, compact=True)})</b> in Amber &amp; Red zones require executive recovery decisions:
-                (1) Accelerated Outbound dispatch, (2) Inter-warehouse transfer to high-velocity nodes, (3) Secondary market liquidation, or (4) Certified disposal.
-              </div>
-            </div>
-            <span style='background:#f59e0b25; border:1px solid #f59e0b; color:#fbbf24; font-size:11px; font-weight:700; padding:4px 12px; border-radius:20px;'>
-              Hand-Off Ready
-            </span>
-          </div>
-        </div>
-        """, unsafe_allow_html=True)
-
-        _br_col1, _br_col2 = st.columns(2)
-        with _br_col1:
-            if st.button("⚖️ Triage Amber & Red for LP Optimization", key="btn_bridge_to_engine2", use_container_width=True):
-                st.info("ℹ️ Amber & Red batches are prepared for Linear Programming cost optimization.")
-        with _br_col2:
-            if st.button("🌐 Rebalance to High-Demand Warehouses (Transfers) →", key="btn_bridge_to_network_rebalancing", use_container_width=True):
-                st.session_state["page_nav"] = "🌐 Network Rebalancing & Transfers"
-                st.rerun()
 
         # Strategic AI Insight Box
         _strat_rag_bullets = [
@@ -1277,16 +1251,6 @@ if selected_page == "🤖 ML Expiry Classifier":
               <div style='color:#f8fafc;font-size:12px;margin-bottom:4px;'><b>Action:</b> Physically segregate <b>{int(rag_counts.get('Red', 0)):,} Red Zone batches ({fmt_curr(float(rag_values.get('Red', 0.0)), compact=True)})</b> into secured quarantine cages and submit disposal manifests within 72 hours.</div>
               <div style='color:#cbd5e1;font-size:11.5px;line-height:1.5;margin-bottom:6px;'><b>🧠 Clinical & Operational Reasoning:</b> Pharmaceuticals under 90 days RSL cannot complete standard retail dispensing cycles. Storing expired/near-expiry drugs in active pick bins violates US FDA 21 CFR §211.142 and triggers Form 483 inspection citations.</div>
               <div style='background:rgba(0,0,0,0.25);border-radius:5px;padding:6px 10px;font-size:11px;color:#94a3b8;line-height:1.4;'><b>📊 Supporting Factors:</b> RSL &le; 90 days &bull; Commercial clearance probability is 0% &bull; Carrying costs and audit liability far exceed residual value.</div>
-            </div>""",
-
-            f"""<div style='margin-bottom:6px;background:rgba(0,0,0,0.22);border:1px solid #ffffff12;border-radius:8px;padding:12px 16px;'>
-              <div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;'>
-                <span style='color:#38bdf8;font-weight:800;font-size:12.5px;text-transform:uppercase;'>⚖️ Recommendation 3: Automated Mathematical Bridge to Strategic Engine #2</span>
-                <span style='background:#38bdf820;border:1px solid #38bdf8;color:#38bdf8;font-size:10.5px;font-weight:700;padding:2px 8px;border-radius:12px;'>🎯 AI Confidence: 94% (High)</span>
-              </div>
-              <div style='color:#f8fafc;font-size:12px;margin-bottom:4px;'><b>Action:</b> Transfer all <b>{_at_risk_total_cnt:,} Amber & Red batches ({fmt_curr(_at_risk_total_val, compact=True)})</b> directly into the HiGHS simplex Linear Programming solver.</div>
-              <div style='color:#cbd5e1;font-size:11.5px;line-height:1.5;margin-bottom:6px;'><b>🧠 Clinical & Operational Reasoning:</b> Heuristic markdown rules fail to account for inter-warehouse shipping tariffs, handling overheads, and hazardous disposal surcharges. Simplex LP optimization mathematically computes the exact least-cost recovery routing.</div>
-              <div style='background:rgba(0,0,0,0.25);border-radius:5px;padding:6px 10px;font-size:11px;color:#94a3b8;line-height:1.4;'><b>📊 Supporting Factors:</b> {_at_risk_total_cnt:,} batches requiring optimal triage &bull; Simplex solver evaluates freight vs markdown vs destruction across 8 warehouse nodes simultaneously.</div>
             </div>"""
         ]
         ai_insight("Strategic Engine #1 — RSL Framework & Action Architecture", _strat_rag_bullets, icon="🚦", color="#f59e0b")
@@ -2570,11 +2534,11 @@ if selected_page == "🤖 ML Expiry Classifier":
                 st.markdown(f"""
                 <div style='background:#1e293b; border-left:4px solid #f97316; border-radius:6px; padding:10px 14px; font-size:12px; color:#cbd5e1; margin-top:10px;'>
                     ⚡ <b>Simulation Result:</b> Even at {_vel_multiplier:.1f}× current velocity, <b>{_n_remain:,} batches ({fmt_curr(_still_risk, compact=True)})</b> cannot be cleared before expiry.
-                    These should be routed to secondary market liquidation immediately via the <b>LP Cost Optimizer →</b>.
+                    These should be routed to secondary market liquidation or certified disposal via the Reverse Logistics engine.
                 </div>""", unsafe_allow_html=True)
 
-        if st.button("⚖️ Triage At-Risk Batches for Recovery Routing", key="btn_playbook_to_lp", use_container_width=True):
-            st.info("ℹ️ At-risk batch registers prepared for LP recovery routing (included in the Full Enterprise Edition).")
+        if st.button("📊 Export At-Risk Batch Register for Recovery Action", key="btn_playbook_export", use_container_width=True):
+            st.info("ℹ️ Download the at-risk batch register to distribute via email or integrate with your ERP/WMS system for recovery workorder creation.")
 
         # ── AI Insight ─────────────────────────────────────────────────────────
         _playbook_bullets = [
@@ -2600,12 +2564,12 @@ if selected_page == "🤖 ML Expiry Classifier":
 
             f"""<div style='margin-bottom:6px;background:rgba(0,0,0,0.22);border:1px solid #ffffff12;border-radius:8px;padding:12px 16px;'>
               <div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;'>
-                <span style='color:#38bdf8;font-weight:800;font-size:12.5px;text-transform:uppercase;'>⚖️ Recommendation 3: LP Cost Optimizer Multi-Node Routing Hand-Off</span>
-                <span style='background:#38bdf820;border:1px solid #38bdf8;color:#38bdf8;font-size:10.5px;font-weight:700;padding:2px 8px;border-radius:12px;'>🎯 AI Confidence: 96% (Simplex Mathematical Optimality)</span>
+                <span style='color:#38bdf8;font-weight:800;font-size:12.5px;text-transform:uppercase;'>🔄 Recommendation 3: Unsalvageable Stock — Certified Disposal Routing</span>
+                <span style='background:#38bdf820;border:1px solid #38bdf8;color:#38bdf8;font-size:10.5px;font-weight:700;padding:2px 8px;border-radius:12px;'>🎯 AI Confidence: 96% (Regulatory Mandate)</span>
               </div>
-              <div style='color:#f8fafc;font-size:12px;margin-bottom:4px;'><b>Action:</b> Feed at-risk batches into Strategic Engine #2 (Linear Programming Solver) to determine least-cost distribution vs liquidation vs destruction.</div>
-              <div style='color:#cbd5e1;font-size:11.5px;line-height:1.5;margin-bottom:6px;'><b>🧠 Clinical & Operational Reasoning:</b> Velocity-to-Save simulation confirms that {_n_remain:,} batches cannot clear locally even at {_vel_multiplier:.1f}× velocity. Moving them across network nodes or into liquidation via LP optimization avoids heuristic errors where shipping costs exceed salvage value.</div>
-              <div style='background:rgba(0,0,0,0.25);border-radius:5px;padding:6px 10px;font-size:11px;color:#94a3b8;line-height:1.4;'><b>📊 Supporting Factors:</b> {_n_remain:,} batches ({fmt_curr(_still_risk, compact=True)}) structurally non-salvageable locally &bull; Linear Program balances freight, storage, and disposal costs across 8 warehouses simultaneously.</div>
+              <div style='color:#f8fafc;font-size:12px;margin-bottom:4px;'><b>Action:</b> The {_n_remain:,} batches ({fmt_curr(_still_risk, compact=True)}) structurally non-salvageable even at {_vel_multiplier:.1f}× velocity must be quarantined and routed for EPA/DEA certified destruction before they cross the expiry cliff.</div>
+              <div style='color:#cbd5e1;font-size:11.5px;line-height:1.5;margin-bottom:6px;'><b>🧠 Clinical & Operational Reasoning:</b> Holding unsalvageable stock incurs ongoing storage costs, compliance risk (FDA 21 CFR §211.142 storage violations), and insurance liability. Certified destruction at this stage costs 8% of product value (EPA RCRA) — far less than potential Form 483 citation fines or patient safety incidents.</div>
+              <div style='background:rgba(0,0,0,0.25);border-radius:5px;padding:6px 10px;font-size:11px;color:#94a3b8;line-height:1.4;'><b>📊 Supporting Factors:</b> {_n_remain:,} batches cannot be cleared locally before expiry &bull; EPA RCRA §264 mandates certified destruction manifests &bull; Navigate to Reverse Logistics for electronic destruction certificate generation.</div>
             </div>"""
         ]
         ai_insight("Prescriptive Recovery Playbook — Management Action Intelligence", _playbook_bullets, icon="💊", color="#10b981")
@@ -5226,6 +5190,25 @@ elif selected_page == "🔄 Reverse Logistics & Certified Disposal":
                 f"</div></div>",
                 unsafe_allow_html=True
             )
+
+            # Scatter chart: yield_variance vs batch_qty coloured by anomaly status
+            fig_ano, ax_ano = plt.subplots(figsize=(7.5, 5.2))
+            fig_ano.patch.set_facecolor("#0f1117"); ax_ano.set_facecolor("#1a1d27")
+            _normal = df_ano[~df_ano["is_anomaly"]]
+            _flagged = df_ano[df_ano["is_anomaly"]]
+            ax_ano.scatter(_normal["batch_qty"], _normal["yield_variance"],
+                           c="#10b981", alpha=0.35, s=18, label=f"Normal ({len(_normal):,})")
+            ax_ano.scatter(_flagged["batch_qty"], _flagged["yield_variance"],
+                           c="#ef4444", alpha=0.85, s=48, marker="X", label=f"🚨 Anomaly ({len(_flagged):,})")
+            ax_ano.axhline(0, color="#334155", linewidth=1, linestyle="--")
+            ax_ano.set_xlabel("Batch Size (Units)", fontsize=9, color="#94a3b8")
+            ax_ano.set_ylabel("Yield Variance (%)", fontsize=9, color="#94a3b8")
+            ax_ano.set_title("Batch Yield Variance vs Size — Anomaly Detection Map", fontsize=10,
+                             color="#e2e8f0", fontweight="bold")
+            ax_ano.tick_params(colors="#94a3b8", labelsize=8)
+            ax_ano.legend(fontsize=8.5, framealpha=0, labelcolor="#e2e8f0")
+            for sp in ax_ano.spines.values(): sp.set_edgecolor("#334155")
+            plt.tight_layout(); show_fig(fig_ano)
 
         # Anomaly Batch Action Table — full width
         st.markdown("#### ⚠️ Flagged Batches — Pre-Release Quarantine Watchlist")
