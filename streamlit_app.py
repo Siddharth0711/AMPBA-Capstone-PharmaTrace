@@ -71,20 +71,24 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
     overflow: hidden !important;
     text-overflow: ellipsis !important;
 }
-[data-testid="stMetricLabel"] {
+[data-testid="stMetricLabel"], [data-testid="stMetricLabel"] * {
     font-size: 0.74rem !important;
     font-weight: 600 !important;
     color: #94a3b8 !important;
-    white-space: nowrap !important;
-    overflow: hidden !important;
-    text-overflow: ellipsis !important;
-    letter-spacing: 0.03em !important;
+    white-space: normal !important;
+    overflow: visible !important;
+    text-overflow: clip !important;
+    word-break: break-word !important;
+    letter-spacing: 0.02em !important;
+    line-height: 1.25 !important;
 }
-[data-testid="stMetricDelta"] {
+[data-testid="stMetricDelta"], [data-testid="stMetricDelta"] * {
     font-size: 0.70rem !important;
-    white-space: nowrap !important;
-    overflow: hidden !important;
-    text-overflow: ellipsis !important;
+    white-space: normal !important;
+    overflow: visible !important;
+    text-overflow: clip !important;
+    word-break: break-word !important;
+    line-height: 1.2 !important;
 }
 
 [data-testid="stSidebar"] {
@@ -4620,9 +4624,9 @@ elif selected_page == "🔄 Reverse Logistics & Certified Disposal":
 
     r_c1, r_c2, r_c3, r_c4, r_c5 = st.columns(5)
     r_c1.metric("Reverse Logistics RMAs", f"{_tot_returns:,}", help="Customer and hospital return authorizations")
-    r_c2.metric("🚨 Recall-Driven RMAs", f"{_recall_rmas:,} ({_recall_pct:.1f}%)", "Dominant root-cause driver of reverse pipeline", delta_color="inverse")
+    r_c2.metric("🚨 Recall-Driven RMAs", f"{_recall_rmas:,} ({_recall_pct:.1f}%)", "Dominant root-cause driver", delta_color="inverse")
     r_c3.metric("Returned Physical Units", f"{_tot_ret_units:,} u", help="Total physical units returned into quarantine")
-    r_c4.metric("💸 Total Return Valuation", fmt_curr(_total_return_val, compact=True), "Capital locked in RMA quarantine")
+    r_c4.metric("💸 Total Return Valuation", fmt_curr(_total_return_val, compact=True), "Locked in RMA quarantine")
     r_c5.metric("Audit Reconciliation", f"{_reconcile_rate:.1f}%", help="1:1 physical match between RMA receipt and destruction certificate")
 
     st.markdown("---")
@@ -4677,11 +4681,11 @@ elif selected_page == "🔄 Reverse Logistics & Certified Disposal":
         ovr_cnt = len(ret_df[ret_df['return_reason']=='overstock']) if not ret_df.empty and 'return_reason' in ret_df.columns else 174
 
         lk_c1, lk_c2, lk_c3, lk_c4, lk_c5 = st.columns(5)
-        lk_c1.metric("Controllable Transit Breakage", f"{dmg_cnt} Shipments", "Carrier Penalties Claimable", delta_color="inverse")
-        lk_c2.metric("Customer Over-Ordering Leakage", f"{ovr_cnt} RMAs", "Hospital Re-stocking Fee Due")
-        lk_c3.metric("Regulatory / Mandated Returns", f"{len(ret_df)-dmg_cnt-ovr_cnt} RMAs", "100% Credit Note Authorized")
-        lk_c4.metric("💸 Total Return Value", fmt_curr(_total_return_val, compact=True), "Capital Tied in RMA Pipeline")
-        lk_c5.metric("🔥 Est. Destruction Cost", fmt_curr(_total_destroyed_val, compact=True), "~8% of value (EPA RCRA compliance)")
+        lk_c1.metric("Transit Breakage", f"{dmg_cnt} Shipments", "Carrier penalties claimable", delta_color="inverse")
+        lk_c2.metric("Customer Overstock", f"{ovr_cnt} RMAs", "Hospital restock fee due")
+        lk_c3.metric("Regulatory Returns", f"{len(ret_df)-dmg_cnt-ovr_cnt} RMAs", "100% credit note authorized")
+        lk_c4.metric("💸 Total Return Value", fmt_curr(_total_return_val, compact=True), "Tied in RMA pipeline")
+        lk_c5.metric("🔥 Est. Destruction Cost", fmt_curr(_total_destroyed_val, compact=True), "~8% EPA RCRA compliance")
 
         # RAG-zone-to-returns loop closure
         _rag_return_corr_pct = 0.0
