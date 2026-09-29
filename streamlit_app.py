@@ -4627,19 +4627,17 @@ elif selected_page == "🔄 Reverse Logistics & Certified Disposal":
 
     st.markdown("---")
 
-    # ── 5 COMPREHENSIVE TABS ─────────────────────────────────────────────────
-    tab_rev_ops, tab_rcl_stages, tab_rcl_clusters, tab_batch_pred, tab_dsp_ml = st.tabs([
-        "📋 1. Reverse Operations & Leakage Radar",
-        "🚨 2. Recall Root-Causes, Staging & Value Saved",
-        "🧩 3. Defect Clustering & Anomaly Detection",
-        "🔮 4. New Batch Recall Probability Predictor",
-        "🔥 5. EPA/DEA Hazardous Disposal Routing"
+    # ── 3 STREAMLINED TABS ───────────────────────────────────────────────────
+    tab_ops, tab_recall_intel, tab_predictor = st.tabs([
+        "📊 1. Operations & Disposal Audit",
+        "🚨 2. Recall Intelligence, Root-Causes & Defect AI",
+        "🔮 3. New Batch Recall Risk Predictor"
     ])
 
     # ─────────────────────────────────────────────────────────────────────────
     # TAB 1: REVERSE OPERATIONS & AUDIT MANIFESTS
     # ─────────────────────────────────────────────────────────────────────────
-    with tab_rev_ops:
+    with tab_ops:
         st.markdown("### 📋 Reverse Supply Chain Operations & Disposal Accounting")
         st.markdown("Tracks inbound return merchandise authorizations (RMAs), quarantine inspections, carrier damage attribution, and certified disposal certificates.")
 
@@ -4730,7 +4728,7 @@ elif selected_page == "🔄 Reverse Logistics & Certified Disposal":
     # ─────────────────────────────────────────────────────────────────────────
     # TAB 2: RECALL ROOT-CAUSES, SUPPLY CHAIN STAGING & VALUE SAVED
     # ─────────────────────────────────────────────────────────────────────────
-    with tab_rcl_stages:
+    with tab_recall_intel:
         st.markdown("### 🚨 Supply Chain Staging of Recalls: Root-Cause Attribution & Value Saved")
         st.markdown(
             "Recalls do not occur spontaneously in the market—they originate at distinct lifecycle stages in the pharmaceutical supply chain. "
@@ -4833,7 +4831,7 @@ elif selected_page == "🔄 Reverse Logistics & Certified Disposal":
             <tr style='border-bottom:1px solid #1e293b;'>
               <td style='padding:10px;'><b style='color:#f59e0b;'>Stage 1: Raw Material Sourcing</b></td>
               <td style='padding:10px;'>Nitrosamines (NDMA), chemical degradation, raw API out-of-spec</td>
-              <td style='padding:10px;'>NIR / Raman spectroscopy incoming assay & vendor lot hold</td>
+              <td style='padding:10px;'><b>NIR / Raman Spectroscopy Incoming Assay + Vendor Lot Hold</b><br><span style='font-size:10.5px; color:#94a3b8;'>Every incoming API shipment is identity-screened at the receiving dock using non-destructive near-infrared spectroscopy against its Certificate of Analysis. Any chemical deviation triggers an immediate lot hold — batch quarantined in an access-controlled zone until HPLC confirmatory testing passes. This is the cheapest and earliest interception point for nitrosamine (NDMA) and impurity contamination before any manufacturing begins.</span></td>
               <td style='padding:10px;'>$2,500</td>
               <td style='padding:10px; color:#ef4444;'>$420,000</td>
               <td style='padding:10px; color:#10b981;'><b>+$417,500</b></td>
@@ -4842,7 +4840,7 @@ elif selected_page == "🔄 Reverse Logistics & Certified Disposal":
             <tr style='border-bottom:1px solid #1e293b;'>
               <td style='padding:10px;'><b style='color:#ef4444;'>Stage 2: cGMP Formulation</b></td>
               <td style='padding:10px;'>Subpotency, dissolution failure, particulate matter, sterility breach</td>
-              <td style='padding:10px;'>In-line PAT optical sensors & clean-in-place (CIP) verification</td>
+              <td style='padding:10px;'><b>In-Line PAT Sensors & Clean-in-Place (CIP) Verification</b><br><span style='font-size:10.5px; color:#94a3b8;'>Process Analytical Technology (PAT) optical sensors continuously monitor dissolution rate, blend uniformity, and fill weight in real time during formulation. CIP logs validate that equipment surfaces are contaminant-free between batches. Any out-of-spec PAT reading automatically freezes the tank — holding the batch before primary packaging begins. Prevents subpotency, sterility breach, and particulate matter from advancing.</span></td>
               <td style='padding:10px;'>$6,500</td>
               <td style='padding:10px; color:#ef4444;'>$310,000</td>
               <td style='padding:10px; color:#10b981;'><b>+$303,500</b></td>
@@ -4851,7 +4849,7 @@ elif selected_page == "🔄 Reverse Logistics & Certified Disposal":
             <tr style='border-bottom:1px solid #1e293b;'>
               <td style='padding:10px;'><b style='color:#8b5cf6;'>Stage 3: Packaging & Serialization</b></td>
               <td style='padding:10px;'>Missing NDC barcode, incorrect dosage carton, seal failure</td>
-              <td style='padding:10px;'>Automated Machine Vision (AOI) camera verification on carton line</td>
+              <td style='padding:10px;'><b>Automated Machine Vision (AOI) Camera Inspection</b><br><span style='font-size:10.5px; color:#94a3b8;'>High-speed area cameras mounted on the carton line verify every NDC barcode, dosage concentration label, lot number, expiry date, and tamper-evident seal at full production speed. Any mismatched or missing label physically diverts the carton before it enters finished-goods inventory. This eliminates 100% of packaging & labeling recalls at a fraction of the recall cost.</span></td>
               <td style='padding:10px;'>$1,500</td>
               <td style='padding:10px; color:#ef4444;'>$85,000</td>
               <td style='padding:10px; color:#10b981;'><b>+$83,500</b></td>
@@ -4860,7 +4858,7 @@ elif selected_page == "🔄 Reverse Logistics & Certified Disposal":
             <tr style='border-bottom:1px solid #1e293b;'>
               <td style='padding:10px;'><b style='color:#00d4ff;'>Stage 4: Cold-Chain Logistics</b></td>
               <td style='padding:10px;'>Warehouse refrigeration breakdown, transit excursion (&gt;8°C)</td>
-              <td style='padding:10px;'>IoT sensor threshold alert + dynamic FEFO expedited re-routing</td>
+              <td style='padding:10px;'><b>IoT Cold-Chain Temperature Alert + FEFO Dynamic Re-routing</b><br><span style='font-size:10.5px; color:#94a3b8;'>Wireless IoT sensors on pallets and refrigerated trucks stream continuous temperature readings to a cloud dashboard. Any excursion beyond the cold-chain threshold (e.g. >8°C for biologics) instantly alerts the logistics team, auto-dispatches a temperature-controlled replacement courier, and FEFO-re-routes at-risk inventory to the nearest qualified distribution centre — preventing temperature-damaged product from ever reaching a patient.</span></td>
               <td style='padding:10px;'>$3,000</td>
               <td style='padding:10px; color:#ef4444;'>$120,000</td>
               <td style='padding:10px; color:#10b981;'><b>+$117,000</b></td>
@@ -4913,15 +4911,39 @@ elif selected_page == "🔄 Reverse Logistics & Certified Disposal":
         </div>
         """, unsafe_allow_html=True)
 
+        st.markdown("""
+        <div style='background:#0f172a; border:1px solid #1e293b; border-radius:6px; padding:12px 16px; margin:4px 0 16px 0; font-size:11.5px; color:#94a3b8;'>
+          <b style='color:#cbd5e1; font-size:12px;'>📖 How to read this output:</b><br><br>
+          <b style='color:#f1f5f9;'>Intercept Investment</b> — The one-time cost of running the quality test at the selected stage
+          (e.g. lab assay fee, AOI camera run cost, IoT sensor alert handling). This is what you pay to catch the problem early.<br><br>
+          <b style='color:#f1f5f9;'>Unmitigated Commercial Recall Loss</b> — The total financial damage <u>if the defect is NOT caught</u> and reaches the market.
+          This includes: product replacement value + reverse logistics freight ($8.50/unit) + mandatory FDA/hospital
+          communications & legal fees ($45,000 flat) + EPA hazardous disposal cost (8% of product value).<br><br>
+          <b style='color:#f1f5f9;'>ROI Multiple</b> — For every <b style='color:#38bdf8;'>$1</b> spent on early interception,
+          this many dollars of market recall loss are prevented. A 40x ROI means $1 of testing avoids $40 of recall damage.
+        </div>
+        """, unsafe_allow_html=True)
+
     # ─────────────────────────────────────────────────────────────────────────
-    # TAB 3: DEFECT CLUSTERING & ANOMALY DETECTION
+    # DEFECT CLUSTERING & ANOMALY DETECTION — Merged into Tab 2
     # ─────────────────────────────────────────────────────────────────────────
-    with tab_rcl_clusters:
-        st.markdown("### 🧩 Unsupervised Defect Clustering & Manufacturing Anomaly Detection")
-        st.markdown(
-            "Leveraging unsupervised machine learning to discover latent defect taxonomies across 3,000 historical FDA recall filings, "
-            "and deploying **Isolation Forests** on in-process manufacturing telemetry to detect outlier batches before commercial warehouse release."
-        )
+    with tab_recall_intel:
+        st.markdown("---")
+        st.markdown("""
+        <div style='background:linear-gradient(135deg,#16082a,#0f172a);
+             border-left:5px solid #8b5cf6; border-radius:10px;
+             padding:16px 20px; margin:8px 0 20px 0;'>
+          <div style='font-size:17px; font-weight:800; color:#a78bfa; letter-spacing:0.3px;'>
+            🧩 AI-Powered Defect Discovery &amp; Manufacturing Anomaly Detection
+          </div>
+          <div style='font-size:12px; color:#94a3b8; margin-top:6px; line-height:1.6;'>
+            Unsupervised <b style='color:#c4b5fd;'>K-Means NLP</b> automatically classifies 3,000 historical FDA recall events
+            into 4 distinct defect archetypes — each with a targeted operational intercept protocol.
+            <b style='color:#c4b5fd;'>Isolation Forest</b> simultaneously flags production batches with
+            statistically abnormal yield deviations before they reach the commercial warehouse.
+          </div>
+        </div>
+        """, unsafe_allow_html=True)
 
         col_km, col_ano = st.columns(2)
 
@@ -5049,9 +5071,9 @@ elif selected_page == "🔄 Reverse Logistics & Certified Disposal":
         st.dataframe(ano_display, use_container_width=True, hide_index=True)
 
     # ─────────────────────────────────────────────────────────────────────────
-    # TAB 4: NEW BATCH RECALL PROBABILITY PREDICTOR
+    # TAB 3: NEW BATCH RECALL RISK PREDICTOR
     # ─────────────────────────────────────────────────────────────────────────
-    with tab_batch_pred:
+    with tab_predictor:
         st.markdown("### 🔮 Predictive Machine Learning: Will a New Production Batch Be Recalled?")
         st.markdown(
             "Trained on **15,137 historical finished product batches** connecting manufacturing order variances, dosage formulation, "
@@ -5211,11 +5233,25 @@ elif selected_page == "🔄 Reverse Logistics & Certified Disposal":
         """, unsafe_allow_html=True)
 
     # ─────────────────────────────────────────────────────────────────────────
-    # TAB 5: HAZARDOUS DISPOSAL ROUTING MODEL
+    # EPA/DEA DISPOSAL ROUTING — Rendered in Tab 1: Operations & Disposal Audit
     # ─────────────────────────────────────────────────────────────────────────
-    with tab_dsp_ml:
-        st.markdown("### 🔥 Prescriptive Machine Learning: EPA/DEA Hazardous Disposal Routing")
-        st.markdown("Predicts and mandates the certified destruction method (*Incineration*, *Witnessed High-Temp Incineration*, *Chemical Neutralization*, *Reverse Distribution*) in compliance with EPA RCRA and DEA Title 21 regulations.")
+    with tab_ops:
+        st.markdown("---")
+        st.markdown("""
+        <div style='background:linear-gradient(135deg,#1a0a2e,#0f172a);
+             border-left:5px solid #7c3aed; border-radius:10px;
+             padding:16px 20px; margin:8px 0 20px 0;'>
+          <div style='font-size:17px; font-weight:800; color:#a78bfa; letter-spacing:0.3px;'>
+            🔥 EPA / DEA Certified Disposal Routing — Prescriptive AI Recommender
+          </div>
+          <div style='font-size:12px; color:#94a3b8; margin-top:6px; line-height:1.6;'>
+            Input waste batch parameters below to receive the mandated <b style='color:#c4b5fd;'>EPA RCRA / DEA Title 21</b>
+            certified destruction protocol. The AI model selects the correct method
+            (Incineration · Witnessed High-Temp · Chemical Neutralization · Reverse Distribution)
+            and generates an electronic compliance certificate reference before financial write-off closure.
+          </div>
+        </div>
+        """, unsafe_allow_html=True)
 
         dsp_df_ml = dsp_df.copy()
         dsp_df_ml["quantity"] = pd.to_numeric(dsp_df_ml.get("quantity", 100), errors="coerce").fillna(100.0)
