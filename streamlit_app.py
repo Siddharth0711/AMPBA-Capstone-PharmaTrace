@@ -4994,9 +4994,7 @@ elif selected_page == "🔄 Reverse Logistics & Certified Disposal":
 
         # ── 2. Manufacturing Anomaly Detection (Isolation Forest) ────────────
         with col_ano:
-            st.markdown("#### 🚨 Manufacturing Process Anomaly Detector")
-            st.caption("Isolation Forest trained on batch size and yield variance to isolate outlier production runs.")
-
+            # Run Isolation Forest (data prep — no chart shown)
             df_ano = batches_df.copy() if not batches_df.empty else pd.DataFrame({"batch_qty": [9850]*100})
             if not mo_df.empty and "mo_id" in mo_df.columns and "mo_id" in df_ano.columns:
                 df_ano = df_ano.merge(mo_df[["mo_id", "planned_qty", "produced_qty"]], on="mo_id", how="left")
@@ -5009,38 +5007,45 @@ elif selected_page == "🔄 Reverse Logistics & Certified Disposal":
             df_ano["produced_qty"] = pd.to_numeric(df_ano.get("produced_qty", 10000), errors="coerce").fillna(10000)
             df_ano["yield_variance"] = ((df_ano["produced_qty"] - df_ano["planned_qty"]) / df_ano["planned_qty"].clip(lower=1)) * 100
 
-            # Fit Isolation Forest
             iso = IsolationForest(contamination=0.035, random_state=42)
             ano_features = df_ano[["yield_variance", "batch_qty"]].fillna(0)
             df_ano["anomaly_score"] = iso.fit_predict(ano_features)
             df_ano["is_anomaly"] = df_ano["anomaly_score"] == -1
 
-            fig_an, ax_an = plt.subplots(figsize=(7.5, 5.2))
-            fig_an.patch.set_facecolor("#0f1117")
-            ax_an.set_facecolor("#131722")
+            _n_flagged = int(df_ano["is_anomaly"].sum())
+            _n_total = len(df_ano)
+            _flag_pct = _n_flagged / max(_n_total, 1) * 100
+            _worst_var = df_ano.loc[df_ano["is_anomaly"], "yield_variance"].min() if _n_flagged > 0 else 0.0
 
-            normal_pts = df_ano[~df_ano["is_anomaly"]]
-            ano_pts = df_ano[df_ano["is_anomaly"]]
+            st.markdown("#### 🚨 Manufacturing Batch Anomaly Detection")
+            st.markdown(
+                f"<div style='background:linear-gradient(135deg,#1c0a0a,#0f172a); border:1px solid #ef444444; "
+                f"border-left:5px solid #ef4444; border-radius:8px; padding:14px 18px; margin:8px 0;'>"
+                f"<div style='font-size:13px; color:#f1f5f9; font-weight:700;'>Isolation Forest scanned "
+                f"<b>{_n_total:,} production batches</b> using yield variance and batch size signals.</div>"
+                f"<div style='margin-top:10px; display:flex; gap:24px;'>"
+                f"<div><div style='font-size:24px; font-weight:800; color:#ef4444;'>{_n_flagged}</div>"
+                f"<div style='font-size:11px; color:#94a3b8;'>Anomalous Batches Flagged</div></div>"
+                f"<div><div style='font-size:24px; font-weight:800; color:#f59e0b;'>{_flag_pct:.1f}%</div>"
+                f"<div style='font-size:11px; color:#94a3b8;'>of All Production Runs</div></div>"
+                f"<div><div style='font-size:24px; font-weight:800; color:#ef4444;'>{_worst_var:+.1f}%</div>"
+                f"<div style='font-size:11px; color:#94a3b8;'>Worst Yield Deviation</div></div>"
+                f"</div>"
+                f"<div style='margin-top:8px; font-size:11px; color:#94a3b8;'>"
+                f"Protocol: All flagged batches must complete a secondary in-process assay before commercial warehouse release."
+                f"</div></div>",
+                unsafe_allow_html=True
+            )
 
-            ax_an.scatter(normal_pts["batch_qty"], normal_pts["yield_variance"], color="#00d4ff", alpha=0.35, s=20, label=f"Normal In-Spec Runs (n={len(normal_pts):,})")
-            ax_an.scatter(ano_pts["batch_qty"], ano_pts["yield_variance"], color="#ef4444", alpha=0.9, s=55, edgecolors="#ffffff", label=f"Flagged Anomalous Runs (n={len(ano_pts):,})")
-
-            ax_an.axhline(0, color="#64748b", linestyle=":", alpha=0.7)
-            ax_an.set_title("Manufacturing Yield Variance vs Batch Quantity", color="#00d4ff", fontsize=11, fontweight="bold")
-            ax_an.set_xlabel("Batch Produced Quantity (Units)", color="#94a3b8", fontsize=9)
-            ax_an.set_ylabel("Yield Variance vs Plan (%)", color="#94a3b8", fontsize=9)
-            ax_an.legend(loc="upper right", fontsize=8, facecolor="#0f172a", edgecolor="#334155", labelcolor="#cbd5e1")
-            for sp in ax_an.spines.values(): sp.set_color("#334155")
-            ax_an.grid(True, alpha=0.15, linestyle="--")
-            plt.tight_layout()
-            show_fig(fig_an)
-
-        # Anomaly Batch Action Table
-        st.markdown("#### ⚠️ High-Risk Outlier Batches Flagged for Pre-Release Quarantine")
-        st.caption("Batches detected with statistical yield anomalies that deviate significantly from standard validation envelopes:")
-        ano_display = df_ano[df_ano["is_anomaly"]][["fp_batch_id", "product_id", "batch_qty", "planned_qty", "yield_variance", "qc_status"]].head(15) if "fp_batch_id" in df_ano.columns else df_ano.head(5)
+        # Anomaly Batch Action Table — full width
+        st.markdown("#### ⚠️ Flagged Batches — Pre-Release Quarantine Watchlist")
+        st.caption("Batches where Isolation Forest detected statistical yield deviations beyond the validated manufacturing envelope:")
+        ano_display = df_ano[df_ano["is_anomaly"]][[c for c in ["fp_batch_id", "product_id", "batch_qty", "planned_qty", "yield_variance", "qc_status"] if c in df_ano.columns]].head(15)
+        if ano_display.empty:
+            ano_display = df_ano.head(5)[[c for c in ["fp_batch_id", "product_id", "batch_qty", "planned_qty", "yield_variance"] if c in df_ano.columns]]
+        ano_display = ano_display.copy()
         ano_display["yield_variance"] = ano_display["yield_variance"].apply(lambda v: f"{v:+.2f}%")
-        ano_display["Recommended Protocol"] = "🚨 HOLD RELEASE: Initiate In-Process Assay Re-Check"
+        ano_display["Recommended Action"] = "🚨 HOLD — Initiate In-Process Assay Re-Check"
         st.dataframe(ano_display, use_container_width=True, hide_index=True)
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -5126,7 +5131,7 @@ elif selected_page == "🔄 Reverse Logistics & Certified Disposal":
 
         # ── INTERACTIVE NEW BATCH RECALL SIMULATOR ────────────────────────────
         st.markdown("#### 🧪 Interactive New Batch Recall Risk Simulator")
-        st.caption("Input the parameters of a newly manufactured batch before commercial packaging to predict recall risk, failure stage, and capital saved.")
+        st.caption("Input the parameters of a newly manufactured batch before commercial packaging to get a real-time AI recall risk score.")
 
         sim_c1, sim_c2, sim_c3 = st.columns(3)
         sim_form = sim_c1.selectbox("Product Dosage Form", ["Tablet", "Injection", "Capsule", "Oral Solution", "Inhaler"], key="sim_b_form")
@@ -5134,12 +5139,11 @@ elif selected_page == "🔄 Reverse Logistics & Certified Disposal":
         sim_mfg = sim_c2.selectbox("Manufacturing Facility", _avail_mfgs, key="sim_b_mfg")
         sim_bqty = sim_c3.number_input("Planned Batch Size (Units)", 1000, 100000, 12000, step=1000, key="sim_b_qty")
 
-        sim_c4, sim_c5, sim_c6 = st.columns(3)
-        sim_yield_var = sim_c4.slider("Observed In-Process Yield Variance (%)", -15.0, 10.0, -3.5, step=0.5, key="sim_b_yvar", help="Negative variance indicates mass-balance loss during formulation")
+        sim_c4, sim_c5 = st.columns(2)
+        sim_yield_var = sim_c4.slider("Observed In-Process Yield Variance (%)", -15.0, 10.0, -3.5, step=0.5, key="sim_b_yvar", help="Negative variance = mass-balance loss during formulation")
         sim_price = sim_c5.number_input("Unit Price ($)", 2.0, 1200.0, 85.0, step=5.0, key="sim_b_price")
-        sim_raw_dev = sim_c6.selectbox("API Supplier Deviation Flag", ["Normal (In-Spec)", "Minor Variance (+1σ)", "Critical OOS Deviation Detected"], key="sim_b_raw_dev")
 
-        # Encode input row
+        # Encode input row — all features come from actual model inputs
         sim_input = pd.DataFrame([{
             "batch_qty": sim_bqty,
             "yield_variance": sim_yield_var / 100.0,
@@ -5150,22 +5154,23 @@ elif selected_page == "🔄 Reverse Logistics & Certified Disposal":
         }])
         sim_input_enc = pd.get_dummies(sim_input, dtype=float).reindex(columns=X_b.columns, fill_value=0)
 
-        # Base probability from model
-        base_prob = clf_batch.predict_proba(sim_input_enc)[0, 1] if len(clf_batch.classes_) > 1 else 0.25
+        # Pure RF model probability — no hardcoded overrides
+        pred_prob = clf_batch.predict_proba(sim_input_enc)[0, 1] if len(clf_batch.classes_) > 1 else 0.25
 
-        # Incorporate API Supplier Deviation
-        if "Critical OOS" in sim_raw_dev:
-            pred_prob = min(0.96, base_prob + 0.45)
-            suspect_stage = "Stage 1: Raw Material & API Sourcing (Nitrosamine / Impurity Risk)"
-            rec_action = "🚨 QUARANTINE LOT IN FACILITY: Hold commercial release. Conduct immediate HPLC assay and raw material trace."
-        elif sim_yield_var < -5.0 or sim_form == "Injection":
-            pred_prob = min(0.92, base_prob + 0.25)
-            suspect_stage = "Stage 2: cGMP Formulation & Dissolution (In-Process Filling Excursion)"
-            rec_action = "⚠️ HOLD PACKAGING: Execute secondary 12-hour dissolution assay and clean-in-place verification."
+        # Derive suspect stage from the top contributing feature in this input
+        _top_feat = _fi_s.index[0] if len(_fi_s) > 0 else "yield_variance"
+        if "yield" in _top_feat or sim_yield_var < -5.0:
+            suspect_stage = "Stage 2: cGMP Formulation & Dissolution"
+            rec_action = "⚠️ HOLD PACKAGING — Execute secondary 12-hour dissolution assay and clean-in-place verification."
+        elif "unit_price" in _top_feat or "shelf_life" in _top_feat:
+            suspect_stage = "Stage 1: Raw Material & API Sourcing"
+            rec_action = "🔍 ENHANCED INCOMING INSPECTION — Conduct HPLC assay on API lot before formulation release."
+        elif "dosage_form" in _top_feat or sim_form == "Injection":
+            suspect_stage = "Stage 2: Sterile Manufacturing & Aseptic Fill"
+            rec_action = "⚠️ HOLD FILL-FINISH — Verify sterility test and particulate count before batch release."
         else:
-            pred_prob = max(0.04, base_prob - 0.08)
-            suspect_stage = "Stage 3/4: Secondary Packaging & Finished Good Buffer"
-            rec_action = "✅ APPROVE BATCH RELEASE: Standard serialization and warehouse dispatch authorized."
+            suspect_stage = "Stage 3/4: Packaging & Finished Goods"
+            rec_action = "✅ STANDARD RELEASE — Serialization and warehouse dispatch authorized."
 
         # Risk Banner
         pred_pct = pred_prob * 100
