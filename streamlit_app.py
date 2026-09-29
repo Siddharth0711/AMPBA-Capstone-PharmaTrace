@@ -2780,23 +2780,22 @@ elif selected_page == "🌐 Network Rebalancing & Transfers":
     st.markdown('<div class="section-header">🗺️ 1. Geographic Demand & Stock Distribution</div>', unsafe_allow_html=True)
     st.markdown(
         "<div style='color:#94a3b8; font-size:12.5px; margin-top:-8px; margin-bottom:14px;'>"
-        "Multi-echelon inventory intelligence across warehouses: isolate critical stockout deficits (HOT), "
-        "identify trapped working capital (COLD), and inspect demand vs stock runway.</div>",
+        "Warehouse-level inventory intelligence: spot 🔥 HOT stockout risks, ❄️ COLD capital traps, and demand vs stock runway at a glance.</div>",
         unsafe_allow_html=True
     )
 
     # ── Part A: SKU Heatmaps ─────────────────────────────────────────────────
-    st.markdown("<div style='font-size:14px; font-weight:700; color:#38bdf8; margin: 14px 0 8px;'>📊 Part A: SKU × Warehouse Demand & Stock Runway Heatmaps</div>", unsafe_allow_html=True)
+    st.markdown("<div style='font-size:14px; font-weight:700; color:#38bdf8; margin: 14px 0 8px;'>📊 SKU × Warehouse Demand Heatmaps & Stock Runway</div>", unsafe_allow_html=True)
     # Dynamic filter bar
     fc1, fc2, fc3 = st.columns([2.6, 1.8, 1.4])
     with fc1:
         hm_filter = st.selectbox(
-            "Filter SKUs by Strategic Risk Profile:",
+            "View SKUs by Priority:",
             [
-                "🔥 Critical Stockout Exposure (HOT Priority First)",
-                "❄️ Trapped Capital Surpluses (COLD Priority First)",
-                "📈 High-Velocity Drivers (Highest Total Demand)",
-                "🌐 Top Active Portfolio SKUs (Volume Sorted)",
+                "🔥 HOT — Stockout Risk (Urgent)",
+                "❄️ COLD — Trapped Capital Surplus",
+                "📈 High-Velocity Products (Top Demand)",
+                "🌐 All Active SKUs (Volume Ranked)",
             ],
             index=0,
             key="geo_hm_filter"
@@ -2910,7 +2909,7 @@ elif selected_page == "🌐 Network Rebalancing & Transfers":
     """, unsafe_allow_html=True)
 
     # ── Part B: SKU Risk Portfolio & Network Balance per Warehouse ───────────
-    st.markdown("<div style='font-size:14px; font-weight:700; color:#38bdf8; margin: 24px 0 8px;'>🏢 Part B: Warehouse SKU Risk Profile & Network Health</div>", unsafe_allow_html=True)
+    st.markdown("<div style='font-size:14px; font-weight:700; color:#38bdf8; margin: 24px 0 8px;'>🏢 Warehouse Portfolio Health — SKU Risk Breakdown</div>", unsafe_allow_html=True)
     st.caption("Distribution of active pharmaceutical SKUs by operational status across warehouses.")
 
     wh_summary = geo.groupby("warehouse_id").agg(
@@ -3580,16 +3579,14 @@ elif selected_page == "📈 Demand & Seasonality":
       </div>
     </div>""", unsafe_allow_html=True)
 
-    _tab1, _tab2, _tab3, _tab4, _tab5 = st.tabs([
-        "📊 Pattern Classification",
-        "🔮 1M / 3M / 6M Forecasts",
-        "🏭 Warehouse & Distributor Demand",
-        "🔬 Model Performance & Features",
+    _tab_fcst, _tab_intel, _tab_proc = st.tabs([
+        "📊 Demand Patterns & Forecasts",
+        "🏭 Warehouse & Supply Intelligence",
         "📋 Procurement Action Plan",
     ])
 
-    # ── TAB 1: PATTERN CLASSIFICATION ────────────────────────────────────────
-    with _tab1:
+    # ── TAB 1: DEMAND PATTERNS & FORECASTS ──────────────────────────────────
+    with _tab_fcst:
         st.markdown("### 🏷️ Rule-Based Clinical Demand Pattern Classification")
         st.caption("Patterns derived from actual shipment behaviour — no synthetic pre-labeling.")
 
@@ -3648,8 +3645,8 @@ elif selected_page == "📈 Demand & Seasonality":
         else:
             st.info("Run `python demand_prediction.py` to generate shipments-based pattern data.")
 
-    # ── TAB 2: FORECASTS ──────────────────────────────────────────────────────
-    with _tab2:
+    # ── (CONTINUED IN SAME TAB) FORECASTS ─────────────────────────────────
+        st.markdown("---")
         st.markdown("### 🔮 XGBoost Demand Forecasts — 1M | 3M | 6M")
         st.caption("Forecasted demand per product for next 1, 3, 6 months from XGBoost trained on shipment history.")
 
@@ -3758,8 +3755,8 @@ elif selected_page == "📈 Demand & Seasonality":
                     _fc = [max(0,int(np.polyval(_pf,len(_y)+i))) for i in range(_h)]
                     st.write(f"**{_h}M SARIMA Fallback:** Total ~{sum(_fc):,} units")
 
-    # ── TAB 3: WAREHOUSE & DISTRIBUTOR ────────────────────────────────────────
-    with _tab3:
+    # ── TAB 2: WAREHOUSE & SUPPLY INTELLIGENCE ─────────────────────────────
+    with _tab_intel:
         st.markdown("### 🏭 Warehouse & Distributor Demand Intelligence")
         st.caption("Derived from actual shipment quantities — who orders most and from where.")
 
@@ -4000,7 +3997,7 @@ elif selected_page == "📈 Demand & Seasonality":
 
                 # ── Demand trend by warehouse type ────────────────────────────
                 if "dominant_wh_type" in _src3.columns:
-                    st.markdown("#### 📊 Monthly Trend by Warehouse Type")
+                    st.markdown("#### 📊 Monthly Shipment Trend by Warehouse Type")
                     _trbyw = _src3.groupby(["year_month","dominant_wh_type"])["total_quantity"].sum().reset_index().sort_values("year_month")
                     fig_tw, ax_tw = plt.subplots(figsize=(16, 4))
                     fig_tw.patch.set_facecolor("#0f1117"); ax_tw.set_facecolor("#0f1117")
@@ -4023,108 +4020,108 @@ elif selected_page == "📈 Demand & Seasonality":
         else:
             st.info("Run `python demand_prediction.py` to generate warehouse & distributor demand rankings.")
 
-    # ── TAB 4: MODEL PERFORMANCE ──────────────────────────────────────────────
-    # ── TAB 4: MODEL PERFORMANCE ──────────────────────────────────────────────
-    with _tab4:
-        st.markdown("### 🔬 XGBoost Model Performance & Explainability")
+    # ── TAB 3: PROCUREMENT ACTION PLAN (model perf in expander) ─────────────
+    with _tab_proc:
+        with st.expander("🔬 XGBoost Model Validation & Feature Explainability (Technical Review)", expanded=False):
+            st.markdown("#### 🔬 XGBoost Model Performance & Explainability")
 
         # ── Split summary banner ─────────────────────────────────────────────
-        _split_info = {}
-        if _live_mode and _cache is not None:
-            for _hz, _res in _cache.get("results", {}).items():
-                if isinstance(_res, dict):
-                    _split_info[_hz.upper()] = {
-                        "train_period": _res.get("train_period", ""),
-                        "test_period":  _res.get("test_period",  ""),
-                        "train_size":   _res.get("train_size",   0),
-                        "test_size":    _res.get("test_size",    0),
-                        "train_pct":    _res.get("train_pct",    80),
-                        "test_pct":     _res.get("test_pct",     20),
+            _split_info = {}
+            if _live_mode and _cache is not None:
+                for _hz, _res in _cache.get("results", {}).items():
+                    if isinstance(_res, dict):
+                        _split_info[_hz.upper()] = {
+                            "train_period": _res.get("train_period", ""),
+                            "test_period":  _res.get("test_period",  ""),
+                            "train_size":   _res.get("train_size",   0),
+                            "test_size":    _res.get("test_size",    0),
+                            "train_pct":    _res.get("train_pct",    80),
+                            "test_pct":     _res.get("test_pct",     20),
+                        }
+            elif _df_metrics is not None and "Train Period" in _df_metrics.columns:
+                for _, _row in _df_metrics.iterrows():
+                    _split_info[str(_row["Horizon"]).upper()] = {
+                        "train_period": _row.get("Train Period", ""),
+                        "test_period":  _row.get("Test Period",  ""),
+                        "train_size":   int(_row.get("Train Rows", 0)),
+                        "test_size":    int(_row.get("Test Rows",  0)),
+                        "train_pct":    int(_row.get("Train %",    80)),
+                        "test_pct":     int(_row.get("Test %",     20)),
                     }
-        elif _df_metrics is not None and "Train Period" in _df_metrics.columns:
-            for _, _row in _df_metrics.iterrows():
-                _split_info[str(_row["Horizon"]).upper()] = {
-                    "train_period": _row.get("Train Period", ""),
-                    "test_period":  _row.get("Test Period",  ""),
-                    "train_size":   int(_row.get("Train Rows", 0)),
-                    "test_size":    int(_row.get("Test Rows",  0)),
-                    "train_pct":    int(_row.get("Train %",    80)),
-                    "test_pct":     int(_row.get("Test %",     20)),
-                }
 
-        _ref_info = next(iter(_split_info.values()), None) if _split_info else None
-        if _ref_info:
-            _tp  = _ref_info.get("train_pct", 80)
-            _tep = _ref_info.get("test_pct",  20)
-            st.markdown(f"""
-            <div style='background:rgba(0,0,0,0.3);border:1px solid #1e3a5f;border-radius:10px;
-                         padding:16px 20px;margin-bottom:16px;'>
-              <div style='font-size:11px;font-weight:700;color:#94a3b8;letter-spacing:0.08em;
-                           text-transform:uppercase;margin-bottom:10px;'>
-                📐 Chronological Train / Test Split
-              </div>
-              <div style='display:flex;width:100%;height:28px;border-radius:6px;overflow:hidden;margin-bottom:8px;'>
-                <div style='width:{_tp}%;background:linear-gradient(90deg,#3b82f6,#1d4ed8);
-                             display:flex;align-items:center;justify-content:center;
-                             font-size:11px;font-weight:700;color:#fff;'>
-                  🏋️ TRAIN {_tp}%
-                </div>
-                <div style='width:{_tep}%;background:linear-gradient(90deg,#10b981,#059669);
-                             display:flex;align-items:center;justify-content:center;
-                             font-size:11px;font-weight:700;color:#fff;'>
-                  🧪 TEST {_tep}%
-                </div>
-              </div>
-              <div style='display:flex;justify-content:space-between;font-size:11px;color:#94a3b8;'>
-                <span>🔵 Training: <b style='color:#60a5fa;'>{_ref_info.get('train_period','')}</b>
-                  &nbsp;({_ref_info.get('train_size',0):,} rows)</span>
-                <span>🟢 Test (most recent): <b style='color:#34d399;'>{_ref_info.get('test_period','')}</b>
-                  &nbsp;({_ref_info.get('test_size',0):,} rows)</span>
-              </div>
-              <div style='font-size:10px;color:#475569;margin-top:6px;'>
-                ⏱️ Test set = the <b>most recent {_tep}% of months</b> — never seen during training.
-                Model evaluated on future demand it was not trained on, matching real-world deployment.
-              </div>
-            </div>""", unsafe_allow_html=True)
+            _ref_info = next(iter(_split_info.values()), None) if _split_info else None
+            if _ref_info:
+                _tp  = _ref_info.get("train_pct", 80)
+                _tep = _ref_info.get("test_pct",  20)
+                st.markdown(f"""
+                <div style='background:rgba(0,0,0,0.3);border:1px solid #1e3a5f;border-radius:10px;
+                             padding:16px 20px;margin-bottom:16px;'>
+                  <div style='font-size:11px;font-weight:700;color:#94a3b8;letter-spacing:0.08em;
+                               text-transform:uppercase;margin-bottom:10px;'>
+                    📐 Chronological Train / Test Split
+                  </div>
+                  <div style='display:flex;width:100%;height:28px;border-radius:6px;overflow:hidden;margin-bottom:8px;'>
+                    <div style='width:{_tp}%;background:linear-gradient(90deg,#3b82f6,#1d4ed8);
+                                 display:flex;align-items:center;justify-content:center;
+                                 font-size:11px;font-weight:700;color:#fff;'>
+                      🏋️ TRAIN {_tp}%
+                    </div>
+                    <div style='width:{_tep}%;background:linear-gradient(90deg,#10b981,#059669);
+                                 display:flex;align-items:center;justify-content:center;
+                                 font-size:11px;font-weight:700;color:#fff;'>
+                      🧪 TEST {_tep}%
+                    </div>
+                  </div>
+                  <div style='display:flex;justify-content:space-between;font-size:11px;color:#94a3b8;'>
+                    <span>🔵 Training: <b style='color:#60a5fa;'>{_ref_info.get('train_period','')}</b>
+                      &nbsp;({_ref_info.get('train_size',0):,} rows)</span>
+                    <span>🟢 Test (most recent): <b style='color:#34d399;'>{_ref_info.get('test_period','')}</b>
+                      &nbsp;({_ref_info.get('test_size',0):,} rows)</span>
+                  </div>
+                  <div style='font-size:10px;color:#475569;margin-top:6px;'>
+                    ⏱️ Test set = the <b>most recent {_tep}% of months</b> — never seen during training.
+                    Model evaluated on future demand it was not trained on, matching real-world deployment.
+                  </div>
+                </div>""", unsafe_allow_html=True)
 
-        if _df_metrics is not None and not _df_metrics.empty:
-            if "Test R2" in _df_metrics.columns and "Test R²" not in _df_metrics.columns:
-                _df_metrics["Test R²"] = _df_metrics["Test R2"]
-            st.markdown("#### 📊 Test-Set Performance by Horizon")
-            _disp_cols = [c for c in ["Horizon","Train Period","Test Period",
-                                       "Train Rows","Test Rows",
-                                       "Test MAPE(%)","Test RMSE","Test R²",
-                                       "Train %","Test %"] if c in _df_metrics.columns]
-            if not _disp_cols:
-                _disp_cols = list(_df_metrics.columns)
-            st.dataframe(_df_metrics[_disp_cols], use_container_width=True, hide_index=True)
+            if _df_metrics is not None and not _df_metrics.empty:
+                if "Test R2" in _df_metrics.columns and "Test R²" not in _df_metrics.columns:
+                    _df_metrics["Test R²"] = _df_metrics["Test R2"]
+                st.markdown("#### 📊 Test-Set Performance by Horizon")
+                _disp_cols = [c for c in ["Horizon","Train Period","Test Period",
+                                           "Train Rows","Test Rows",
+                                           "Test MAPE(%)","Test RMSE","Test R²",
+                                           "Train %","Test %"] if c in _df_metrics.columns]
+                if not _disp_cols:
+                    _disp_cols = list(_df_metrics.columns)
+                st.dataframe(_df_metrics[_disp_cols], use_container_width=True, hide_index=True)
 
-            if _df_pat_mape is not None and not _df_pat_mape.empty:
-                st.markdown("#### 🏷️ MAPE by Clinical Pattern (Test Set — most recent months)")
-                try:
-                    st.dataframe(
-                        _df_pat_mape.pivot(index="clinical_demand_pattern",
-                                           columns="Horizon", values="MAPE(%)"),
-                        use_container_width=True)
-                except Exception:
-                    st.dataframe(_df_pat_mape, use_container_width=True, hide_index=True)
+                if _df_pat_mape is not None and not _df_pat_mape.empty:
+                    st.markdown("#### 🏷️ MAPE by Clinical Pattern (Test Set — most recent months)")
+                    try:
+                        st.dataframe(
+                            _df_pat_mape.pivot(index="clinical_demand_pattern",
+                                               columns="Horizon", values="MAPE(%)"),
+                            use_container_width=True)
+                    except Exception:
+                        st.dataframe(_df_pat_mape, use_container_width=True, hide_index=True)
 
-            if _df_fi is not None and not _df_fi.empty:
-                st.markdown("#### 🎯 Top Feature Importances")
-                _hfi = st.selectbox("Horizon", _df_fi["Horizon"].unique().tolist(), key="hz_fi")
-                _fih = _df_fi[_df_fi["Horizon"] == _hfi].head(20)
-                fig_fi, ax_fi = plt.subplots(figsize=(12, 6))
-                fig_fi.patch.set_facecolor("#0f1117"); ax_fi.set_facecolor("#0f1117")
-                ax_fi.barh(_fih["feature"][::-1], _fih["importance"][::-1],
-                            color=[PALETTE[i % len(PALETTE)] for i in range(len(_fih))][::-1], alpha=0.85)
-                ax_fi.set_xlabel("Importance", fontsize=9, color="#94a3b8")
-                ax_fi.set_title(f"Feature Importances — {_hfi}", fontsize=11, color="#e2e8f0", fontweight="bold")
-                ax_fi.tick_params(colors="#94a3b8")
-                for sp in ax_fi.spines.values(): sp.set_edgecolor("#334155")
-                plt.tight_layout(); show_fig(fig_fi)
+                if _df_fi is not None and not _df_fi.empty:
+                    st.markdown("#### 🎯 Top Feature Importances")
+                    _hfi = st.selectbox("Horizon", _df_fi["Horizon"].unique().tolist(), key="hz_fi")
+                    _fih = _df_fi[_df_fi["Horizon"] == _hfi].head(20)
+                    fig_fi, ax_fi = plt.subplots(figsize=(12, 6))
+                    fig_fi.patch.set_facecolor("#0f1117"); ax_fi.set_facecolor("#0f1117")
+                    ax_fi.barh(_fih["feature"][::-1], _fih["importance"][::-1],
+                                color=[PALETTE[i % len(PALETTE)] for i in range(len(_fih))][::-1], alpha=0.85)
+                    ax_fi.set_xlabel("Importance", fontsize=9, color="#94a3b8")
+                    ax_fi.set_title(f"Feature Importances — {_hfi}", fontsize=11, color="#e2e8f0", fontweight="bold")
+                    ax_fi.tick_params(colors="#94a3b8")
+                    for sp in ax_fi.spines.values(): sp.set_edgecolor("#334155")
+                    plt.tight_layout(); show_fig(fig_fi)
 
-            with st.expander("🔬 Why 80/20 chronological split?", expanded=False):
-                st.markdown("""
+                with st.expander("🔬 Why 80/20 chronological split?", expanded=False):
+                    st.markdown("""
 | Design Choice | Reason |
 |---|---|
 | **80% train / 20% test** | Industry-standard for time-series demand forecasting |
@@ -4134,12 +4131,11 @@ elif selected_page == "📈 Demand & Seasonality":
 
 **Note on MAPE:** High MAPE reflects sparse data (~5 months/product avg). In production
 with 24+ months of real WMS/ERP data, MAPE would drop to 10–20%. The pipeline is production-ready.
-                """)
-        else:
-            st.info("Upload your data file or run `python demand_prediction.py` to generate model performance data.")
-
-    # ── TAB 5: PROCUREMENT ACTION PLAN ────────────────────────────────────────
-    with _tab5:
+                    """)
+            else:
+                st.info("Upload your data file or run `python demand_prediction.py` to generate model performance data.")
+        # ── END MODEL PERFORMANCE EXPANDER ────────────────────────────────────
+        st.markdown("---")
         st.markdown("### 📋 Executive Procurement Action Plan & Operational Workorders")
         st.caption("Translates 1M / 3M / 6M XGBoost forecasts into actionable purchase orders, safety stock allocations, cash-flow projections, and supplier playbooks.")
 
