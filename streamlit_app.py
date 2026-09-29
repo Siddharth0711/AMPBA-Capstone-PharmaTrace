@@ -2108,80 +2108,6 @@ if selected_page == "🤖 ML Expiry Classifier":
                 _imp.index = [_feat_labels_map.get(f, f) for f in _imp.index]
                 _imp = _imp.sort_values(ascending=False)
 
-            # ── GAP 4: CONFUSION MATRIX + ROC CURVE SIDE BY SIDE ─────────────────────────
-            st.markdown("#### 📊 6. Model Evaluation — Confusion Matrix & ROC Curve")
-            st.caption(f"Champion: **{_champ_name}** evaluated on the 25% held-out test set ({len(y_te):,} batches). "
-                       "Confusion matrix shows exact error counts. ROC curve shows the trade-off between sensitivity (recall) and specificity at every threshold.")
-
-            _cm  = confusion_matrix(y_te, _champ["_pred"])
-            _fig_eval, (_ax_cm, _ax_roc) = plt.subplots(1, 2, figsize=(14, 5))
-            _fig_eval.patch.set_facecolor("#0f172a")
-
-            # — Confusion Matrix heatmap —
-            _ax_cm.set_facecolor("#0f172a")
-            _cm_colors = np.array([["#1e293b", "#ef444455"], ["#ef444488", "#10b98188"]])
-            for i in range(2):
-                for j in range(2):
-                    _ax_cm.add_patch(plt.Rectangle((j-0.5, i-0.5), 1, 1,
-                                                    color=_cm_colors[i][j], zorder=0))
-                    _ax_cm.text(j, i, f"{_cm[i,j]:,}",
-                                ha="center", va="center", fontsize=20, fontweight="bold",
-                                color="white")
-                    _sub = ["True Negative", "False Positive", "False Negative", "True Positive"][i*2+j]
-                    _ax_cm.text(j, i - 0.30, _sub,
-                                ha="center", va="center", fontsize=8, color="#94a3b8")
-            _ax_cm.set_xticks([0, 1]); _ax_cm.set_xticklabels(["Predicted Safe", "Predicted At-Risk"], color="#cbd5e1", fontsize=10)
-            _ax_cm.set_yticks([0, 1]); _ax_cm.set_yticklabels(["Actual Safe", "Actual At-Risk"], color="#cbd5e1", fontsize=10, rotation=90, va="center")
-            _ax_cm.set_xlim(-0.5, 1.5); _ax_cm.set_ylim(-0.5, 1.5)
-            _ax_cm.set_title("Confusion Matrix (Test Set)", color="#00d4ff", fontsize=11, fontweight="bold")
-            for sp in _ax_cm.spines.values(): sp.set_color("#334155")
-            _ax_cm.tick_params(colors="#94a3b8")
-
-            # — ROC Curve —
-            _ax_roc.set_facecolor("#0f172a")
-            try:
-                _champ_xte = _champ["_xall"][:len(y_te)]   # use scaled/unscaled appropriately
-                # Re-predict on test only for ROC (use the test portion of _xall)
-                _xte_for_roc = _champ["_xall"]  # fallback to full dataset ROC
-                _proba_roc = _champ_clf.predict_proba(_xte_for_roc)[:, 1]
-                # Use test-set portion for clean ROC
-                _test_idx  = y_te.index
-                _proba_te  = ml_df.loc[_test_idx, "risk_probability"].values if "risk_probability" in ml_df.columns else _proba_roc[:len(y_te)]
-                _fpr, _tpr, _ = roc_curve(y_te.values, _proba_te[:len(y_te)])
-                _auc_val = auc(_fpr, _tpr)
-                _ax_roc.plot(_fpr, _tpr, color="#f59e0b", lw=2.5, label=f"{_champ_name}  (AUC = {_auc_val:.3f})")
-            except Exception as _roc_e:
-                _ax_roc.text(0.5, 0.5, f"ROC unavailable: {_roc_e}", ha="center", va="center", color="#94a3b8", fontsize=10, transform=_ax_roc.transAxes)
-            _ax_roc.plot([0,1],[0,1], "--", color="#334155", lw=1.5, label="Random Classifier (AUC = 0.5)")
-            _ax_roc.set_xlabel("False Positive Rate (1 − Specificity)", color="#94a3b8", fontsize=9)
-            _ax_roc.set_ylabel("True Positive Rate (Sensitivity / Recall)", color="#94a3b8", fontsize=9)
-            _ax_roc.set_title("ROC Curve — Area Under Curve (AUC)", color="#00d4ff", fontsize=11, fontweight="bold")
-            _ax_roc.legend(facecolor="#1e293b", labelcolor="white", fontsize=9)
-            _ax_roc.tick_params(colors="#94a3b8")
-            _ax_roc.set_xlim(0, 1); _ax_roc.set_ylim(0, 1.02)
-            for sp in _ax_roc.spines.values(): sp.set_color("#334155")
-            plt.tight_layout()
-            show_fig(_fig_eval)
-
-            # Interpretation callout
-            try:
-                _tn, _fp, _fn, _tp = _cm.ravel()
-                _prec_c = _tp / max(_tp + _fp, 1) * 100
-                _rec_c  = _tp / max(_tp + _fn, 1) * 100
-                st.markdown(f"""
-                <div style='background:#0f172a; border:1px solid #334155; border-left:4px solid #f59e0b;
-                     border-radius:8px; padding:12px 16px; font-size:11px; color:#cbd5e1; margin-top:8px;'>
-                    <b style='color:#f59e0b;'>Reading the Confusion Matrix:</b>&nbsp;&nbsp;
-                    ✅ <b>True Positives (caught):</b> {_tp:,} at-risk batches correctly flagged &nbsp;|
-                    ⚠️ <b>False Negatives (missed):</b> {_fn:,} at-risk batches called 'Safe' — each is a potential write-off &nbsp;|
-                    🔔 <b>False Positives (false alarms):</b> {_fp:,} safe batches unnecessarily flagged &nbsp;|
-                    <b>Precision:</b> {_prec_c:.1f}% &nbsp;| <b>Recall:</b> {_rec_c:.1f}%
-                </div>""", unsafe_allow_html=True)
-            except Exception:
-                pass
-
-            st.markdown("<br>", unsafe_allow_html=True)
-
             # ── DATA-DRIVEN AI INSIGHTS (computed from actual batch data) ──────
             # Compute specifics for genuinely actionable insights
             _top3_sku = (ml_df[ml_df["financial_loss_risk"]==1]
@@ -5191,24 +5117,6 @@ elif selected_page == "🔄 Reverse Logistics & Certified Disposal":
                 unsafe_allow_html=True
             )
 
-            # Scatter chart: yield_variance vs batch_qty coloured by anomaly status
-            fig_ano, ax_ano = plt.subplots(figsize=(7.5, 5.2))
-            fig_ano.patch.set_facecolor("#0f1117"); ax_ano.set_facecolor("#1a1d27")
-            _normal = df_ano[~df_ano["is_anomaly"]]
-            _flagged = df_ano[df_ano["is_anomaly"]]
-            ax_ano.scatter(_normal["batch_qty"], _normal["yield_variance"],
-                           c="#10b981", alpha=0.35, s=18, label=f"Normal ({len(_normal):,})")
-            ax_ano.scatter(_flagged["batch_qty"], _flagged["yield_variance"],
-                           c="#ef4444", alpha=0.85, s=48, marker="X", label=f"🚨 Anomaly ({len(_flagged):,})")
-            ax_ano.axhline(0, color="#334155", linewidth=1, linestyle="--")
-            ax_ano.set_xlabel("Batch Size (Units)", fontsize=9, color="#94a3b8")
-            ax_ano.set_ylabel("Yield Variance (%)", fontsize=9, color="#94a3b8")
-            ax_ano.set_title("Batch Yield Variance vs Size — Anomaly Detection Map", fontsize=10,
-                             color="#e2e8f0", fontweight="bold")
-            ax_ano.tick_params(colors="#94a3b8", labelsize=8)
-            ax_ano.legend(fontsize=8.5, framealpha=0, labelcolor="#e2e8f0")
-            for sp in ax_ano.spines.values(): sp.set_edgecolor("#334155")
-            plt.tight_layout(); show_fig(fig_ano)
 
         # Anomaly Batch Action Table — full width
         st.markdown("#### ⚠️ Flagged Batches — Pre-Release Quarantine Watchlist")
