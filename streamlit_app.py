@@ -1546,8 +1546,8 @@ if selected_page == "🤖 ML Expiry Classifier":
         st.markdown("<br>", unsafe_allow_html=True)
 
         # ── SECTION 4: BINARY ML CLASSIFIER ──────────────────────────────────
-        st.markdown("#### 🤖 4. Binary ML Expiry Risk Classifier — Model Performance")
-        st.caption(f"Target: **'Will this batch expire before being fully sold?'** — a balanced binary problem ({at_risk_pct:.1f}% At-Risk vs {100-at_risk_pct:.1f}% Safe). Trains 3 algorithms and crowns the best by Weighted F1.")
+        st.markdown("#### 🤖 4. Expiry Risk Prediction — Which Batches Will Expire Before Being Sold?")
+        st.caption(f"Predicts for every batch: 'Will this expire before clearance?' — {at_risk_pct:.1f}% of portfolio is currently At-Risk ({100-at_risk_pct:.1f}% Safe). Three ML models compete; the best is selected automatically.")
 
         # ── LEVEL 1: DEMAND SCENARIO TOGGLE ──────────────────────────────────
         st.markdown("""
